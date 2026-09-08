@@ -1,3 +1,4 @@
+import type { ProductionModule, ReviewModelId, ReviewDecision } from "@/domain/production";
 import type { SourceImportPreview } from "@/domain/source-import";
 import type { BlueprintData, BlueprintWorkspace } from "@/domain/blueprint";
 import type { OutputSettingsInput, PickedOutputDirectory } from "@/domain/output-settings";
@@ -40,6 +41,17 @@ export interface ProjectService {
   initializeBlueprint(id: string, revision: number, mode: "blank" | "demo"): Promise<Project>;
   saveBlueprint(id: string, revision: number, input: BlueprintData): Promise<Project>;
   publishBlueprintVersion(id: string, revision: number, label: string): Promise<Project>;
+  startGeneration(id: string, revision: number, module: ProductionModule, blueprintVersionId: string, fail?: boolean): Promise<Project>;
+  advanceGeneration(id: string, revision: number, jobId: string): Promise<Project>;
+  cancelGeneration(id: string, revision: number, jobId: string): Promise<Project>;
+  retryGeneration(id: string, revision: number, jobId: string): Promise<Project>;
+  saveArtifact(id: string, revision: number, artifactId: string, content: string): Promise<Project>;
+  startReview(id: string, revision: number, target: "blueprint" | "manuscript", blueprintVersionId: string, failModel?: ReviewModelId): Promise<Project>;
+  advanceReviewModel(id: string, revision: number, reviewId: string, modelId: ReviewModelId): Promise<Project>;
+  cancelReviewModel(id: string, revision: number, reviewId: string, modelId: ReviewModelId): Promise<Project>;
+  retryReviewModel(id: string, revision: number, reviewId: string, modelId: ReviewModelId): Promise<Project>;
+  crossReview(id: string, revision: number, reviewId: string): Promise<Project>;
+  decideReviewFinding(id: string, revision: number, reviewId: string, findingId: string, decision: ReviewDecision, reason: string): Promise<Project>;
   getWorkflow(): Promise<WorkflowStage[]>;
   getResearchCatalog(): Promise<ResearchCatalog>;
   addResearchDemo(id: string, revision: number): Promise<Project>;

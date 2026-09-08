@@ -460,3 +460,8 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: 3px solid
   .project-workflow { padding-bottom: 4px; margin-bottom: 3px; }
   .project-workflow a { padding-top: 5px; padding-bottom: 5px; }
 }
+
+/* Plain manuscript and review evidence stay inside the scrolling work area. */
+.production-text { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.85; background: var(--background); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; max-height: 55vh; overflow-y: auto; }
+.production-evidence { white-space: pre-wrap; overflow-wrap: anywhere; border-left: 3px solid #A17C60; padding: .65rem 1rem; background: #F7F5F1; font-size: .875rem; line-height: 1.75; }
+.production-decision { border-top: 1px solid var(--border); padding-top: 1rem; }

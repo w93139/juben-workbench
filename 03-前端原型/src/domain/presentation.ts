@@ -16,6 +16,7 @@ export function knowledgeKindLabel(kind: string) {
 }
 
 export function currentStage(project: Project): StageId {
+  if (project.production) return "generation";
   if (project.blueprint) return "blueprint";
   if (project.research.documents.length > 0) return researchStep(project.research);
   return project.template === "names-beyond" ? "playtest" : "materials";

@@ -1,3 +1,5 @@
+import type { ProductionModule, ReviewModelId, ReviewDecision } from "@/domain/production";
+import * as production from "./production-operations";
 import { z } from "zod";
 import type { BlueprintData } from "@/domain/blueprint";
 import * as blueprint from "./blueprint-operations";
@@ -134,6 +136,18 @@ export class MockProjectService implements ProjectService {
   async initializeBlueprint(id: string, revision: number, mode: "blank" | "demo") { return this.mutate(id, revision, (p) => blueprint.initialize(p, mode, demo, this.now())); }
   async saveBlueprint(id: string, revision: number, input: BlueprintData) { return this.mutate(id, revision, (p) => blueprint.save(p, input, this.now())); }
   async publishBlueprintVersion(id: string, revision: number, label: string) { return this.mutate(id, revision, (p) => blueprint.publish(p, label, this.now(), this.uuid)); }
+
+  async startGeneration(id: string, revision: number, module: ProductionModule, versionId: string, fail = false) { return this.mutate(id, revision, (p) => production.startGeneration(p, module, versionId, fail, this.now(), this.uuid)); }
+  async advanceGeneration(id: string, revision: number, jobId: string) { return this.mutate(id, revision, (p) => production.advanceGeneration(p, jobId, this.now(), this.uuid)); }
+  async cancelGeneration(id: string, revision: number, jobId: string) { return this.mutate(id, revision, (p) => production.cancelGeneration(p, jobId)); }
+  async retryGeneration(id: string, revision: number, jobId: string) { return this.mutate(id, revision, (p) => production.retryGeneration(p, jobId)); }
+  async saveArtifact(id: string, revision: number, artifactId: string, content: string) { return this.mutate(id, revision, (p) => production.saveArtifact(p, artifactId, content, this.now(), this.uuid)); }
+  async startReview(id: string, revision: number, target: "blueprint" | "manuscript", versionId: string, failModel?: ReviewModelId) { return this.mutate(id, revision, (p) => production.startReview(p, target, versionId, failModel, this.now(), this.uuid)); }
+  async advanceReviewModel(id: string, revision: number, reviewId: string, modelId: ReviewModelId) { return this.mutate(id, revision, (p) => production.advanceReviewModel(p, reviewId, modelId, this.uuid)); }
+  async cancelReviewModel(id: string, revision: number, reviewId: string, modelId: ReviewModelId) { return this.mutate(id, revision, (p) => production.cancelReviewModel(p, reviewId, modelId)); }
+  async retryReviewModel(id: string, revision: number, reviewId: string, modelId: ReviewModelId) { return this.mutate(id, revision, (p) => production.retryReviewModel(p, reviewId, modelId)); }
+  async crossReview(id: string, revision: number, reviewId: string) { return this.mutate(id, revision, (p) => production.crossReview(p, reviewId)); }
+  async decideReviewFinding(id: string, revision: number, reviewId: string, findingId: string, decision: ReviewDecision, reason: string) { return this.mutate(id, revision, (p) => production.decideReviewFinding(p, reviewId, findingId, decision, reason)); }
 
   async getResearchCatalog() { return structuredClone(research.researchCatalog); }
   async addResearchDemo(id: string, revision: number) { return this.mutate(id, revision, (p) => research.addDemo(p.research)); }

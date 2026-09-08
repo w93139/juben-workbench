@@ -167,8 +167,8 @@ test("蓝图存储失败与跨页冲突保留本页输入，重试需显式加�
 
 test("开发进度与蓝图问题定位分别展示，不冒充AI审查", async ({ page }) => {
   await create(page, true);
-  await page.getByRole("button", { name: "查看开发阶段与总体进度，60%", exact: true }).click();
-  await expect(page.getByRole("dialog").getByRole("progressbar", { name: "原型总体开发进度" })).toHaveAttribute("value", "60");
+  await page.getByRole("button", { name: "查看开发阶段与总体进度，80%", exact: true }).click();
+  await expect(page.getByRole("dialog").getByRole("progressbar", { name: "原型总体开发进度" })).toHaveAttribute("value", "80");
   await expect(page.getByRole("dialog").getByText("本轮待你测试", { exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
   await savePanel(page).getByRole("button", { name: /^检查当前草稿/ }).click();

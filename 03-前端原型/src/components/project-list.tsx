@@ -17,7 +17,7 @@ function ProjectTable({ projects, demo }: { projects: Project[]; demo: DemoConte
     {projects.map((project) => <tr key={project.id}><td><Link href={`/projects/${project.id}`} className="project-name"><span className="project-icon"><FileText size={17} /></span><span><strong>{project.title}</strong><small>{project.readOnly ? "原创演示 · 只读" : project.template === "names-beyond" ? "演示副本 · 本机保存" : "原创项目 · 本机保存"}</small></span></Link></td>
       <td><span className={`tag ${project.template === "blank" ? "neutral" : "amber"}`}>{workflowStep(currentStage(project)).name}</span></td>
       <td className="table-secondary">{project.template === "blank" ? "尚未准备" : demo ? `${demo.deliverables.filter((d) => d.complete).length} / ${demo.deliverables.length} 类齐备` : "读取中"}</td>
-      <td className="table-secondary"><span className="table-status">{project.template === "blank" ? "尚未检查" : "有历史检查记录"}</span></td>
+      <td className="table-secondary"><span className="table-status">{project.production?.reviews.length ? "有模拟检查记录" : project.template === "blank" ? "尚未检查" : "有历史检查记录"}</span></td>
       <td className="table-secondary"><span className="table-date">{formatDate(project.updatedAt)}</span></td>
       <td><Link href={`/projects/${project.id}`} aria-label={`打开${project.title}`} className="text-link"><ArrowUpRight size={15} /></Link></td>
     </tr>)}

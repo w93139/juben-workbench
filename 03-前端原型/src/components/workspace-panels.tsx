@@ -77,8 +77,8 @@ export function DecisionPanel({ project }: { project: Project }) {
 
 export function ChecksPanel({ content }: { content: DemoContent | null }) {
   return <section className="panel"><div className="panel-title"><h2><ShieldCheck size={15} />检查与试玩</h2></div>
-    {content ? content.checks.map((check) => <div className="check-row" key={check.id}><div className="check-label">{check.origin === "historical" ? <FileCheck2 size={13} /> : <Circle size={12} />}{check.label}</div><strong>{check.result}</strong><small>{check.origin === "historical" ? "历史记录 · " : ""}{check.scope}</small>{check.source && <details className="decision-source"><summary>记录来源</summary><p>{check.source}</p></details>}</div>) : <p className="readiness-copy">尚无检查记录。AI结构审查、静态检查、模拟测试和真人试玩将分别记录。</p>}
-    <p className="check-notice">{content ? "历史结果只适用于标注的样例版本。当前项目未运行新检查，也尚未真人试玩。" : "尚未真人试玩。结构检查通过后，仍需观察真实玩家的参与和理解。"}</p>
+    {content ? content.checks.map((check) => <div className="check-row" key={check.id}><div className="check-label">{check.origin === "historical" ? <FileCheck2 size={13} /> : <Circle size={12} />}{check.label}</div><strong>{check.result}</strong><small>{check.origin === "historical" ? "历史记录 · " : ""}{check.scope}</small>{check.source && <details className="decision-source"><summary>记录来源</summary><p>{check.source}</p></details>}</div>) : <p className="readiness-copy">尚无历史样例检查记录。当前项目的模拟结果在“生成与检查”查看，各类检查分别记录。</p>}
+    <p className="check-notice">{content ? "历史结果只适用于标注的样例版本，不代表当前修改通过。尚未真人试玩。" : "尚未真人试玩。结构检查通过后，仍需观察真实玩家的参与和理解。"}</p>
   </section>;
 }
 

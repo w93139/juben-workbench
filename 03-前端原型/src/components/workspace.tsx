@@ -7,6 +7,7 @@ import { useContent, useProject, useWorkflow } from "./providers";
 import { ErrorMessage, LoadError, Loading } from "./shared";
 import { Button } from "./ui/button";
 import { EditProject, SourcesPanel } from "./workspace-panels";
+import { useProductionRunner } from "./production/runner";
 import { StageContent } from "./stage-content";
 import { ResearchJobPanel, useResearchRunner } from "./research/common";
 import { workflowStep, workflowSteps } from "@/domain/workflow-view";
@@ -23,6 +24,7 @@ export function WorkspacePage({ projectId, stageId }: { projectId: string; stage
   const content = contentQuery.data ?? null;
   const blueprint = project?.blueprint?.draft;
   const runner = useResearchRunner(project);
+  const productionFeedback = useProductionRunner(project);
   const stage = workflow.data?.find((s) => s.id === stageId);
   const step = stageId ? workflowStep(stageId) : undefined;
   const base = `/projects/${projectId}`;
@@ -40,6 +42,7 @@ export function WorkspacePage({ projectId, stageId }: { projectId: string; stage
       {loadError && <div className="mb-5"><ErrorMessage error={loadError} /><div className="flex flex-wrap items-center gap-3"><p className="field-hint">当前保留上次成功读取的内容与未保存输入。请恢复读取后再保存。</p><Button size="sm" variant="outline" onClick={retry}>重新读取</Button></div></div>}
       <div className="workspace-subline"><span>{stage ? project.title : project.readOnly ? "原始样例 · 只读" : "本机项目 · 自动保存修改"}</span>{content && <><span>{content.players} 位玩家</span><span>计划 {content.plannedMinutes} 分钟</span><span>样例档案 {content.blueprintVersion} / 原开本包 {content.kitVersion}</span></>}<span>{formatDate(project.updatedAt)}</span>{project.research.direction && <span>新作目标：{project.research.direction.players}人 · {project.research.direction.minutes}分钟 · {project.research.direction.genre}（原样例尚未改写）</span>}</div>
 
+      {productionFeedback}
       <ResearchJobPanel project={project} error={runner.error} retry={runner.retry} />
       <div className="main-stack">
         <OutputLocation key={`${project.id}-${stageId ?? "overview"}`} project={project} stage={!stageId || stageId === "materials" ? "analysis" : stageId} />
