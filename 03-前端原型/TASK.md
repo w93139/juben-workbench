@@ -266,3 +266,4 @@
 - 单元56/56通过，最终lint与生产build通过（build包含TypeScript检查）。浏览器全量56项首轮55通过，新增改名场景因未等待异步保存便刷新失败；补充等待弹窗关闭及新标题显示后，最终涉及改名、输出目录、动效、工作台的26项定向回归全部通过，其余30项沿用本轮全量通过结果，无未闭环失败。
 - 同步与扫描Python15/15通过；独立只读复审Ready，无Blocker/Important。扫描工作区105文件、4提交、147历史文本对象、5本地引用无规则内发现；远程refs核对仅main，指向已扫描a06ad49。公开前继续由同步脚本检查最终快照与完整历史，不将规则检查描述为绝对安全。
 - 代码MIT、故事素材权利边界、服务端API保管计划和PR可信基线扫描已记录；CI是上传后检查，工作流自身变更须人工审查，不能代替本地检查。GitHub实际公开和原生保护状态在操作后另行记录。
+- 已推送d0c7d30后执行用户授权的公开；GitHub API回读visibility=public，secret_scanning及secret_scanning_push_protection均enabled，private-vulnerability-reporting为true。LICENSE保留标准MIT正文，授权范围单独放NOTICE，避免GitHub无法识别许可证。生产预览已恢复3107并响应200；原型开发仍为C交付、3/5=60%，D/E与真实API未提前标记完成。

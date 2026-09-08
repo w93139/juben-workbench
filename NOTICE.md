@@ -2,6 +2,8 @@
 
 本仓库的软件代码使用MIT许可，见LICENSE。依赖与第三方组件仍遵循各自许可。
 
+The MIT license in LICENSE applies to this repository's software code. Original narrative content, characters, story settings, and research excerpts (including those embedded in mock data) are excluded from that grant. Third-party components retain their respective licenses.
+
 《名字之外》的剧本文字、角色、故事设定，以及Mock或文档中嵌入的原创内容、参考研究摘录，不因代码开源而自动获得MIT授权。这些内容的权利属于原作者或对应权利人。公开仓库提供演示阅览，不额外授予改编、再发行或商业使用权；需要其他使用方式时应先取得对应权利人的许可。
 
 `02-演示与测试资料`、`agent-blueprint`、外部Skill、完整开本包、真实输入材料和历史审查原件不属于发布范围。应用自己的Mock包含演示所需摘要和摘录；公开前后都应按照真实内容审查，不能仅凭文件夹名认定安全。
