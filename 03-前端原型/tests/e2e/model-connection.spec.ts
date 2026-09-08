@@ -10,6 +10,7 @@ test("未连接有明确设置入口，保存配置刷新状态且不外呼模�
     return r.fulfill({json:{...safe,...{baseUrl:body.baseUrl,mainModel:body.mainModel,reviewA:body.reviewA,reviewB:body.reviewB,configured:true,hasApiKey:true,source:"local",revision:1}}});
   });
   await page.route(/\/api\/studio\/(analyze|blueprint|review)$/,r=>{calls++;return r.abort();});
+  await page.goto("/");await expect(page.getByRole("button",{name:"配置模型",exact:true})).toBeVisible();
   await seedProject(page,"连接验收");await page.getByRole("button",{name:"配置模型",exact:true}).click();
   const dialog=page.getByRole("dialog");await expect(dialog.getByText(/保存仅记录配置/)).toBeVisible();
   await dialog.getByLabel("模型服务地址",{exact:true}).fill("https://example.invalid/v1");

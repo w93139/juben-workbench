@@ -8,6 +8,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { UploadProjectButton } from "./create-project";
 import { useService } from "./providers";
+import { StudioConnection } from "./studio/connection";
 
 export function AppFrame({ children, title, projectId, workspace = false }: { children: React.ReactNode; title: string; projectId?: string; workspace?: boolean }) {
   const pathname = usePathname();
@@ -37,7 +38,7 @@ export function AppFrame({ children, title, projectId, workspace = false }: { ch
           <DialogContent className="mobile-navigation translate-x-0 translate-y-0"><DialogTitle className="sr-only">工作台导航</DialogTitle><DialogDescription className="sr-only">选择要打开的剧本项目</DialogDescription><div className="mobile-nav-body">{navigation}</div></DialogContent>
         </Dialog>
         <div className="topbar-path"><Link href="/">创作空间</Link><ChevronRight size={12} /><span>{title}</span></div>
-        <div className="topbar-right"><span className="avatar" aria-label="作者工作空间">作</span></div>
+        <div className="topbar-right"><StudioConnection /><span className="avatar" aria-label="作者工作空间">作</span></div>
       </header>
       <main id="main" className="page-content" tabIndex={-1}>{children}</main>
     </div>

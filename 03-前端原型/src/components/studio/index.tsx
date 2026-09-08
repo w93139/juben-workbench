@@ -9,7 +9,6 @@ import { analysisCurrent, blueprintCurrent, materialsReady, reviewCurrent, type 
 import type { StudioOperation } from "@/domain/studio";
 import { readWorkbench, changeWorkbench } from "@/services/workbench-store";
 import { localJson, pollStudioJob, startStudioJob } from "@/services/studio-client";
-import { StudioConnection } from "./connection";
 import { StudioMaterials } from "./materials";
 import { StudioBlueprint } from "./blueprint";
 import { Button } from "../ui/button";
@@ -76,7 +75,7 @@ export function Studio({ project, step }: { project: Project; step: number }) {
       {step === 3 && <>{state.blueprint && !blueprintCurrent(state) && <p className="mb-5">这份蓝图对应旧的材料或创作要求，请返回<Link className="inline-link" href={base + "analysis"}>拆解与方向</Link>生成新版。</p>}{progress}{!state.job && (state.blueprint ? <StudioBlueprint id={project.id} state={state} update={update} onDirty={setDirty} /> : <p>选择改写方向后，点击「生成蓝图」。</p>)}</>}
       {step === 4 && <>{progress}{!state.job && (reviewCurrent(state) ? <div className="studio-progress"><Network size={36} /><h2>当前档案交叉验证完成</h2><p>尚未真人试玩</p>{savedFile && <p role="status">已保存：{savedFile}</p>}{savedDirectory && <Button variant="outline" onClick={() => void localJson("/api/local/directories/reveal", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ directoryId: savedDirectory }) }).catch(setError)}>打开保存位置</Button>}</div> : state.review && blueprintCurrent(state) && state.reviewBlueprintRevision === state.blueprintRevision ? <section className="panel"><h2>需要调整后再验证</h2><ul className="mt-4 list-disc pl-5">{state.review.issues.map((issue, i) => <li key={i}>{issue}</li>)}</ul></section> : <p>确认整体蓝图后开始交叉验证，完成后可以导出完整档案。</p>)}</>}
     </section>
-    <footer className="studio-actions"><div className="studio-connection-actions"><StudioConnection /><div>{!connected && <small>{capability.data?.message || (capability.error ? "模型连接状态读取失败" : "正在读取模型连接状态…")}</small>}{dirty && <small>请先保存蓝图调整</small>}{reading && <small>正在读取文件…</small>}</div></div>
+    <footer className="studio-actions"><div className="studio-connection-actions"><div>{!connected && <small>{capability.data?.message || (capability.error ? "模型连接状态读取失败" : "正在读取模型连接状态…")}</small>}{dirty && <small>请先保存蓝图调整</small>}{reading && <small>正在读取文件…</small>}</div></div>
       {step === 1 && <Button disabled={locked || !materialsReady(state) || !connected} onClick={() => void start("analyze", "analysis")}>拆解大纲<ArrowRight size={16} /></Button>}
       {step === 2 && <Button disabled={locked || !analysisCurrent(state) || !state.choiceId || !connected} onClick={() => void start("blueprint", "blueprint")}>生成蓝图<ArrowRight size={16} /></Button>}
       {step === 3 && <Button disabled={locked || dirty || !blueprintCurrent(state) || !connected} onClick={() => void start("review", "generation")}>开始交叉验证<ArrowRight size={16} /></Button>}
