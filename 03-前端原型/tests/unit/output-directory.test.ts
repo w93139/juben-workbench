@@ -5,8 +5,9 @@ import { outputPath, outputSettingsInputSchema, type PickedOutputDirectory } fro
 class Memory implements StoragePort {
   raw: string | null = null;
   fail = false;
+  writes = 0;
   read() { return this.raw; }
-  write(value: string) { if (this.fail) throw new ServiceError("STORAGE_UNAVAILABLE", "保存失败"); this.raw = value; }
+  write(value: string) { if (this.fail) throw new ServiceError("STORAGE_UNAVAILABLE", "保存失败"); this.raw = value; this.writes += 1; }
   exclusive<T>(operation: () => Promise<T>) { return operation(); }
 }
 class Directories implements OutputDirectoryPort {
@@ -24,6 +25,36 @@ async function setup() {
 }
 
 describe("输出目录引用", () => {
+  it("新建副本和初始输出位置只写入一次，原始样例保持不变", async () => {
+    const { service, storage } = await setup();
+    const baseline = await service.get("demo-names");
+    const directory = await service.pickOutputDirectory();
+    const writes = storage.writes;
+    const copy = await service.create({ title: "我的样例改写", note: "已选目录", template: "names-beyond" }, { rootPath: "", directory, stage: "blueprint", folder: "故事设计" });
+    expect(storage.writes).toBe(writes + 1);
+    expect(copy.readOnly).toBe(false);
+    expect(copy.outputSettings.directory).toEqual(directory);
+    expect(copy.outputSettings.folders.blueprint).toBe("故事设计");
+    expect((await service.get(copy.id)).outputSettings).toEqual(copy.outputSettings);
+    expect(await service.get("demo-names")).toEqual(baseline);
+  });
+  it("初始目录无效、引用缺失或写入失败时不留下空副本，重试只保存一个", async () => {
+    const { service, storage, directories } = await setup();
+    const input = { title: "样例副本", note: "", template: "names-beyond" as const };
+    const directory = await service.pickOutputDirectory();
+    const output = { rootPath: "", directory, stage: "analysis" as const, folder: "拆解" };
+    const before = storage.raw;
+    await expect(service.create(input, { ...output, rootPath: "../非法路径" })).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    await expect(service.create(input, { ...output, directory: { ...directory!, name: "伪造" } })).rejects.toMatchObject({ code: "DIRECTORY_UNAVAILABLE" });
+    directories.records.clear();
+    await expect(service.create(input, output)).rejects.toMatchObject({ code: "DIRECTORY_UNAVAILABLE" });
+    await service.pickOutputDirectory(); storage.fail = true;
+    await expect(service.create(input, output)).rejects.toMatchObject({ code: "STORAGE_UNAVAILABLE" });
+    expect(storage.raw).toBe(before);
+    storage.fail = false;
+    await service.create(input, output);
+    expect(JSON.parse(storage.raw!).projects).toHaveLength(JSON.parse(before!).projects.length + 1);
+  });
   it("选择不修改项目，保存引用并刷新恢复，显示所选文件夹而不伪造绝对路径", async () => {
     const { service, storage, directories, project } = await setup(); const before = storage.raw;
     const directory = await service.pickOutputDirectory(); expect(storage.raw).toBe(before);

@@ -32,9 +32,11 @@ test("不支持目录选择时显示原因并可保存手动路径，原样例�
   await page.reload(); await panel.getByText("无法选择？备用方式", { exact: true }).click();
   await expect(panel.getByLabel("项目总输出目录")).toHaveValue("/Users/作者/Desktop/剧本输出");
   await page.goto("/projects/demo-names");
-  await expect(panel.getByText(/原始样例只读/)).toBeVisible();
-  await panel.getByRole("link", { name: "选择输出文件夹", exact: true }).click();
-  await expect(page).toHaveURL(/\/projects\/new\?template=demo$/);
+  const before = await page.evaluate(() => localStorage.getItem("juben-workbench:projects:v1"));
+  await panel.getByRole("button", { name: "选择输出文件夹", exact: true }).click();
+  await expect(panel.getByRole("alert")).toContainText("不支持文件夹选择");
+  await expect(page).toHaveURL(/\/projects\/demo-names$/);
+  expect(await page.evaluate(() => localStorage.getItem("juben-workbench:projects:v1"))).toBe(before);
 });
 
 test("切换阶段仅正文渐入，保存不重播，减少动态效果时停用", async ({ page }) => {

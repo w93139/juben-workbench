@@ -54,8 +54,8 @@ test("演示副本独立编辑，原样例与未试玩状态不变", async ({ pa
   await page.getByRole("button", { name: "检查与试玩", exact: true }).click();
   await expect(page.getByText("尚未真人试玩", { exact: true })).toBeVisible();
   await page.goto("/projects/demo-names");
-  await expect(page.getByRole("button", { name: "改名", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("link", { name: "改名", exact: true })).toHaveAttribute("href", "/projects/new?template=demo");
+  await expect(page.getByRole("button", { name: "改名", exact: true })).toBeEnabled();
+  await expect(page.getByRole("link", { name: "改名", exact: true })).toHaveCount(0);
   await expect(page.getByRole("combobox")).toHaveCount(0);
   await page.getByRole("button", { name: "查看创作决定", exact: true }).click();
   await expect(page.getByText("已确定", { exact: true }).first()).toBeVisible();

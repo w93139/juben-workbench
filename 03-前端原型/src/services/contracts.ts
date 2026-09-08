@@ -32,7 +32,7 @@ export class ServiceError extends Error {
 export interface ProjectService {
   list(): Promise<Project[]>;
   get(id: string): Promise<Project>;
-  create(input: CreateProjectInput): Promise<Project>;
+  create(input: CreateProjectInput, initialOutput?: OutputSettingsInput): Promise<Project>;
   update(id: string, expectedRevision: number, input: UpdateProjectInput): Promise<Project>;
   setDecision(id: string, expectedRevision: number, decisionId: string, status: DecisionStatus): Promise<Project>;
   getContent(id: string): Promise<DemoContent | null>;

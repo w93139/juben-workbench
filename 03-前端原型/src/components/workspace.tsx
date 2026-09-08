@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Pencil, Network } from "lucide-react";
+import { Network } from "lucide-react";
 import { AppFrame } from "./app-frame";
 import { useContent, useProject, useWorkflow } from "./providers";
 import { ErrorMessage, LoadError, Loading } from "./shared";
@@ -32,7 +32,7 @@ export function WorkspacePage({ projectId, stageId }: { projectId: string; stage
   return <AppFrame title={step?.name ?? project?.title ?? "项目工作台"} projectId={projectId} workspace>
     {projectQuery.isPending || contentQuery.isPending || workflow.isPending ? <Loading /> : loadError && !hasSnapshot ? <LoadError error={loadError} retry={retry} /> : project && <>
       <div className="workspace-fixed-header" aria-label="当前页面与常用操作">
-        <header className="workspace-header"><div className="workspace-heading-copy"><div className="project-title-row">{stageId ? <Link className="project-title" href={base} title={project.title}>{project.title}</Link> : <h1 className="serif" title={project.title}>{project.title}</h1>}{project.readOnly ? <><Link href="/projects/new?template=demo" className="rename-copy" aria-label="改名" title="改名（创建副本）"><Pencil size={16} aria-hidden="true" /></Link><small className="readonly-caption">样例 · 修改将创建副本</small></> : <EditProject project={project} label="改名" iconOnly />}</div>{stageId && <h1 className="serif" title={step?.name}>{step?.name}</h1>}</div></header>
+        <header className="workspace-header"><div className="workspace-heading-copy"><div className="project-title-row">{stageId ? <Link className="project-title" href={base} title={project.title}>{project.title}</Link> : <h1 className="serif" title={project.title}>{project.title}</h1>}<EditProject key={`${project.id}:${stageId ?? "overview"}`} project={project} label="改名" iconOnly />{project.readOnly && <small className="readonly-caption">样例</small>}</div>{stageId && <h1 className="serif" title={step?.name}>{step?.name}</h1>}</div></header>
         <nav className="project-workflow" aria-label="创作流程"><Link href={base} aria-current={!stageId ? "page" : undefined}>总览</Link>{workflowSteps.map((item, index) => <Link key={item.id} href={`${base}/stages/${item.id}`} aria-current={item.stages.some((id) => id === stageId) ? "step" : undefined}><span>{index + 1}</span>{item.name}</Link>)}</nav>
         <WorkspaceActions project={project} content={content} stageId={stageId} />
       </div>

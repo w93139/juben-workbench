@@ -69,8 +69,9 @@ export class MockProjectService implements ProjectService {
     return structuredClone(project);
   }
 
-  async create(input: CreateProjectInput) {
+  async create(input: CreateProjectInput, initialOutput?: OutputSettingsInput) {
     const validated = parseInput(createProjectSchema, input);
+    const output = initialOutput ? await this.validateOutputSettings(initialOutput) : null;
     return this.storage.exclusive(async () => {
       const envelope = this.readEnvelope();
       const time = this.now();
@@ -79,6 +80,11 @@ export class MockProjectService implements ProjectService {
         createdAt: time, updatedAt: time, research: emptyResearch(),
         decisions: structuredClone(validated.template === "names-beyond" ? demo.decisions : blankDecisions),
       });
+      if (output) {
+        project.outputSettings.rootPath = output.rootPath;
+        project.outputSettings.directory = output.directory ?? null;
+        project.outputSettings.folders[output.stage] = output.folder;
+      }
       if (envelope.projects.some((item) => item.id === project.id)) throw new ServiceError("CONFLICT", "项目编号发生冲突，请重新创建。");
       envelope.projects.push(project);
       this.writeEnvelope(envelope);
@@ -147,17 +153,21 @@ export class MockProjectService implements ProjectService {
       research.registerFiles(p.research, selected, this.uuid);
     }), options);
   }
-  async saveOutputSettings(id: string, revision: number, input: OutputSettingsInput) {
+  private async validateOutputSettings(input: OutputSettingsInput) {
     const result = outputSettingsInputSchema.safeParse(input);
     if (!result.success) throw new ServiceError("INVALID_INPUT", result.error.issues[0]?.message ?? "请检查输出路径。");
     if (result.data.directory) {
       const directory = await this.outputDirectories?.get(result.data.directory.id);
       if (!directory || directory.kind !== "directory" || directory.name !== result.data.directory.name) throw new ServiceError("DIRECTORY_UNAVAILABLE", "无法找到已选择的文件夹引用，请重新选择文件夹或手动填写路径；原设置已保留。");
     }
+    return result.data;
+  }
+  async saveOutputSettings(id: string, revision: number, input: OutputSettingsInput) {
+    const output = await this.validateOutputSettings(input);
     return this.mutate(id, revision, (p) => {
-      p.outputSettings.rootPath = result.data.rootPath;
-      p.outputSettings.directory = result.data.directory ?? null;
-      p.outputSettings.folders[result.data.stage] = result.data.folder;
+      p.outputSettings.rootPath = output.rootPath;
+      p.outputSettings.directory = output.directory ?? null;
+      p.outputSettings.folders[output.stage] = output.folder;
     });
   }
   getOutputDirectoryCapability() { return this.outputDirectories?.capability?.() ?? (this.outputDirectories ? "available" : "unsupported"); }

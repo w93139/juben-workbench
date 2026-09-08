@@ -39,8 +39,8 @@ for (const width of [1440, 390]) test(`目录默认直接选择，备用路径�
   await page.screenshot({ path: testInfo.outputPath("output-settings.png"), fullPage: true });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.goto("/projects/demo-names/stages/analysis");
-  await expect(panel(page).getByRole("link", { name: "选择输出文件夹" })).toHaveAttribute("href", "/projects/new?template=demo");
-  await expect(panel(page).getByRole("button")).toHaveCount(0);
+  await expect(panel(page).getByRole("button", { name: "选择输出文件夹" })).toBeEnabled();
+  await expect(panel(page).getByRole("link", { name: "选择输出文件夹" })).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 
