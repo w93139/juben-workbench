@@ -32,7 +32,7 @@ export function WorkspacePage({ projectId, stageId }: { projectId: string; stage
   return <AppFrame title={step?.name ?? project?.title ?? "项目工作台"} projectId={projectId} workspace>
     {projectQuery.isPending || contentQuery.isPending || workflow.isPending ? <Loading /> : loadError && !hasSnapshot ? <LoadError error={loadError} retry={retry} /> : project && <>
       <div className="workspace-fixed-header" aria-label="当前页面与常用操作">
-        <header className="workspace-header"><div className="workspace-heading-copy"><span className="eyebrow">{stage ? `创作步骤 ${String(workflowSteps.indexOf(step!) + 1).padStart(2, "0")} / ${workflowSteps.length}` : "项目总览"}</span><h1 className="serif" title={step?.name ?? project.title}>{step?.name ?? project.title}</h1></div>{project.readOnly ? <Link href="/projects/new?template=demo" className="button-link secondary"><Copy size={13} />创建演示副本</Link> : <EditProject project={project} />}</header>
+        <header className="workspace-header"><div className="workspace-heading-copy"><span className="eyebrow">{stage ? `创作步骤 ${String(workflowSteps.indexOf(step!) + 1).padStart(2, "0")} / ${workflowSteps.length}` : "项目总览"}</span><h1 className="serif" title={step?.name ?? project.title}>{step?.name ?? project.title}</h1></div>{project.readOnly ? <Link href="/projects/new?template=demo" className="button-link secondary"><Copy size={13} />创建演示副本</Link> : <EditProject project={project} label={stageId ? "编辑项目" : "修改剧本名称"} />}</header>
         <WorkspaceActions project={project} content={content} stageId={stageId} />
       </div>
       <section key={`${projectId}:${stageId ?? "overview"}`} className="workspace-details" aria-label="具体功能内容" tabIndex={0}>
@@ -42,13 +42,13 @@ export function WorkspacePage({ projectId, stageId }: { projectId: string; stage
       <ResearchJobPanel project={project} error={runner.error} retry={runner.retry} />
       <div className="main-stack">
         <OutputLocation key={`${project.id}-${stageId ?? "overview"}`} project={project} stage={!stageId || stageId === "materials" ? "analysis" : stageId} />
-        {stage ? <StageContent stage={stage} content={content} project={project} /> : <>
+        <div className="stage-content-enter">{stage ? <StageContent stage={stage} content={content} project={project} /> : <>
 
           <section className="stat-grid" aria-label="结构概览">{getStats(content, blueprint).map((stat) => <div className="stat-cell" key={stat.label}><small>{stat.label}</small><strong>{stat.value}<span>{stat.unit}</span></strong></div>)}</section>
           <section className="panel"><div className="panel-title"><h2><Network size={15} />{blueprint ? "当前蓝图" : content ? "样例故事底稿" : "创作起点"}</h2><span>{blueprint ? "原创方案 · 已保存草稿" : content ? "样例 · 只读" : "待确定"}</span></div><p className="story-premise">{(blueprint ? blueprint.premise || "还没有填写故事简介。" : content?.premise) || "项目已经建立。先留下你的故事想法，参考材料和原创结构将在后续阶段逐步补齐。"}</p>{(blueprint || content) && <div className="character-row">{(blueprint?.characters ?? content?.characters ?? []).map((character) => <span className="character-chip" key={character.id}><span className="character-initial">{character.name[0]}</span>{character.name}</span>)}</div>}</section>
           <section className="panel"><div className="panel-title"><h2>创作备注</h2><span>{project.readOnly ? "样例说明" : "可在右上角编辑"}</span></div><p className="story-premise whitespace-pre-wrap">{project.note || "还没有备注。记下一条创意，或这次改写最想解决的问题。"}</p></section>
           <section className="panel"><div className="panel-title"><h2>完整创作流程</h2><span>各阶段可浏览</span></div><div className="workflow-overview">{workflowSteps.map((s, i) => <Link href={`${base}/stages/${s.id}`} key={s.id}><span>{String(i + 1).padStart(2, "0")}</span>{s.name}<ArrowUpRight size={12} /></Link>)}</div></section>
-        </>}
+        </>}</div>
       {content && <details className="archive-details"><summary>项目资料与来源</summary><SourcesPanel content={content} /></details>}
       </div>
       <p className="page-footnote">作者工作区 · 结构与原文可能含谜底，请勿直接向玩家展示。原始样例与历史检查保持独立。</p>

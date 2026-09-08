@@ -6,7 +6,10 @@ import type { SourceFileInput, IssueResolution, MechanismChoice, OriginalDirecti
 
 export type ServiceErrorCode = "NOT_FOUND" | "READ_ONLY" | "CONFLICT" | "INVALID_INPUT" | "STORAGE_UNAVAILABLE" | "STORAGE_CORRUPT" | "STORAGE_VERSION" | "CANCELLED" | "DIRECTORY_UNAVAILABLE";
 
+export type OutputDirectoryCapability = "available" | "unsupported" | "insecure";
+
 export interface OutputDirectoryPort {
+  capability?(): OutputDirectoryCapability;
   pick(): Promise<PickedOutputDirectory | null>;
   get(id: string): Promise<{ name: string; kind: "directory" } | null>;
 }
@@ -45,6 +48,7 @@ export interface ProjectService {
   importSourceFiles(id: string, revision: number, files: SourceFileInput[], options?: SourceImportOptions): Promise<SourceImportResult>;
   saveOutputSettings(id: string, revision: number, input: OutputSettingsInput): Promise<Project>;
   pickOutputDirectory(): Promise<PickedOutputDirectory | null>;
+  getOutputDirectoryCapability(): OutputDirectoryCapability;
   startResearchJob(id: string, revision: number, kind: "ocr" | "analysis", fail?: boolean): Promise<Project>;
   advanceResearchJob(id: string, jobId: string): Promise<Project>;
   cancelResearchJob(id: string, revision: number): Promise<Project>;

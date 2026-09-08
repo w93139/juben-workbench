@@ -160,6 +160,7 @@ export class MockProjectService implements ProjectService {
       p.outputSettings.folders[result.data.stage] = result.data.folder;
     });
   }
+  getOutputDirectoryCapability() { return this.outputDirectories?.capability?.() ?? (this.outputDirectories ? "available" : "unsupported"); }
   async pickOutputDirectory() {
     if (!this.outputDirectories) throw new ServiceError("DIRECTORY_UNAVAILABLE", "当前环境不能选择文件夹，请手动填写完整路径。");
     return this.outputDirectories.pick();

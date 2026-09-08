@@ -3,6 +3,14 @@
 !/.gitignore
 !/README.md
 !/AGENTS.md
+!/LICENSE
+!/NOTICE.md
+!/SECURITY.md
+!/.github/
+/.github/*
+!/.github/workflows/
+/.github/workflows/*
+!/.github/workflows/security.yml
 !/同步到GitHub.command
 !/scripts/
 !/01-产品需求/

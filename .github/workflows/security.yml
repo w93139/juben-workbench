@@ -1,0 +1,39 @@
+name: Repository security scan
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout complete history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, verified through GitHub API
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          path: project
+      - name: Checkout trusted base scanner for pull requests
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted-scanner
+          persist-credentials: false
+      - name: Scan pull request with trusted base rules
+        if: github.event_name == 'pull_request'
+        run: python3 trusted-scanner/scripts/check-repository.py --root "$GITHUB_WORKSPACE/project"
+      - name: Scan pushed version
+        if: github.event_name == 'push'
+        run: python3 project/scripts/check-repository.py --root "$GITHUB_WORKSPACE/project"
+      - name: Verify trusted scanner and synchronization protections
+        if: github.event_name == 'pull_request'
+        run: python3 -m unittest discover -s trusted-scanner/scripts -p 'test_*.py'
+      - name: Verify pushed scanner and synchronization protections
+        if: github.event_name == 'push'
+        run: python3 -m unittest discover -s project/scripts -p 'test_*.py'

@@ -1,5 +1,5 @@
 import { pickedOutputDirectorySchema, type PickedOutputDirectory } from "@/domain/output-settings";
-import { ServiceError, type OutputDirectoryPort } from "./contracts";
+import { ServiceError, type OutputDirectoryPort, type OutputDirectoryCapability } from "./contracts";
 
 export const OUTPUT_DIRECTORY_DB = "juben-workbench:output-directories:v1";
 const storeName = "directories";
@@ -20,6 +20,10 @@ async function openDatabase(): Promise<IDBDatabase> {
 // Only a browser directory reference is stored. No entries are enumerated,
 // no file contents are read and no write permission is requested.
 export class BrowserOutputDirectories implements OutputDirectoryPort {
+  capability(): OutputDirectoryCapability {
+    if (typeof window === "undefined" || !window.isSecureContext) return "insecure";
+    return typeof (window as PickerWindow).showDirectoryPicker === "function" ? "available" : "unsupported";
+  }
   private async transaction<T>(mode: IDBTransactionMode, operation: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
     let db: IDBDatabase | undefined;
     try {
@@ -36,14 +40,15 @@ export class BrowserOutputDirectories implements OutputDirectoryPort {
 
   async pick(): Promise<PickedOutputDirectory | null> {
     const browser = window as PickerWindow;
-    if (typeof browser.showDirectoryPicker !== "function") throw new ServiceError("DIRECTORY_UNAVAILABLE", "当前浏览器不支持文件夹选择。请手动填写完整路径，或使用支持目录选择的浏览器。");
+    if (this.capability() === "insecure") throw new ServiceError("DIRECTORY_UNAVAILABLE", "当前页面不是安全环境。请在本机使用 http://127.0.0.1:3107，线上页面需要HTTPS；也可手动填写完整路径。");
+    if (typeof browser.showDirectoryPicker !== "function") throw new ServiceError("DIRECTORY_UNAVAILABLE", "当前浏览器不支持文件夹选择。请手动填写完整路径，或用桌面Chrome／Edge打开工作台；不同浏览器的项目不会自动共享。");
     let handle: FileSystemDirectoryHandle;
     try {
       // Keep this as the first awaited operation, directly under the user's click.
       handle = await browser.showDirectoryPicker({ startIn: "desktop", mode: "read" });
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return null;
-      throw new ServiceError("DIRECTORY_UNAVAILABLE", "未能打开或访问所选文件夹，原设置已保留。请重试，或手动填写完整路径。");
+      throw new ServiceError("DIRECTORY_UNAVAILABLE", "未能打开或访问所选文件夹，原设置已保留。请在独立浏览器窗口中重试并允许访问文件夹，或手动填写完整路径。");
     }
     const result = pickedOutputDirectorySchema.safeParse({ id: crypto.randomUUID(), name: handle.name });
     if (handle.kind !== "directory" || !result.success) throw new ServiceError("DIRECTORY_UNAVAILABLE", "无法读取所选文件夹名称，请重新选择；原设置已保留。");

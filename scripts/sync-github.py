@@ -9,7 +9,7 @@ import sys
 
 REPOSITORY = "w93139/juben-workbench"
 REMOTE = f"https://github.com/{REPOSITORY}.git"
-ROOT_FILES = {".gitignore", "README.md", "AGENTS.md", "同步到GitHub.command"}
+ROOT_FILES = {".gitignore", "README.md", "AGENTS.md", "同步到GitHub.command", "LICENSE", "NOTICE.md", "SECURITY.md", ".github/workflows/security.yml"}
 ROOT_DIRS = {"01-产品需求", "03-前端原型", "04-后端服务", "scripts"}
 EXCLUDED_DIRS = {
     ".git", "node_modules", ".next", "out", "dist", "coverage", "test-results",
@@ -23,7 +23,14 @@ SECRET_PATTERNS = [
     rb"gh[pousr]_[A-Za-z0-9]{30,}", rb"github_pat_[A-Za-z0-9_]{50,}",
     rb"sk-[A-Za-z0-9_-]{20,}", rb"AKIA[A-Z0-9]{16}",
     rb"-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----",
+    rb"AIza[A-Za-z0-9_-]{35}", rb"(?:xai-|gsk_|hf_)[A-Za-z0-9_-]{20,}",
+    rb"xox[baprs]-[A-Za-z0-9-]{20,}", rb"ASIA[A-Z0-9]{16}",
+    rb"(?i)(?:https?|postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://[^\s/:@]+:[^\s/@]+@",
+    rb"(?im)^\s*(?:export\s+)?NEXT_PUBLIC_[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*\s*=\s*[\"']?[^\s\"'#]+",
 ]
+SENSITIVE_ASSIGNMENT = re.compile(rb"(?i)[\"']?\b(?:api[_-]?key|api[_-]?secret|access[_-]?token|auth[_-]?token|client[_-]?secret|password)\b[\"']?\s*[:=]\s*[\"']([A-Za-z0-9_./+=-]{16,})[\"']")
+SENSITIVE_ENV = re.compile(rb"(?im)^\s*(?:export\s+)?[A-Z0-9_]*(?:API_KEY|API_SECRET|ACCESS_TOKEN|AUTH_TOKEN|CLIENT_SECRET|PASSWORD)\s*=\s*[\"']?([A-Za-z0-9_./+=-]{16,})")
+PLACEHOLDER = re.compile(rb"(?i)^(?:example|placeholder|replace[_-]?me|your[_-]|test[_-]|dummy|<|\$\{)")
 MAX_SIZE = 10 * 1024 * 1024
 
 
@@ -50,6 +57,7 @@ def check_name(name):
     blocked = any(part in EXCLUDED_DIRS for part in path.parts)
     blocked |= any(part == ".env" or (part.startswith(".env.") and part != ".env.example") for part in path.parts)
     blocked |= path.suffix.lower() in EXCLUDED_SUFFIXES or path.name == ".DS_Store"
+    blocked |= path.name.lower() in {".npmrc", ".netrc", "credentials.json", "service-account.json", "id_rsa", "id_ed25519"}
     if not allowed or blocked:
         raise SyncError(f"文件不在同步范围：{json.dumps(name, ensure_ascii=False)}")
 
@@ -68,6 +76,11 @@ def check_data(name, data):
         if match:
             line = data[:match.start()].count(b"\n") + 1
             raise SyncError(f"发现疑似凭证，请先处理本机内容或未推送提交：{name}:{line}（不显示内容）")
+    for pattern in (SENSITIVE_ASSIGNMENT, SENSITIVE_ENV):
+        for match in pattern.finditer(data):
+            if not PLACEHOLDER.search(match.group(1)):
+                line = data[:match.start()].count(b"\n") + 1
+                raise SyncError(f"发现疑似敏感配置：{name}:{line}（不显示内容）")
 
 
 def check_worktree(root):
@@ -107,6 +120,36 @@ def check_git_snapshot(root, ref=None, seen=None):
             seen.add(oid)
 
 
+def check_history(root):
+    """Read every reachable commit/ref; no fetch, checkout, staging or secret output."""
+    if git(root, "rev-parse", "--is-shallow-repository").stdout.strip() == b"true":
+        raise SyncError("当前是浅克隆，无法检查完整历史；请先获取完整历史。")
+    seen = set()
+    commits = git(root, "rev-list", "--all").stdout.decode().splitlines()
+    for commit in commits:
+        check_git_snapshot(root, commit, seen)
+        check_data(f"提交对象 {commit[:12]}", git(root, "cat-file", "commit", commit).stdout)
+    # Annotated tag messages can contain credentials even when files are clean.
+    refs = git(root, "for-each-ref", "--format=%(objectname)").stdout.decode().splitlines()
+    pending = list(set(refs))
+    visited = set()
+    while pending:
+        oid = pending.pop()
+        if oid in visited:
+            continue
+        visited.add(oid)
+        kind = git(root, "cat-file", "-t", oid).stdout.strip()
+        if kind == b"tag":
+            data = git(root, "cat-file", "tag", oid).stdout
+            check_data(f"标签对象 {oid[:12]}", data)
+            pending.append(data.splitlines()[0].split()[1].decode())
+        elif kind == b"tree":
+            check_git_snapshot(root, oid, seen)
+        elif kind not in (b"commit",):
+            raise SyncError("发现不指向提交的特殊引用，请人工审核后再公开。")
+    return {"commits": len(commits), "blobs": len(seen), "refs": len(refs)}
+
+
 def verify_target(root):
     actual = Path(git(root, "rev-parse", "--show-toplevel").stdout.decode().strip()).resolve()
     if actual != root:
@@ -114,12 +157,12 @@ def verify_target(root):
     if git(root, "symbolic-ref", "--short", "HEAD").stdout.strip() != b"main":
         raise SyncError("同步入口只处理main分支，请先完成当前分支工作。")
     if git(root, "remote", "get-url", "origin").stdout.decode().strip() != REMOTE:
-        raise SyncError("origin与指定私有项目仓库不一致，已停止。")
+        raise SyncError("origin与指定项目仓库不一致，已停止。")
     if git(root, "remote", "get-url", "--push", "--all", "origin").stdout.decode().splitlines() != [REMOTE]:
         raise SyncError("推送地址与指定项目仓库不一致，已停止。")
     repo = json.loads(command(root, "gh", "repo", "view", REPOSITORY, "--json", "nameWithOwner,isPrivate").stdout)
-    if repo.get("nameWithOwner") != REPOSITORY or repo.get("isPrivate") is not True:
-        raise SyncError("无法确认目标为指定私有仓库，已停止。")
+    if repo.get("nameWithOwner") != REPOSITORY or not isinstance(repo.get("isPrivate"), bool):
+        raise SyncError("无法确认目标为指定仓库，已停止。")
     if git(root, "ls-files", "--unmerged", "-z").stdout:
         raise SyncError("存在尚未处理的合并冲突，请先处理。")
     for marker in ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply"):
@@ -132,6 +175,7 @@ def sync(root, message, check_only=False):
     verify_target(root)
     count = check_worktree(root)
     check_git_snapshot(root)
+    history = check_history(root)
     has_head = git(root, "rev-parse", "--verify", "HEAD", allowed=(0, 128)).returncode == 0
     remote = git(root, "ls-remote", "--exit-code", "--heads", "origin", "refs/heads/main", allowed=(0, 2))
     baseline = None
@@ -142,9 +186,9 @@ def sync(root, message, check_only=False):
             baseline = git(root, "rev-parse", "FETCH_HEAD").stdout.decode().strip()
             if not has_head or git(root, "merge-base", "--is-ancestor", baseline, "HEAD", allowed=(0, 1)).returncode != 0:
                 raise SyncError("GitHub存在本机尚未合入的更新。已停止，不覆盖远程；请先处理差异。")
-    print(f"已检查 {count} 个文件；目标为私有仓库 {REPOSITORY}。", flush=True)
+    print(f"已检查 {count} 个文件及 {history['commits']} 个历史提交；目标为 {REPOSITORY}。", flush=True)
     if check_only:
-        print("检查完成，没有暂存、提交或推送；同步时还会检查未推送的提交历史。")
+        print("检查完成，没有暂存、提交或推送；已检查全部本地引用可达历史。")
         return
     git(root, "add", "-A", "--", ".")
     check_git_snapshot(root)
@@ -154,10 +198,7 @@ def sync(root, message, check_only=False):
         has_head = True
     if not has_head:
         raise SyncError("没有可同步的文件或提交。")
-    revisions = (f"{baseline}..HEAD",) if baseline else ("HEAD",)
-    seen = set()
-    for commit in git(root, "rev-list", *revisions).stdout.decode().splitlines():
-        check_git_snapshot(root, commit, seen)
+    check_history(root)
     git(root, "push", "--no-follow-tags", "--set-upstream", "origin", "HEAD:refs/heads/main")
     local = git(root, "rev-parse", "HEAD").stdout.decode().strip()
     published = git(root, "ls-remote", "--exit-code", "--heads", "origin", "refs/heads/main").stdout.split()[0].decode()
@@ -167,7 +208,7 @@ def sync(root, message, check_only=False):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="把本项目文件的一次更新同步到指定GitHub私有仓库。")
+    parser = argparse.ArgumentParser(description="把本项目文件的一次更新同步到指定GitHub仓库。")
     parser.add_argument("--message", default="chore: sync workbench updates")
     parser.add_argument("--check", action="store_true", help="只检查文件和目标，不提交或推送")
     args = parser.parse_args()

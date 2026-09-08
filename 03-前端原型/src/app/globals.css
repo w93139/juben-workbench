@@ -404,3 +404,8 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: 3px solid
 .relationship-map { max-width: 640px; width: 100%; margin: 0 auto; }
 .development-progress-button { border: 1px solid #ccd5c8; padding: 5px 8px; border-radius: 5px; color: #435f4e; background: #f1f3eb; cursor: pointer; font-size: 11px; }
 @media (max-width: 760px) { .blueprint-field-grid { grid-template-columns: 1fr; } .topbar-right { gap: 7px; } .topbar-path { min-width: 0; } .development-progress-button { font-size: 10px; } .topbar-right .avatar { display: none; } }
+
+/* Animate only the new stage body; saved inputs do not remount it. */
+.stage-content-enter { display: grid; gap: 22px; animation: stage-arrive 200ms ease-out both; }
+@keyframes stage-arrive { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .stage-content-enter { animation: none; } }

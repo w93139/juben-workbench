@@ -17,7 +17,7 @@ test("首页、空项目创建、编辑与刷新恢复", async ({ page }) => {
   await page.getByLabel("项目名称", { exact: false }).fill("空白故事");
   await page.getByRole("button", { name: "创建并进入工作台" }).click();
   await expect(page.getByRole("heading", { name: "空白故事", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "编辑项目" }).click();
+  await page.getByRole("button", { name: "修改剧本名称" }).click();
   await page.getByLabel("项目名称", { exact: true }).fill("新的故事名称");
   await page.getByLabel("创作备注", { exact: true }).fill("我的创作方向：一次有后果的选择。");
   await page.getByRole("button", { name: "保存修改" }).click();
@@ -50,7 +50,7 @@ test("演示副本独立编辑，原样例与未试玩状态不变", async ({ pa
   await page.getByRole("button", { name: "检查与试玩", exact: true }).click();
   await expect(page.getByText("尚未真人试玩", { exact: true })).toBeVisible();
   await page.goto("/projects/demo-names");
-  await expect(page.getByRole("button", { name: "编辑项目" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "修改剧本名称" })).toHaveCount(0);
   await expect(page.getByRole("combobox")).toHaveCount(0);
   await page.getByRole("button", { name: "查看创作决定", exact: true }).click();
   await expect(page.getByText("已确定", { exact: true }).first()).toBeVisible();
@@ -116,9 +116,9 @@ test("存储被禁用时保留输入，不显示保存成功", async ({ page }) 
 test("多页面同时编辑会拦截过期版本", async ({ page, context }) => {
   const url = await create(page, "多人编辑边界");
   const second = await context.newPage(); await second.goto(url);
-  await page.getByRole("button", { name: "编辑项目" }).click();
+  await page.getByRole("button", { name: "修改剧本名称" }).click();
   await page.getByLabel("创作备注", { exact: true }).fill("较早打开的输入");
-  await second.getByRole("button", { name: "编辑项目" }).click();
+  await second.getByRole("button", { name: "修改剧本名称" }).click();
   await second.getByLabel("创作备注", { exact: true }).fill("已经保存的新内容");
   await second.getByRole("button", { name: "保存修改" }).click();
   await expect(second.getByText("已经保存的新内容", { exact: true })).toBeVisible();
@@ -131,7 +131,7 @@ test("多页面同时编辑会拦截过期版本", async ({ page, context }) => 
   await expect(page.getByRole("dialog").getByText("备注：已经保存的新内容", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "使用当前输入覆盖保存" }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "编辑项目" })).toBeFocused();
+  await expect(page.getByRole("button", { name: "修改剧本名称" })).toBeFocused();
   await expect(page.getByText("较早打开的输入", { exact: true })).toBeVisible();
 });
 
@@ -163,7 +163,7 @@ test("错误项目和阶段地址不会显示伪造内容", async ({ page }) => 
 test("窄屏长备注仍可在弹窗内保存", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await create(page, "长备注项目");
-  await page.getByRole("button", { name: "编辑项目" }).click();
+  await page.getByRole("button", { name: "修改剧本名称" }).click();
   const note = "一段需要保留的创作想法。\n".repeat(100).slice(0, 1200);
   await page.getByLabel("创作备注", { exact: true }).fill(note);
   const bounds = await page.getByRole("dialog").boundingBox();
@@ -172,14 +172,14 @@ test("窄屏长备注仍可在弹窗内保存", async ({ page }) => {
   await page.getByRole("button", { name: "保存修改" }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.reload();
-  await page.getByRole("button", { name: "编辑项目" }).click();
+  await page.getByRole("button", { name: "修改剧本名称" }).click();
   await expect(page.getByLabel("创作备注", { exact: true })).toHaveValue(note);
 });
 
 test("后台读取损坏数据不会卸载正在编辑的草稿", async ({ page, context }) => {
   const url = await create(page, "保留编辑草稿");
   const other = await context.newPage(); await other.goto(url);
-  await page.getByRole("button", { name: "编辑项目" }).click();
+  await page.getByRole("button", { name: "修改剧本名称" }).click();
   await page.getByLabel("项目名称", { exact: true }).fill("未保存的标题");
   await page.getByLabel("创作备注", { exact: true }).fill("读取失败也要留下的草稿");
   const raw = await other.evaluate((key) => localStorage.getItem(key), key);

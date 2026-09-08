@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
 import type { Project } from "@/domain/models";
 import { outputPath, outputSettingsInputSchema, outputStages, type OutputStage } from "@/domain/output-settings";
 import { useResearchAction, useResearchDraft } from "./research/common";
@@ -16,6 +17,7 @@ export function OutputLocation({ project, stage }: { project: Project; stage: Ou
 
 export function OutputSettingsPanel({ project, stage }: { project: Project; stage: OutputStage }) {
   const service = useService();
+  const capability = useQuery({ queryKey: ["output-directory-capability"], queryFn: () => service.getOutputDirectoryCapability(), staleTime: 0 });
   const action = useResearchAction(project);
   const { draft, change, saved } = useResearchDraft({ rootPath: project.outputSettings.rootPath, directory: project.outputSettings.directory ?? null, folder: project.outputSettings.folders[stage] });
   const mounted = useRef(true);
@@ -40,10 +42,12 @@ export function OutputSettingsPanel({ project, stage }: { project: Project; stag
   }
   return <section className="panel" aria-label="输出储存位置">
     <div className="panel-title"><h2>输出储存位置</h2><span>{outputStages[stage].label}</span></div>
+    {project.readOnly ? <div className="stage-callout"><strong>原始样例不能修改输出位置</strong><p>请先建立自己的副本，再选择文件夹。</p><Link className="inline-link" href="/projects/new?template=demo">创建可编辑副本 →</Link></div> : capability.data === "unsupported" ? <div className="stage-callout" role="status"><strong>此浏览器暂不支持直接选择输出文件夹</strong><p>可以在下方填写完整路径。若使用桌面Chrome／Edge，请从独立窗口打开；不同浏览器中的项目不会自动共享。</p></div> : capability.data === "insecure" ? <div className="stage-callout" role="status"><strong>需要使用本机地址或HTTPS</strong><p>本机请打开 http://127.0.0.1:3107。也可先手动填写路径。</p></div> : null}
     <p className="field-hint">设置项目总目录和本阶段子目录。总目录供所有阶段共用；修改只影响后续任务，不移动已有结果。</p>
     <form onSubmit={(event) => { event.preventDefault(); if (!busy && valid.success) action.mutate((revision) => service.saveOutputSettings(project.id, revision, valid.data), { onSuccess: saved }); }}>
       <div className="research-toolbar"><Button type="button" variant="outline" disabled={busy} onClick={() => void pickDirectory()}>{picking ? "正在选择文件夹…" : draft.directory ? "重新选择文件夹" : "选择文件夹"}</Button>{draft.directory && <Button type="button" variant="outline" disabled={busy} onClick={() => { action.touch(); change({ ...draft, directory: null }); setPickerError(null); setPickerNote(""); }}>改为手动填写路径</Button>}</div>
-      <p className="field-hint">选择窗口会请求从桌面打开，也可在窗口中前往其他位置。取消选择不会改变当前设置。</p>
+      <p className="field-hint">在支持的浏览器中，点击后会打开系统的文件夹选择窗口，可选择桌面上的文件夹，包括空文件夹。取消不会改变设置。</p>
+      {!project.readOnly && <details className="research-excerpt"><summary>选择窗口没有打开？</summary><p>先确认自己正在编辑副本，并且页面使用本机地址或HTTPS。若浏览器不支持，可手动填写路径。在Mac访达中选中文件夹，按 Option + Command + C 复制路径，再粘贴到下方；不要把文件夹名当作完整路径。</p><p>当前只保存输出位置，不会将文件夹内容上传，也不会立即写入文件。</p></details>}
       {pickerError != null && <ErrorMessage error={pickerError} />}
       {pickerNote && <p role="status" className="field-hint">{pickerNote}</p>}
       <label className="field-label" htmlFor="output-root">项目总输出目录</label>
