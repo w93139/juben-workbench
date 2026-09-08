@@ -69,9 +69,11 @@ test("五步可达、结构内容与来源预览可读", async ({ page }) => {
     await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
   }
   await page.getByRole("navigation").getByRole("link", { name: "设计故事" }).click();
+  await page.getByRole("button", { name: "人物与关系", exact: true }).click();
   await expect(page.getByRole("heading", { name: "许知微", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "谁知道什么", exact: true }).click();
-  await expect(page.getByText("KF-01", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "信息与线索", exact: true }).click();
+  await page.getByLabel("选择信息发放", { exact: true }).selectOption("KF-01-CH-A");
+  await expect(page.getByText("记录编号：KF-01-CH-A", { exact: true })).toBeVisible();
   await page.getByText("项目资料与来源", { exact: true }).click();
   await page.getByRole("button", { name: "交叉验证的范围", exact: true }).click();
   await expect(page.getByRole("dialog")).toBeVisible();

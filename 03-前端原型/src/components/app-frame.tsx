@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ArrowLeft, ArrowUpRight, ChevronRight, FolderClosed, House, LayoutDashboard, Menu, Plus, PanelsTopLeft } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { DevelopmentProgress } from "./development-progress";
 import { workflowSteps } from "@/domain/workflow-view";
 
 export function AppFrame({ children, title, projectId, workspace = false }: { children: React.ReactNode; title: string; projectId?: string; workspace?: boolean }) {
@@ -44,7 +45,7 @@ export function AppFrame({ children, title, projectId, workspace = false }: { ch
           <DialogContent className="mobile-navigation translate-x-0 translate-y-0"><DialogTitle className="sr-only">工作台导航</DialogTitle><DialogDescription className="sr-only">选择项目或创作阶段</DialogDescription><div className="mobile-nav-body">{navigation}</div></DialogContent>
         </Dialog>
         <div className="topbar-path"><Link href="/">创作空间</Link><ChevronRight size={12} /><span>{title}</span></div>
-        <div className="topbar-right"><span className="prototype-label">可交互原型 · 本地演示</span><span className="avatar" aria-label="作者工作空间">作</span></div>
+        <div className="topbar-right"><DevelopmentProgress /><span className="avatar" aria-label="作者工作空间">作</span></div>
       </header>
       <main id="main" className="page-content" tabIndex={-1}>{children}</main>
     </div>

@@ -1,4 +1,6 @@
 import { z } from "zod";
+import type { BlueprintData } from "@/domain/blueprint";
+import * as blueprint from "./blueprint-operations";
 import { inspectSourceImport, sourceImportPolicy } from "@/domain/source-import";
 import { outputPath, outputSettingsInputSchema, type OutputSettingsInput } from "@/domain/output-settings";
 import { checkImportCancelled, runMockSourceImport } from "./mock-source-import";
@@ -118,6 +120,14 @@ export class MockProjectService implements ProjectService {
     const project = await this.get(id);
     return project.template === "names-beyond" ? structuredClone(demo) : null;
   }
+
+  async getBlueprint(id: string) {
+    const project = await this.get(id);
+    return structuredClone(project.readOnly ? blueprint.demoBlueprint(demo) : project.blueprint);
+  }
+  async initializeBlueprint(id: string, revision: number, mode: "blank" | "demo") { return this.mutate(id, revision, (p) => blueprint.initialize(p, mode, demo, this.now())); }
+  async saveBlueprint(id: string, revision: number, input: BlueprintData) { return this.mutate(id, revision, (p) => blueprint.save(p, input, this.now())); }
+  async publishBlueprintVersion(id: string, revision: number, label: string) { return this.mutate(id, revision, (p) => blueprint.publish(p, label, this.now(), this.uuid)); }
 
   async getResearchCatalog() { return structuredClone(research.researchCatalog); }
   async addResearchDemo(id: string, revision: number) { return this.mutate(id, revision, (p) => research.addDemo(p.research)); }

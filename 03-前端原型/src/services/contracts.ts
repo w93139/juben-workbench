@@ -1,4 +1,5 @@
 import type { SourceImportPreview } from "@/domain/source-import";
+import type { BlueprintData, BlueprintWorkspace } from "@/domain/blueprint";
 import type { OutputSettingsInput, PickedOutputDirectory } from "@/domain/output-settings";
 import type { CreateProjectInput, DecisionStatus, DemoContent, Project, UpdateProjectInput, WorkflowStage } from "@/domain/models";
 import type { SourceFileInput, IssueResolution, MechanismChoice, OriginalDirection, ResearchCatalog, CreativePlanInput } from "@/domain/research";
@@ -32,6 +33,10 @@ export interface ProjectService {
   update(id: string, expectedRevision: number, input: UpdateProjectInput): Promise<Project>;
   setDecision(id: string, expectedRevision: number, decisionId: string, status: DecisionStatus): Promise<Project>;
   getContent(id: string): Promise<DemoContent | null>;
+  getBlueprint(id: string): Promise<BlueprintWorkspace | null>;
+  initializeBlueprint(id: string, revision: number, mode: "blank" | "demo"): Promise<Project>;
+  saveBlueprint(id: string, revision: number, input: BlueprintData): Promise<Project>;
+  publishBlueprintVersion(id: string, revision: number, label: string): Promise<Project>;
   getWorkflow(): Promise<WorkflowStage[]>;
   getResearchCatalog(): Promise<ResearchCatalog>;
   addResearchDemo(id: string, revision: number): Promise<Project>;

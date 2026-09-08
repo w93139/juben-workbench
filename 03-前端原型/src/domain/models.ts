@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { blueprintWorkspaceSchema } from "./blueprint";
 import { researchSchema } from "./research";
 import { defaultOutputSettings, outputSettingsSchema } from "./output-settings";
 
@@ -33,6 +34,7 @@ export const projectSchema = z.object({
   updatedAt: z.iso.datetime().nullable(),
   decisions: z.array(decisionSchema),
   research: researchSchema,
+  blueprint: blueprintWorkspaceSchema.nullable().default(null),
   outputSettings: outputSettingsSchema.default(defaultOutputSettings),
 });
 export type Project = z.infer<typeof projectSchema>;

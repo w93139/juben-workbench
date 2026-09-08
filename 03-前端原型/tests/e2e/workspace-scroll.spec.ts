@@ -39,6 +39,8 @@ for (const viewport of [{ width: 1440, height: 844 }, { width: 960, height: 844 
     await page.goto(`${url}/stages/blueprint`);
     const blueprintHeading = page.getByRole("heading", { name: "设计故事", exact: true });
     await expect(blueprintHeading).toBeVisible();
+    await page.getByRole("button", { name: "载入演示蓝图", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "故事蓝图", exact: true })).toBeVisible();
     const blueprintBefore = await blueprintHeading.boundingBox();
     const box = await details.boundingBox();
     expect(box!.height).toBeGreaterThan(100);

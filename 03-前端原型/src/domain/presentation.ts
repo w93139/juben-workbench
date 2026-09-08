@@ -1,3 +1,4 @@
+import type { BlueprintData } from "./blueprint";
 import { researchStep } from "./research";
 import type { DemoContent, Project, StageId } from "./models";
 
@@ -15,6 +16,7 @@ export function knowledgeKindLabel(kind: string) {
 }
 
 export function currentStage(project: Project): StageId {
+  if (project.blueprint) return "blueprint";
   if (project.research.documents.length > 0) return researchStep(project.research);
   return project.template === "names-beyond" ? "playtest" : "materials";
 }
@@ -24,11 +26,12 @@ export function formatDate(iso: string | null) {
   return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(iso));
 }
 
-export function getStats(content: DemoContent | null) {
+export function getStats(content: DemoContent | null, blueprint?: BlueprintData) {
+  const current = blueprint ?? content;
   return [
-    { label: "故事角色", value: content?.characters.length ?? 0, unit: "位" },
-    { label: "人物关系", value: content?.relationships.length ?? 0, unit: "条" },
-    { label: "信息记录", value: content?.knowledge.length ?? 0, unit: "条" },
-    { label: "公共材料", value: content?.clues.length ?? 0, unit: "份" },
+    { label: "故事角色", value: current?.characters.length ?? 0, unit: "位" },
+    { label: "人物关系", value: current?.relationships.length ?? 0, unit: "条" },
+    { label: "信息记录", value: current?.knowledge.length ?? 0, unit: "条" },
+    { label: "线索材料", value: current?.clues.length ?? 0, unit: "份" },
   ];
 }

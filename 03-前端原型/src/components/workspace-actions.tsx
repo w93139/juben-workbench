@@ -12,7 +12,7 @@ import { ChecksPanel, DecisionPanel } from "./workspace-panels";
 export function WorkspaceActions({ project, content, stageId }: { project: Project; content: DemoContent | null; stageId?: StageId }) {
   const step = stageId ? workflowStep(stageId) : undefined;
   const nextStep = step ? workflowSteps[workflowSteps.indexOf(step) + 1] : undefined;
-  const resume = workflowStep(researchStep(project.research));
+  const resume = workflowStep(project.blueprint ? "blueprint" : researchStep(project.research));
   const needsConfirmation = step?.id === "analysis" && !project.readOnly && !project.research.directionConfirmed;
   const href = needsConfirmation ? "#creative-plan-form" : stageId ? nextStep ? `/projects/${project.id}/stages/${nextStep.id}` : `/projects/${project.id}` : project.readOnly ? "/projects/new?template=demo&start=research" : `/projects/${project.id}/stages/${resume.id}`;
   const label = needsConfirmation ? "下一步：确认方案" : stageId ? nextStep ? `下一步：${nextStep.name}` : "返回项目总览" : project.readOnly ? "开始自己的创作" : `继续：${resume.name}`;
@@ -32,6 +32,7 @@ export function WorkspaceActions({ project, content, stageId }: { project: Proje
         <DialogContent className="workspace-action-dialog">
           <DialogTitle>项目检查与试玩</DialogTitle>
           <DialogDescription>分别查看各类检查的范围和试玩状态，历史通过记录不代表已完成真人试玩。</DialogDescription>
+          {project.blueprint && <p className="field-hint">当前蓝图草稿修订 {project.blueprint.revision}，保留 {project.blueprint.versions.length} 个版本。尚未运行本蓝图的AI审查或真人试玩。下方是原始样例记录，不代表当前修改已通过。</p>}
           <ChecksPanel content={content} />
         </DialogContent>
       </Dialog>
