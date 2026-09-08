@@ -17,11 +17,15 @@ test("首页、空项目创建、编辑与刷新恢复", async ({ page }) => {
   await page.getByLabel("项目名称", { exact: false }).fill("空白故事");
   await page.getByRole("button", { name: "创建并进入工作台" }).click();
   await expect(page.getByRole("heading", { name: "空白故事", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "修改剧本名称" }).click();
+  await page.getByRole("button", { name: "改名", exact: true }).click();
   await page.getByLabel("项目名称", { exact: true }).fill("新的故事名称");
   await page.getByLabel("创作备注", { exact: true }).fill("我的创作方向：一次有后果的选择。");
   await page.getByRole("button", { name: "保存修改" }).click();
   await expect(page.getByRole("heading", { name: "新的故事名称", exact: true })).toBeVisible();
+  const projects = page.getByRole("navigation", { name: "主导航" });
+  await expect(projects.getByRole("link", { name: "新的故事名称", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(projects.getByRole("link", { name: "空白故事", exact: true })).toHaveCount(0);
+  await expect(projects.locator('a[href*="/stages/"]')).toHaveCount(0);
   await page.getByRole("button", { name: "修改决定状态", exact: true }).click();
   await page.getByLabel("主要体验状态").selectOption("provisional");
   await expect(page.getByText("决定状态已保存")).toBeVisible();
@@ -30,7 +34,7 @@ test("首页、空项目创建、编辑与刷新恢复", async ({ page }) => {
   await expect(page.getByLabel("主要体验状态")).toHaveValue("provisional");
   await page.keyboard.press("Escape");
   await expect(page.getByText("我的创作方向：一次有后果的选择。", { exact: true })).toBeVisible();
-  await page.getByRole("link", { name: "全部项目", exact: true }).click();
+  await page.getByRole("link", { name: "我的项目", exact: true }).click();
   await page.getByLabel("搜索项目名称").fill("新的故事");
   await expect(page.getByRole("table").getByRole("row")).toHaveCount(2);
   await page.getByLabel("筛选项目").selectOption("demo");
@@ -50,7 +54,8 @@ test("演示副本独立编辑，原样例与未试玩状态不变", async ({ pa
   await page.getByRole("button", { name: "检查与试玩", exact: true }).click();
   await expect(page.getByText("尚未真人试玩", { exact: true })).toBeVisible();
   await page.goto("/projects/demo-names");
-  await expect(page.getByRole("button", { name: "修改剧本名称" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "改名", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "改名", exact: true })).toHaveAttribute("href", "/projects/new?template=demo");
   await expect(page.getByRole("combobox")).toHaveCount(0);
   await page.getByRole("button", { name: "查看创作决定", exact: true }).click();
   await expect(page.getByText("已确定", { exact: true }).first()).toBeVisible();
@@ -65,10 +70,10 @@ test("演示副本独立编辑，原样例与未试玩状态不变", async ({ pa
 test("五步可达、结构内容与来源预览可读", async ({ page }) => {
   await page.goto("/projects/demo-names");
   for (const name of ["准备材料", "确定创作方案", "设计故事", "生成与检查", "试玩与导出"]) {
-    await page.getByRole("navigation", { name: "主导航" }).getByRole("link", { name, exact: false }).click();
+    await page.getByRole("navigation", { name: "创作流程" }).getByRole("link", { name, exact: false }).click();
     await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
   }
-  await page.getByRole("navigation").getByRole("link", { name: "设计故事" }).click();
+  await page.getByRole("navigation", { name: "创作流程" }).getByRole("link", { name: /设计故事/ }).click();
   await page.getByRole("button", { name: "人物与关系", exact: true }).click();
   await expect(page.getByRole("heading", { name: "许知微", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "信息与线索", exact: true }).click();
@@ -80,6 +85,36 @@ test("五步可达、结构内容与来源预览可读", async ({ page }) => {
   await expect(page.getByRole("dialog").getByText(/03-交叉验证记录/).first()).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
+});
+
+test("侧栏切换项目，步骤标题旁改名后同步侧栏且项目互不影响", async ({ page }) => {
+  const firstUrl = await create(page, "项目甲");
+  const secondUrl = await create(page, "项目乙");
+  const projects = page.getByRole("navigation", { name: "主导航" });
+  await expect(projects.locator('a[href*="/stages/"]')).toHaveCount(0);
+  await projects.getByRole("link", { name: "项目甲", exact: true }).click();
+  await expect(page).toHaveURL(firstUrl);
+  const workflow = page.getByRole("navigation", { name: "创作流程" });
+  await workflow.getByRole("link", { name: /设计故事/ }).click();
+  await expect(page.getByRole("heading", { name: "设计故事", exact: true })).toBeVisible();
+  const title = page.locator(".project-title-row");
+  await expect(title.getByRole("link", { name: "项目甲", exact: true })).toBeInViewport({ ratio: 1 });
+  await expect(title.getByRole("button", { name: "改名", exact: true })).toBeInViewport({ ratio: 1 });
+  await title.getByRole("button", { name: "改名", exact: true }).click();
+  await page.getByRole("dialog").getByLabel("项目名称", { exact: true }).fill("项目甲的新名字");
+  await page.getByRole("button", { name: "保存修改", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(title.getByRole("link", { name: "项目甲的新名字", exact: true })).toBeVisible();
+  await expect(projects.getByRole("link", { name: "项目甲的新名字", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(projects.getByRole("link", { name: "项目甲", exact: true })).toHaveCount(0);
+  await projects.getByRole("link", { name: "项目乙", exact: true }).click();
+  await expect(page).toHaveURL(secondUrl);
+  await expect(page.getByRole("heading", { name: "项目乙", exact: true })).toBeVisible();
+  await expect(projects.getByRole("link", { name: "项目乙", exact: true })).toHaveAttribute("aria-current", "page");
+  await page.reload();
+  await projects.getByRole("link", { name: "项目甲的新名字", exact: true }).click();
+  await expect(page).toHaveURL(firstUrl);
+  await expect(page.getByRole("heading", { name: "项目甲的新名字", exact: true })).toBeVisible();
 });
 
 test("坏数据不会自动覆盖，可下载备份并明确确认恢复", async ({ page }) => {
@@ -116,9 +151,9 @@ test("存储被禁用时保留输入，不显示保存成功", async ({ page }) 
 test("多页面同时编辑会拦截过期版本", async ({ page, context }) => {
   const url = await create(page, "多人编辑边界");
   const second = await context.newPage(); await second.goto(url);
-  await page.getByRole("button", { name: "修改剧本名称" }).click();
+  await page.getByRole("button", { name: "改名", exact: true }).click();
   await page.getByLabel("创作备注", { exact: true }).fill("较早打开的输入");
-  await second.getByRole("button", { name: "修改剧本名称" }).click();
+  await second.getByRole("button", { name: "改名", exact: true }).click();
   await second.getByLabel("创作备注", { exact: true }).fill("已经保存的新内容");
   await second.getByRole("button", { name: "保存修改" }).click();
   await expect(second.getByText("已经保存的新内容", { exact: true })).toBeVisible();
@@ -131,7 +166,7 @@ test("多页面同时编辑会拦截过期版本", async ({ page, context }) => 
   await expect(page.getByRole("dialog").getByText("备注：已经保存的新内容", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "使用当前输入覆盖保存" }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "修改剧本名称" })).toBeFocused();
+  await expect(page.getByRole("button", { name: "改名", exact: true })).toBeFocused();
   await expect(page.getByText("较早打开的输入", { exact: true })).toBeVisible();
 });
 
@@ -148,9 +183,12 @@ test("窄屏导航与弹窗可键盘关闭，页面不横向溢出", async ({ pa
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: "test-results/mobile-workspace.png", fullPage: true });
   await page.getByRole("button", { name: "打开导航" }).click();
-  await page.getByRole("dialog").getByRole("link", { name: "设计故事" }).click();
-  await expect(page.getByRole("heading", { name: "设计故事", exact: true })).toBeVisible();
+  const projects = page.getByRole("dialog").getByRole("navigation", { name: "主导航" });
+  await expect(projects.locator('a[href*="/stages/"]')).toHaveCount(0);
+  await projects.getByRole("link", { name: "名字之外", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.getByRole("navigation", { name: "创作流程" }).getByRole("link", { name: /设计故事/ }).click();
+  await expect(page.getByRole("heading", { name: "设计故事", exact: true })).toBeVisible();
 });
 
 test("错误项目和阶段地址不会显示伪造内容", async ({ page }) => {
@@ -163,7 +201,7 @@ test("错误项目和阶段地址不会显示伪造内容", async ({ page }) => 
 test("窄屏长备注仍可在弹窗内保存", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await create(page, "长备注项目");
-  await page.getByRole("button", { name: "修改剧本名称" }).click();
+  await page.getByRole("button", { name: "改名", exact: true }).click();
   const note = "一段需要保留的创作想法。\n".repeat(100).slice(0, 1200);
   await page.getByLabel("创作备注", { exact: true }).fill(note);
   const bounds = await page.getByRole("dialog").boundingBox();
@@ -172,14 +210,14 @@ test("窄屏长备注仍可在弹窗内保存", async ({ page }) => {
   await page.getByRole("button", { name: "保存修改" }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.reload();
-  await page.getByRole("button", { name: "修改剧本名称" }).click();
+  await page.getByRole("button", { name: "改名", exact: true }).click();
   await expect(page.getByLabel("创作备注", { exact: true })).toHaveValue(note);
 });
 
 test("后台读取损坏数据不会卸载正在编辑的草稿", async ({ page, context }) => {
   const url = await create(page, "保留编辑草稿");
   const other = await context.newPage(); await other.goto(url);
-  await page.getByRole("button", { name: "修改剧本名称" }).click();
+  await page.getByRole("button", { name: "改名", exact: true }).click();
   await page.getByLabel("项目名称", { exact: true }).fill("未保存的标题");
   await page.getByLabel("创作备注", { exact: true }).fill("读取失败也要留下的草稿");
   const raw = await other.evaluate((key) => localStorage.getItem(key), key);
@@ -199,9 +237,9 @@ for (const [id, name] of [["mechanisms", "确定创作方案"], ["direction", "�
   test(`旧入口 ${id} 仍可浏览且只激活所属步骤`, async ({ page }) => {
     await page.goto(`/projects/demo-names/stages/${id}`);
     await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
-    const nav = page.getByRole("navigation", { name: "主导航" });
-    await expect(nav.locator('[aria-current="page"]')).toHaveCount(1);
-    await expect(nav.locator('[aria-current="page"]')).toContainText(name);
+    const nav = page.getByRole("navigation", { name: "创作流程" });
+    await expect(nav.locator('[aria-current="step"]')).toHaveCount(1);
+    await expect(nav.locator('[aria-current="step"]')).toContainText(name);
     expect(await page.evaluate((key) => localStorage.getItem(key), key)).toBeNull();
   });
 }

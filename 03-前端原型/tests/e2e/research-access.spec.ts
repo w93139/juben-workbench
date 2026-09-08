@@ -20,23 +20,31 @@ for (const width of [1440, 960, 390]) {
     await expect(page).toHaveURL(/\/projects\/project-[^/]+\/stages\/materials$/);
     await expect(page.getByRole("heading", { name: "准备材料", exact: true })).toBeVisible();
     const materialsUrl = page.url();
+    await page.getByText("没有材料？使用练习包", { exact: true }).click();
     const load = page.getByRole("button", { name: "载入研究练习包", exact: true });
     await expect(load).toBeEnabled();
     await load.click();
     await expect(page.getByRole("button", { name: "练习包已载入", exact: true })).toBeDisabled();
     await expect(page.getByRole("button", { name: "开始模拟 OCR", exact: true })).toBeEnabled();
     await page.reload();
+    await page.getByText("没有材料？使用练习包", { exact: true }).click();
     await expect(page.getByRole("button", { name: "练习包已载入", exact: true })).toBeDisabled();
     await page.goto(materialsUrl.replace("/stages/materials", "/stages/blueprint"));
     await expect(page.getByRole("heading", { name: "设计故事", exact: true })).toBeVisible();
     if (width === 390) await page.getByRole("button", { name: "打开导航", exact: true }).click();
-    const nav = width === 390 ? page.getByRole("dialog").getByRole("navigation", { name: "主导航" }) : page.locator(".desktop-sidebar").getByRole("navigation", { name: "主导航" });
+    const projects = width === 390 ? page.getByRole("dialog").getByRole("navigation", { name: "主导航" }) : page.locator(".desktop-sidebar").getByRole("navigation", { name: "主导航" });
+    await expect(projects.locator('a[href*="/stages/"]')).toHaveCount(0);
+    await expect(projects.getByRole("link", { name: "研究入口副本", exact: true })).toHaveAttribute("aria-current", "page");
+    if (width === 390) await page.keyboard.press("Escape");
+    const nav = page.getByRole("navigation", { name: "创作流程" });
+    await expect(nav.getByRole("link", { name: "总览", exact: true })).toBeVisible();
     for (const name of ["准备材料", "确定创作方案", "设计故事", "生成与检查", "试玩与导出"]) await expect(nav.getByRole("link", { name: new RegExp(name) })).toBeVisible();
     await expect(nav.locator('a[href*="/stages/"]')).toHaveCount(5);
     await expect(nav.getByRole("link", { name: /准备材料/ })).toBeInViewport({ ratio: 1 });
     await page.screenshot({ path: testInfo.outputPath("five-step-navigation.png") });
     await nav.getByRole("link", { name: /准备材料/ }).click();
     await expect(page).toHaveURL(materialsUrl);
+    await page.getByText("没有材料？使用练习包", { exact: true }).click();
     await expect(page.getByRole("button", { name: "练习包已载入", exact: true })).toBeDisabled();
     const saved = await page.evaluate((key) => JSON.parse(localStorage.getItem(key)!), storageKey);
     expect(saved.projects).toHaveLength(1);
@@ -50,6 +58,7 @@ for (const width of [1440, 960, 390]) {
 
 test("只读材料页载入入口引导创建，不是无法操作的灰按钮", async ({ page }) => {
   await page.goto("/projects/demo-names/stages/materials");
+  await page.getByText("没有材料？使用练习包", { exact: true }).click();
   const load = page.getByRole("link", { name: "载入研究练习包", exact: true });
   await expect(load).toBeVisible();
   await load.click();
@@ -74,6 +83,7 @@ test("空白研究项目入口与保存失败仍保留输入，重试后只创�
   await expect(page).toHaveURL(/\/projects\/new\?start=research$/);
   await page.evaluate(() => sessionStorage.setItem("allow-research-write", "1"));
   await page.getByRole("button", { name: "创建并进入材料中心" }).click();
+  await page.getByText("没有材料？使用练习包", { exact: true }).click();
   await expect(page.getByRole("button", { name: "载入研究练习包", exact: true })).toBeEnabled();
   const saved = await page.evaluate((key) => JSON.parse(localStorage.getItem(key)!), storageKey);
   expect(saved.projects).toHaveLength(1);

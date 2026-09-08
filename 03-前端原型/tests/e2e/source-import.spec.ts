@@ -25,7 +25,7 @@ for (const width of [1440, 390]) test(`整文件夹自动导入、多格式、�
     await truncate(path.join(folder, "视频/试玩录像.MP4"), 3 * 1024 ** 3);
     await truncate(path.join(folder, "扫描/整本.pdf"), 300 * 1024 ** 2);
     await create(page);
-    await expect(page.getByRole("button", { name: "选择文件夹", exact: true })).toBeInViewport({ ratio: 1 });
+    await expect(page.getByRole("button", { name: "导入文件夹", exact: true })).toBeInViewport({ ratio: 1 });
     const before = await page.evaluate((key) => localStorage.getItem(key), storageKey);
     await page.getByLabel("选择参考文件夹", { exact: true }).setInputFiles(folder);
     const preview = page.getByRole("region", { name: "本次导入进度" });
@@ -89,11 +89,11 @@ test("自动导入可取消后重试，离开页面中断，原始样例保持�
   const projectUrl = page.url();
   const saved = await page.evaluate((key) => localStorage.getItem(key), storageKey);
   await page.getByLabel("选择参考文件", { exact: true }).setInputFiles({ name: "离开未保存.pdf", mimeType: "application/pdf", buffer: Buffer.from("占位") });
-  await page.getByRole("link", { name: "02 确定创作方案", exact: false }).click();
+  await page.getByRole("navigation", { name: "创作流程" }).getByRole("link", { name: /确定创作方案/ }).click();
   await page.goto(projectUrl);
   await expect(page.getByText("2份已登记", { exact: true })).toBeVisible();
   expect(await page.evaluate((key) => localStorage.getItem(key), storageKey)).toBe(saved);
   await page.goto("/projects/demo-names/stages/materials");
-  await expect(page.getByRole("button", { name: "选择文件夹", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "导入文件夹", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "选择本机文件", exact: true })).toBeDisabled();
 });

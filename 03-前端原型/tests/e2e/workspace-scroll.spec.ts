@@ -19,10 +19,17 @@ for (const viewport of [{ width: 1440, height: 844 }, { width: 960, height: 844 
     const url = page.url();
     const details = page.getByRole("region", { name: "具体功能内容", exact: true });
     const before = await heading.boundingBox();
+    const workflow = page.getByRole("navigation", { name: "创作流程" });
+    await expect(workflow.locator('a[href*="/stages/"]')).toHaveCount(5);
+    const workflowBefore = await workflow.boundingBox();
+    const rename = page.locator(".project-title-row").getByRole("button", { name: "改名", exact: true });
+    await expect(rename).toBeInViewport({ ratio: 1 });
     await details.focus();
     await page.keyboard.press("PageDown");
     await expect.poll(() => details.evaluate((el) => el.scrollTop)).toBeGreaterThan(100);
     expect(await heading.boundingBox()).toEqual(before);
+    expect(await workflow.boundingBox()).toEqual(workflowBefore);
+    await expect(rename).toBeInViewport({ ratio: 1 });
     const edit = page.getByRole("group", { name: "项目常用操作" }).getByRole("button", { name: "修改决定状态", exact: true });
     await expect(edit).toBeInViewport({ ratio: 1 });
     await edit.click();
@@ -42,6 +49,7 @@ for (const viewport of [{ width: 1440, height: 844 }, { width: 960, height: 844 
     await page.getByRole("button", { name: "载入演示蓝图", exact: true }).click();
     await expect(page.getByRole("heading", { name: "故事蓝图", exact: true })).toBeVisible();
     const blueprintBefore = await blueprintHeading.boundingBox();
+    await expect(rename).toBeInViewport({ ratio: 1 });
     const box = await details.boundingBox();
     expect(box!.height).toBeGreaterThan(100);
     await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);

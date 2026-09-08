@@ -29,3 +29,5 @@
 每轮开发完成适用验证后，通过`python3 scripts/sync-github.py --message "说明这次更新"`提交并同步。也可在Mac双击`同步到GitHub.command`。没有安装后台监听程序，每次保存文件不会自动上传。
 
 代码开源范围与素材权利见 [LICENSE](LICENSE) 和 [NOTICE.md](NOTICE.md)。凭证保护、API接入边界与泄露处理见 [SECURITY.md](SECURITY.md)；不要提交或在浏览器中保存真实模型密钥。
+
+项目左侧只列剧本，五步创作流程在项目顶部。标题旁可改名；导入和输出都以选择文件夹为主要入口，选好后自动处理或记住。界面采用暖纸白、墨灰和赭红。

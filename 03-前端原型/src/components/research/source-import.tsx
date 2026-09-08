@@ -66,17 +66,17 @@ export function SourceImport({ project, children }: { project: Project; children
     void start(Array.from(files, (file) => ({ name: file.name, size: file.size, mime: file.type, relativePath: file.webkitRelativePath || undefined, lastModified: file.lastModified })));
   }
   return <>
-    <div className="research-toolbar">{children}
-      <Button variant="outline" disabled={busy} onClick={() => filePicker.current?.click()}>选择本机文件</Button>
-      <Button variant="outline" disabled={busy} onClick={() => {
+    <div className="research-toolbar">
+      <Button disabled={busy} onClick={() => {
         if (folderPicker.current && "webkitdirectory" in folderPicker.current) folderPicker.current.click();
         else setPickerError("这个浏览器没有文件夹选择能力，请用“选择本机文件”批量多选，或换用支持文件夹选择的浏览器。");
-      }}>选择文件夹</Button>
+      }}>导入文件夹</Button>
+      <Button variant="outline" disabled={busy} onClick={() => filePicker.current?.click()}>选择本机文件</Button>
       <input className="sr-only" ref={filePicker} type="file" multiple accept={sourceFileAccept} aria-label="选择参考文件" disabled={busy} onChange={(e) => { receive(e.target.files); e.target.value = ""; }} />
       <input className="sr-only" ref={(node) => { folderPicker.current = node; node?.setAttribute("webkitdirectory", ""); }} type="file" multiple aria-label="选择参考文件夹" disabled={busy} onChange={(e) => { receive(e.target.files); e.target.value = ""; }} />
     </div>
-    <p className="story-premise">选好文件或文件夹后自动开始，完成后自动保存，无需再点确认。支持子目录；无效和疑似重复文件会自动略过并说明原因。</p>
-    <p className="field-hint">当前为模拟上传，仅保存名称、大小、类型和相对路径，不上传或读取文件内容。单批{sourceImportPolicy.batchFiles}份、每项目{sourceImportPolicy.projectFiles}份，不限制单文件大小。离开或刷新页面会中断尚未保存的导入，需要重新选择。</p>
+    <p className="field-hint">选择文件夹后自动导入，包含子文件夹。当前仅模拟登记，文件留在本机。</p>
+    <details className="research-excerpt"><summary>没有材料？使用练习包</summary>{children}</details>
     {pickerError && <p role="alert" className="error-banner">{pickerError}</p>}
     {batch && <section className="source-import-preview" aria-label="本次导入进度" aria-busy={running}>
       <div className="panel-title"><h3>{running ? phaseLabels[progress.phase] : status === "succeeded" ? "导入完成" : status === "cancelled" ? "导入已取消" : "导入未完成"}</h3><span>本地模拟</span></div>
@@ -96,6 +96,6 @@ export function SourceImport({ project, children }: { project: Project; children
         </details>
       </>}
     </section>}
-    <details className="research-excerpt"><summary>各种材料以后怎么处理</summary><div className="source-format-guide">{Object.entries(sourceKinds).filter(([key]) => key !== "unknown").map(([key, kind]) => <p key={key}><strong>{kind.label}</strong>：{kind.extensions.slice(0, 5).join(" / ")} 等 · {kind.plan}</p>)}</div><p>以上是后续处理计划；原型没有执行转写、解码、抽帧或解压。没有识别结果的文件不会进入参考拆解。</p><p>疑似重复只比较相对路径、大小和可用修改时间，没有比对内容；不同目录的同名文件分别保留。</p></details>
+    <details className="research-excerpt"><summary>支持格式与导入说明</summary><p>仅保存名称、大小、类型和相对路径，不上传或读取内容。单批{sourceImportPolicy.batchFiles}份、每项目{sourceImportPolicy.projectFiles}份，不限制单文件大小。离开或刷新会中断尚未保存的导入。</p><div className="source-format-guide">{Object.entries(sourceKinds).filter(([key]) => key !== "unknown").map(([key, kind]) => <p key={key}><strong>{kind.label}</strong>：{kind.extensions.slice(0, 5).join(" / ")} 等 · {kind.plan}</p>)}</div><p>以上是后续处理计划；原型没有执行转写、解码、抽帧或解压。没有识别结果的文件不会进入参考拆解。</p><p>疑似重复只比较相对路径、大小和可用修改时间，没有比对内容；不同目录的同名文件分别保留。</p></details>
   </>;
 }
