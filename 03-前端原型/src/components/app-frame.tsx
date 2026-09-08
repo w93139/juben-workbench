@@ -7,7 +7,6 @@ import { ArrowUpRight, ChevronRight, FolderClosed, Menu } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { UploadProjectButton } from "./create-project";
-import { DevelopmentProgress } from "./development-progress";
 import { useService } from "./providers";
 
 export function AppFrame({ children, title, projectId, workspace = false }: { children: React.ReactNode; title: string; projectId?: string; workspace?: boolean }) {
@@ -26,7 +25,7 @@ export function AppFrame({ children, title, projectId, workspace = false }: { ch
       {projects.isPending && <p className="field-hint px-3">正在读取项目…</p>}
       {projects.error && <button className="nav-item" onClick={() => void projects.refetch()}>项目读取失败，点击重试</button>}
     </nav>
-    <div className="sidebar-footer"><span className="local-dot" />仅保存在此浏览器<br />本地模拟 · 未连接 AI 服务</div>
+    <div className="sidebar-footer"><span className="local-dot" />本机工作区<br />作者材料请勿直接展示给玩家</div>
   </>;
   return <div className={`app-frame${workspace ? " workspace-frame" : ""}`}>
     <a href="#main" className="skip-link">跳到主要内容</a>
@@ -38,7 +37,7 @@ export function AppFrame({ children, title, projectId, workspace = false }: { ch
           <DialogContent className="mobile-navigation translate-x-0 translate-y-0"><DialogTitle className="sr-only">工作台导航</DialogTitle><DialogDescription className="sr-only">选择要打开的剧本项目</DialogDescription><div className="mobile-nav-body">{navigation}</div></DialogContent>
         </Dialog>
         <div className="topbar-path"><Link href="/">创作空间</Link><ChevronRight size={12} /><span>{title}</span></div>
-        <div className="topbar-right"><DevelopmentProgress /><span className="avatar" aria-label="作者工作空间">作</span></div>
+        <div className="topbar-right"><span className="avatar" aria-label="作者工作空间">作</span></div>
       </header>
       <main id="main" className="page-content" tabIndex={-1}>{children}</main>
     </div>

@@ -477,3 +477,27 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: 3px solid
 .comparison-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .text-preview { white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: 13px; line-height: 1.8; padding: 12px; border: 1px solid var(--line); max-height: 320px; overflow-y: auto; }
 @media (max-width: 600px) { .comparison-grid { grid-template-columns: minmax(0, 1fr); } .conversation-message.user { margin-left: 12px; } }
+
+/* Four-stage authoring: stationary controls, one scrolling content area. */
+.output-compact { margin-top: 14px; font-size: 13px; color: var(--muted-foreground); }
+.output-compact-row { display:flex; align-items:center; gap:8px; min-height:32px; flex-wrap:wrap; }
+.output-compact strong { max-width: min(45vw, 420px); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#333; }
+.studio-actions { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:16px 36px; border-top:1px solid #ded8d1; background:#f7f5f2; flex-shrink:0; }
+.studio-actions small { display:block; max-width:600px; color:#796f65; font-size:12px; }
+.studio-upload { margin:24px auto; max-width:1000px; border:1px dashed #bbb3a9; padding:40px 28px; border-radius:12px; text-align:center; }
+.studio-upload > svg { margin:0 auto 16px; color:#9b8068; }
+.studio-upload h2 { font-size:23px; margin-bottom:12px; }
+.studio-upload > p { color:#81786f; }
+.studio-files { text-align:left; margin-top:32px; }
+.studio-files li { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:16px 0; border-top:1px solid #ded8d1; }
+.studio-files li div { min-width:0; overflow-wrap:anywhere; }
+.studio-files small { display:block; color:#81786f; margin-top:4px; }
+.studio-progress { min-height:280px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:20px; text-align:center; padding:30px; }
+.studio-progress p { color:#81786f; }
+.studio-directions { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:16px; margin-top:24px; }
+.studio-direction { border:1px solid #d8d1c8; border-radius:8px; padding:24px; text-align:left; }
+.studio-direction.selected { border:2px solid #333; background:#eeebe6; }
+.studio-direction h3 { font-size:18px; margin-bottom:12px; }
+.studio-direction p { margin:12px 0; white-space:pre-wrap; }
+.studio-direction small { color:#8b6851; }
+@media(max-width:700px) { .studio-actions { padding:12px; } .studio-actions > div { max-width:48%; } .studio-upload { padding:24px 12px; } }
