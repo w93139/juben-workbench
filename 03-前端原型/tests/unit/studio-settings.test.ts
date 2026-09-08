@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StudioSettingsStore } from "@/server/studio-settings";
@@ -17,6 +17,16 @@ describe("本机模型配置安全保存", () => {
     expect(store.config({})?.apiKey).toBe(input.apiKey);
     expect(statSync(root).mode & 0o777).toBe(0o700); expect(statSync(join(root, "studio-settings.json")).mode & 0o777).toBe(0o600);
     expect(readdirSync(root)).toEqual(["studio-settings.json"]); expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it("允许先只保存平台连接，再由测评原子写入三个不同模型", () => {
+    const { store } = setup();
+    const connected = store.save({ ...input, mainModel: "", reviewA: "", reviewB: "" }, {});
+    expect(connected).toMatchObject({ providerConfigured: true, configured: false, revision: 1 });
+    expect(store.connection({})?.apiKey).toBe(input.apiKey); expect(store.config({})).toBeNull();
+    const selected = store.setSelection({ mainModel: "m1", reviewA: "m2", reviewB: "m3" }, 1, {});
+    expect(selected).toMatchObject({ configured: true, mainModel: "m1", reviewA: "m2", reviewB: "m3", revision: 2 });
+    expect(() => store.setSelection({ mainModel: "m1", reviewA: "m1", reviewB: "m3" }, 2, {})).toThrow("不同");
+    expect(() => store.setSelection({ mainModel: "new1", reviewA: "new2", reviewB: "new3" }, 1, {})).toThrow("连接已变化");
   });
   it("留空保留同地址密钥，换服务强制新密钥；过期revision不覆盖", () => {
     const { store, root } = setup(); store.save(input, {});
@@ -45,6 +55,16 @@ describe("本机模型配置安全保存", () => {
     writeFileSync(file, "broken", { mode: 0o600 }); expect(() => store.save({ ...input, revision: 1 }, {})).toThrow("无法安全读取或保存"); expect(readFileSync(file, "utf8")).toBe("broken");
     rmSync(file); const other = join(root, "another-file"); writeFileSync(other, "unchanged", { mode: 0o600 }); symlinkSync(other, file);
     expect(() => store.config({})).toThrow("无法安全读取或保存"); expect(readFileSync(other, "utf8")).toBe("unchanged");
+  });
+  it("写锁存在时拒绝并发覆盖，原连接保持不变", () => {
+    const { store, root } = setup(); store.save(input, {}); writeFileSync(join(root, "studio-settings.lock"), "busy", { mode: 0o600 });
+    expect(() => store.save({ ...input, revision: 1, mainModel: "changed" }, {})).toThrow("另一个页面更新");
+    expect(store.safe({}).mainModel).toBe("main");
+  });
+  it("进程崩溃留下超过两分钟的普通锁可安全回收", () => {
+    const { store, root } = setup(); store.save(input, {}); const lock = join(root, "studio-settings.lock"); writeFileSync(lock, "stale", { mode: 0o600 });
+    const old = new Date(Date.now() - 180_000); utimesSync(lock, old, old);
+    expect(store.save({ ...input, revision: 1, mainModel: "recovered" }, {})).toMatchObject({ mainModel: "recovered", revision: 2 }); expect(existsSync(lock)).toBe(false);
   });
   it("设置API拒绝跨站与缺Origin的写入，不暴露内部信息", async () => {
     for (const origin of [undefined, "https://external.invalid"]) {

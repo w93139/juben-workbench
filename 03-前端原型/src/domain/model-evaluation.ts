@@ -1,0 +1,31 @@
+import { z } from "zod";
+
+const text = (max: number) => z.string().trim().min(1).max(max);
+export const modelCandidateSchema = z.object({
+  id: text(200), displayName: text(300), provider: text(120), contextLength: z.number().int().nonnegative().nullable(),
+  inputPriceMicroCnyPerMillion: z.number().int().nonnegative(), outputPriceMicroCnyPerMillion: z.number().int().nonnegative(),
+}).strict();
+export type ModelCandidate = z.infer<typeof modelCandidateSchema>;
+
+export const modelScoreSchema = z.object({
+  modelId: text(200), total: z.number().int().min(0).max(100), structure: z.number().int().min(0).max(100),
+  evidence: z.number().int().min(0).max(100), originality: z.number().int().min(0).max(100), format: z.number().int().min(0).max(100),
+  latencyMs: z.number().int().nonnegative(), promptTokens: z.number().int().nonnegative(), completionTokens: z.number().int().nonnegative(),
+  costFen: z.number().int().nonnegative(), notes: z.array(text(500)).max(20),
+}).strict();
+export type ModelScore = z.infer<typeof modelScoreSchema>;
+
+export const modelAllocationSchema = z.object({ mainModel: text(200), reviewA: text(200), reviewB: text(200) }).strict()
+  .refine(value => new Set([value.mainModel, value.reviewA, value.reviewB]).size === 3, "三个创作角色必须使用不同模型");
+export type ModelAllocation = z.infer<typeof modelAllocationSchema>;
+
+export const evaluationViewSchema = z.object({
+  status: z.enum(["idle", "discovered", "running", "cancelling", "completed", "cancelled", "blocked", "failed"]),
+  phase: z.string().max(1000), connectionRevision: z.number().int().nonnegative(), priceCheckedAt: z.number().int().nonnegative().nullable(), updatedAt: z.number().int().nonnegative(), budgetCapFen: z.literal(1000), spentFen: z.number().int().nonnegative(),
+  reservedFen: z.number().int().nonnegative(), uncertainFen: z.number().int().nonnegative(),
+  candidates: z.array(modelCandidateSchema).max(4), scores: z.array(modelScoreSchema).max(4), allocation: modelAllocationSchema.nullable(),
+  completedCalls: z.number().int().nonnegative(), maximumCalls: z.number().int().nonnegative(), plannedMaximumFen: z.number().int().nonnegative(), error: z.string().max(2000).nullable(),
+}).strict();
+export type EvaluationView = z.infer<typeof evaluationViewSchema>;
+
+export function priceLabel(microCnyPerMillion: number) { return `¥${(microCnyPerMillion / 1_000_000).toFixed(2)}/百万Token`; }
