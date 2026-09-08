@@ -23,7 +23,7 @@ function useSaveProject() {
   };
 }
 
-export function EditProject({ project, label = "编辑项目" }: { project: Project; label?: string }) {
+export function EditProject({ project, label = "编辑项目", iconOnly = false }: { project: Project; label?: string; iconOnly?: boolean }) {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState(project.title);
   const [note, setNote] = useState(project.note);
@@ -46,7 +46,7 @@ export function EditProject({ project, label = "编辑项目" }: { project: Proj
       setRevision(next.revision); setLatest(next); update.reset();
     } catch (error) { setReloadError(error); } finally { setReloading(false); }
   }
-  return <><div className="flex items-center gap-3">{saved && <span role="status" className="success-message"><Check size={12} />已保存</span>}<Button ref={triggerRef} variant="outline" size="sm" onClick={() => { setLatest(null); setReloadError(null); setTitle(project.title); setNote(project.note); setRevision(project.revision); update.reset(); setOpen(true); setSaved(false); }}><Pencil size={12} />{label}</Button></div>
+  return <><div className="flex items-center gap-3">{saved && <span role="status" className="success-message"><Check size={12} />已保存</span>}<Button ref={triggerRef} variant={iconOnly ? "ghost" : "outline"} size={iconOnly ? "icon-sm" : "sm"} aria-label={label} title={label} onClick={() => { setLatest(null); setReloadError(null); setTitle(project.title); setNote(project.note); setRevision(project.revision); update.reset(); setOpen(true); setSaved(false); }}><Pencil size={14} aria-hidden="true" />{!iconOnly && label}</Button></div>
     <Dialog open={open} onOpenChange={(value) => { if (!update.isPending) setOpen(value); }}><DialogContent onCloseAutoFocus={(event) => { event.preventDefault(); triggerRef.current?.focus(); }}><DialogTitle>编辑项目资料</DialogTitle><DialogDescription>修改名称与创作备注，不会改动只读的剧本底稿。</DialogDescription><form onSubmit={(e) => { e.preventDefault(); if (!update.isPending) update.mutate({ title, note }); }}><fieldset disabled={update.isPending}><legend className="sr-only">编辑项目资料</legend><label className="field-label" htmlFor="edit-title">项目名称</label><Input id="edit-title" value={title} onChange={(e) => setTitle(e.target.value)} required maxLength={40} /><label className="field-label mt-5" htmlFor="edit-note">创作备注</label><Textarea id="edit-note" value={note} onChange={(e) => setNote(e.target.value)} maxLength={1200} rows={5} /></fieldset>
       {update.error && <div className="mt-4"><ErrorMessage error={update.error} />{conflict && <Button type="button" variant="outline" disabled={reloading} onClick={() => void loadLatest()}>{reloading ? "读取中…" : "保留输入，载入最新版本"}</Button>}</div>}
       {reloadError ? <ErrorMessage error={reloadError} /> : null}
