@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { evaluationViewSchema } from "@/domain/model-evaluation";
 import { EvaluationBudgetLedger } from "@/server/evaluation-budget";
 import { antEvaluationTransport, ModelEvaluationEngine, type EvaluationTransport } from "@/server/model-evaluation";
 import { StudioSettingsStore } from "@/server/studio-settings";
@@ -27,6 +28,16 @@ async function finished(engine: ModelEvaluationEngine) { for (let attempt = 0; a
 afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe("剧本领域小样测评", () => {
+  it("忽略接口后续增加的展示字段，避免已打开页面因加字段中断", () => {
+    const parsed = evaluationViewSchema.parse({
+      status: "idle", phase: "尚未读取候选模型", connectionRevision: 0,
+      priceCheckedAt: null, updatedAt: Date.now(), budgetCapFen: 1000,
+      spentFen: 0, reservedFen: 0, uncertainFen: 0, candidates: [], scores: [],
+      allocation: null, completedCalls: 0, maximumCalls: 0, plannedMaximumFen: 0,
+      error: null, futureDisplayField: "可安全忽略",
+    });
+    expect(parsed).not.toHaveProperty("futureDisplayField");
+  });
   it("发现阶段零内容调用，付费阶段记录用量并自动分配三个不同模型", async () => {
     const { settings, engine } = setup(); const discovered = await engine.discover(fetcher as typeof fetch);
     expect(discovered).toMatchObject({ status: "discovered", completedCalls: 0, maximumCalls: 12, spentFen: 0 });

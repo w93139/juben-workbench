@@ -25,7 +25,7 @@ export const evaluationViewSchema = z.object({
   reservedFen: z.number().int().nonnegative(), uncertainFen: z.number().int().nonnegative(),
   candidates: z.array(modelCandidateSchema).max(4), scores: z.array(modelScoreSchema).max(4), allocation: modelAllocationSchema.nullable(),
   completedCalls: z.number().int().nonnegative(), maximumCalls: z.number().int().nonnegative(), plannedMaximumFen: z.number().int().nonnegative(), error: z.string().max(2000).nullable(),
-}).strict();
+});
 export type EvaluationView = z.infer<typeof evaluationViewSchema>;
 
 export function priceLabel(microCnyPerMillion: number) { return `¥${(microCnyPerMillion / 1_000_000).toFixed(2)}/百万Token`; }
