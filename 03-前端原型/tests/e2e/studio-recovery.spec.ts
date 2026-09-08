@@ -120,3 +120,13 @@ test("通过快照导出使用已选位置并打开目录，客户端不提交�
   await expect(page.getByText("已保存：导出交互.zip")).toBeVisible();await expect(page.getByTestId("output-directory-name")).toHaveText("测试输出");expect(writes).toBe(1);await expect.poll(()=>reveals).toBe(1);
   await expect(page.getByText("尚未真人试玩",{exact:true})).toBeVisible();
 });
+
+test("更换整本后旧分析与蓝图失效，新文件不会混入旧材料", async ({page}) => {
+  await offlineCapability(page); const base=await seedProject(page,"换本失效检查"); const state=prepared(); await writeState(page,base,state);
+  await page.goto(`${base}/stages/materials`);
+  await page.locator('input[aria-label="上传原剧本文件"]').setInputFiles({name:"新的参考本.txt",mimeType:"text/plain",buffer:Buffer.from("全新参考本的正文")});
+  await expect(page.getByText("新的参考本.txt",{exact:true})).toBeVisible();
+  const after=await readState(page,base);expect(after.documents).toHaveLength(1);expect(after.documents[0].name).toBe("新的参考本.txt");expect(after.sourceRevision).toBe(2);expect(after.blueprint).toEqual(state.blueprint);
+  await page.goto(`${base}/stages/analysis`);await expect(page.getByRole("button",{name:"生成蓝图",exact:true})).toBeDisabled();
+  await page.goto(`${base}/stages/blueprint`);await expect(page.getByText(/这份蓝图对应旧的材料或创作要求/)).toBeVisible();await expect(page.getByRole("button",{name:"开始交叉验证",exact:true})).toBeDisabled();
+});

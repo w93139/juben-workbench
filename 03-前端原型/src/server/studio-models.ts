@@ -1,3 +1,4 @@
+import { studioSettingsStore } from "./studio-settings";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { blueprintDataSchema, checkBlueprint, type BlueprintData } from "@/domain/blueprint";
@@ -14,6 +15,7 @@ const MAX_JOBS = 24;
 const MAX_RUNNING = 2;
 const unavailable = () => new StudioError("MODEL_NOT_CONFIGURED", "尚未配置主模型及两路审查模型。请在服务端设置模型连接后重试。", 503);
 export function readStudioConfig(env: Record<string, string | undefined> = process.env): StudioConfig {
+  if (env === process.env) { try { const configured = studioSettingsStore.config(env); if (configured) return configured; } catch { throw unavailable(); } throw unavailable(); }
   const baseUrl = env.STUDIO_API_BASE_URL?.trim(), apiKey = env.STUDIO_API_KEY?.trim(), mainModel = env.STUDIO_MAIN_MODEL?.trim(), reviewA = env.STUDIO_REVIEW_A_MODEL?.trim(), reviewB = env.STUDIO_REVIEW_B_MODEL?.trim();
   if (![baseUrl, apiKey, mainModel, reviewA, reviewB].every((value) => value?.trim()) || new Set([mainModel, reviewA, reviewB]).size !== 3) throw unavailable();
   let url: URL; try { url = new URL(baseUrl!); } catch { throw unavailable(); }

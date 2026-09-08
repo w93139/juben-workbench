@@ -29,6 +29,16 @@ export function appendMaterials(id: string, revision: number, documents: Materia
     state.sourceRevision++; state.error = null;
   });
 }
+/** Replace only after all new bytes are read; CAS protects the previous batch on failure. */
+export function replaceMaterials(id: string, revision: number, documents: Material[]) {
+  const failed = documents.filter(document => document.status === "error");
+  if (failed.length) return Promise.reject(new Error(`有${failed.length}份材料读取失败，原材料保持不变：${failed.slice(0, 3).map(document => document.name).join("、")}。请处理后重新选择文件夹。`));
+  if (!documents.some(document => document.status === "read" && document.text.trim())) return Promise.reject(new Error("新文件夹中没有成功读取的正文，原材料保持不变。请检查文件格式后重试。"));
+  return changeWorkbench(id, revision, state => {
+    if (state.job) throw new Error("当前任务还在处理，请完成后再更改文件夹。");
+    state.documents = documents; state.sourceRevision++; state.error = null;
+  });
+}
 export async function startStudioJob(projectId: string, state: WorkbenchState, operation: StudioOperation) {
   const body = operation === "analyze" ? { documents: state.documents.filter(d => !d.excluded).map(({ id, name, text }) => ({ id, name, text })), instructions: state.instructions }
     : operation === "blueprint" ? { analysis: state.analysis, choiceId: state.choiceId, instructions: state.instructions }

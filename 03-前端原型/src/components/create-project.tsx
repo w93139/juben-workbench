@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
-import { FolderOpen, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { sourceFileAccept, sourceImportPolicy } from "@/domain/source-import";
 import type { Material } from "@/domain/workbench";
 import { ServiceError } from "@/services/contracts";
@@ -12,6 +12,7 @@ import { readWorkbench } from "@/services/workbench-store";
 import { useService } from "./providers";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./ui/dialog";
+import { FolderDropzone } from "./folder-dropzone";
 import { ErrorMessage } from "./shared";
 
 type PendingImport = { files: File[]; documents: Material[] | null; projectId: string | null };
@@ -66,24 +67,21 @@ export function UploadProjectButton({ compact = false, fallback = false }: { com
       if (active()) setError(current.signal.aborted ? new Error("读取已取消，已选文件保留，可重新读取。") : failure);
     } finally { if (active()) { controller.current = null; setBusy(false); } }
   }
-  function receive(list: FileList | null) {
+  async function receive(list: FileList | File[] | null) {
     if (controller.current || !list?.length) return;
     const selected = Array.from(list).filter((file) => !(file.webkitRelativePath || file.name).split("/").some((part) => part.startsWith(".") || part === "__MACOSX"));
     if (!selected.length || selected.length > sourceImportPolicy.batchFiles) {
       pending.current = null; setBatch([]); setCreated(false); setOpen(true);
       setError(new ServiceError("INVALID_INPUT", !selected.length ? "这个文件夹中只有隐藏或系统文件，请选择剧本文件夹。" : `选择了${selected.length}份文件，超过单批${sourceImportPolicy.batchFiles}份。请按子文件夹分批导入；本次未创建项目。`)); return;
     }
-    void start(selected);
+    await start(selected);
   }
   const label = phase === "reading" ? "正在读取剧本材料" : "正在保存项目与正文";
   return <>
-    <Button variant={compact ? "outline" : "default"} size={compact ? "icon" : "default"} aria-label={compact ? "上传剧本文件夹" : undefined} title={compact ? "上传完整剧本文件夹，建立项目" : undefined} disabled={busy} onClick={() => {
-      if (folder.current && "webkitdirectory" in folder.current) folder.current.click();
-      else { setOpen(true); setError(new ServiceError("DIRECTORY_UNAVAILABLE", "当前浏览器不支持文件夹选择，请用下方“选择剧本文件”批量选择。")); }
-    }}>{compact ? <Plus size={17} /> : <><FolderOpen size={17} />上传完整剧本文件夹</>}</Button>
+    {compact ? <Button variant="outline" size="icon" aria-label="上传剧本文件夹" title="上传剧本文件夹，建立项目" disabled={busy} onClick={() => folder.current?.click()}><Plus size={17} /></Button> : <FolderDropzone large disabled={busy} onPick={() => folder.current?.click()} onFiles={receive} />}
     <input className="sr-only" ref={(node) => { folder.current = node; node?.setAttribute("webkitdirectory", ""); }} type="file" multiple aria-label={compact ? "从侧栏选择剧本文件夹" : "选择剧本文件夹"} disabled={busy} onChange={(event) => { receive(event.target.files); event.target.value = ""; }} />
     <input className="sr-only" ref={files} type="file" multiple accept={sourceFileAccept} aria-label={compact ? "从侧栏选择剧本文件" : "选择剧本文件"} disabled={busy} onChange={(event) => { receive(event.target.files); event.target.value = ""; }} />
-    {fallback && <details className="mt-4"><summary className="field-hint">无法选择文件夹？</summary><Button className="mt-3" variant="outline" disabled={busy} onClick={() => files.current?.click()}>选择剧本文件</Button><p className="field-hint mt-2">可以批量选择文件，进入项目后继续补充。空文件夹不会创建项目。</p></details>}
+    {fallback && !compact && <details className="mt-4"><summary className="field-hint">无法选择文件夹？</summary><Button className="mt-3" variant="outline" disabled={busy} onClick={() => files.current?.click()}>选择剧本文件</Button><p className="field-hint mt-2">可以批量选择文件，进入项目后继续补充。空文件夹不会创建项目。</p></details>}
     <Dialog open={open} onOpenChange={(value) => { if (!value && busy) return; setOpen(value); }}><DialogContent><DialogTitle>{busy ? label : "导入未完成"}</DialogTitle><DialogDescription>文件交给此电脑的本地服务提取文字或识别扫描内容，原文件不会改动。读取结果保存到浏览器，完成后自动进入材料中心。</DialogDescription>
       <progress aria-label="文件读取进度" max={Math.max(1, progress.total)} value={phase === "reading" ? progress.done : undefined} className="w-full" />
       <p role="status">{busy ? phase === "reading" ? `已处理 ${progress.done} / ${progress.total} 份 · ${progress.name}` : "正在保存已读取的正文，请稍候…" : created ? "项目已建立，正文保存尚未完成。重试会继续保存到同一项目。" : "本次没有创建项目，已选文件保留，可重试。"}</p>

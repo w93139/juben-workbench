@@ -19,7 +19,9 @@ Node.js 24、npm 11，首次`npm ci`，之后`npm run dev -- --port 3107`。生�
 
 本次只实现接口与可测试编排，尚未用真实凭证联调。兼容OpenAI风格的chat/completions JSON Schema接口，可由后续LiteLLM代理提供；不假定所有提供商均支持严格结构输出。
 
-本机`.env.local`（Git忽略）或进程环境设置：
+普通用户点击页面底部「配置模型」填写服务地址、API密钥和三个模型编号。保存仅记录配置，不外呼模型；配置保存不等于服务已实测可用。受限配置文件为`runtime-data/studio-settings.json`（0600，目录0700，Git忽略），GET只返回安全字段和密钥存在标记，不返回密钥；换地址必须新填密钥。
+
+也可使用本机`.env.local`（Git忽略）或进程环境设置；环境变量整组优先，存在时页面只读，避免两个来源混用密钥：
 
 - `STUDIO_API_BASE_URL`：兼容接口基础地址（例如本机LiteLLM的/v1）
 - `STUDIO_API_KEY`：仅服务端读取
@@ -47,3 +49,9 @@ Skill工作流以juben-design/1.0约束嵌入服务端编排提示，未声称�
 `npm run typecheck`、`npm run lint`、`npm run test`、`npm run build`、`npm run test:e2e`。
 
 原五步Mock的历史86条界面场景保存在tests/legacy-e2e，已不适用四步UI，不计作当前通过；底层旧单元仍运行。当前E2E实际TXT读取与浏览器存储真实执行；模型/系统选择窗口采用边界fixture，不外呼、不自动选择用户目录。PDF/图片/RTF读取另有真实本机组件单元验证。
+
+## 首页拖拽与换本
+
+首页整块拖拽区替代说明卡和最近项目表，已有项目仍在侧栏/项目列表。支持目录递归和读取全部批次，保留相对路径，滤掉系统文件。目录API遵循[浏览器目录读取说明](https://developer.mozilla.org/en-US/docs/Web/API/FileSystemDirectoryReader/readEntries)，每次读到空批次才结束，避免遗漏超过100个条目。深度/数量保护会整批拒绝，不默默漏文件。
+
+项目已有输入时按钮为“更改文件夹”。读取完新批次才CAS替换；任何error或没有成功正文会拒绝替换，unsupported项可登记但需处理/排除才能分析。取消读取或存储失败保留旧批次。进入保存阶段按钮禁用取消，避免误报。替换仅影响当前输入与关联有效性，不改项目名、输出位置或原文件。旧蓝图和审查保留但过期。

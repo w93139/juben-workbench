@@ -501,3 +501,15 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: 3px solid
 .studio-direction p { margin:12px 0; white-space:pre-wrap; }
 .studio-direction small { color:#8b6851; }
 @media(max-width:700px) { .studio-actions { padding:12px; } .studio-actions > div { max-width:48%; } .studio-upload { padding:24px 12px; } }
+
+.folder-dropzone { border:1px dashed #b9afa3; border-radius:12px; min-height:300px; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:40px 24px; gap:22px; transition:background .16s,border-color .16s; }
+.folder-dropzone.large { min-height:clamp(360px,55vh,620px); }
+.folder-dropzone > svg { color:#a0866c; }
+.folder-dropzone h2 { font-size:24px; overflow-wrap:anywhere; max-width:100%; }
+.folder-dropzone p { color:#8c8175; }
+.folder-dropzone.dragging { background:#e9e4dd; border:2px dashed #333; }
+.materials-container { margin:20px auto; max-width:1100px; }
+.materials-container .studio-files { padding:0 12px; }
+@media(max-width:700px) { .folder-dropzone { padding:30px 18px; } .folder-dropzone h2 { font-size:21px; } }
+.studio-connection-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; }
+.studio-connection-actions > div { max-width:450px; }
