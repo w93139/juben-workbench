@@ -1,3 +1,4 @@
+import { seedProject } from "./project-fixture";
 import { expect, test, type Page } from "@playwright/test";
 
 const key = "juben-workbench:projects:v1";
@@ -16,9 +17,7 @@ const draft = {
   endings: [{ id: "end", name: "公开档案", condition: "选择公开", choice: "是否公布", consequence: "档案进入公共视野" }],
 };
 async function create(page: Page) {
-  await page.goto("/projects/new");
-  await page.getByLabel("项目名称", { exact: false }).fill("生成审查测试");
-  await page.getByRole("button", { name: "创建并进入工作台" }).click();
+  await seedProject(page, "生成审查测试");
   await expect(page.getByRole("heading", { name: "生成审查测试", exact: true })).toBeVisible();
   const base = page.url();
   // C's editor is covered elsewhere. Seed this test's original blueprint only.

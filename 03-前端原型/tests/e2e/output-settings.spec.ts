@@ -1,11 +1,10 @@
+import { seedProject } from "./project-fixture";
 import { expect, test, type Page } from "@playwright/test";
 const key = "juben-workbench:projects:v1";
 const panel = (page: Page) => page.getByRole("region", { name: "输出储存位置" });
 async function fallback(page: Page) { await panel(page).getByText("无法选择？备用方式", { exact: true }).click(); }
 async function create(page: Page) {
-  await page.goto("/projects/new");
-  await page.getByLabel("项目名称", { exact: false }).fill("输出位置测试");
-  await page.getByRole("button", { name: "创建并进入工作台" }).click();
+  await seedProject(page, "输出位置测试");
   await expect(page.getByRole("heading", { name: "输出位置测试", exact: true })).toBeVisible();
   return page.url();
 }
@@ -39,7 +38,7 @@ for (const width of [1440, 390]) test(`目录默认直接选择，备用路径�
   await page.screenshot({ path: testInfo.outputPath("output-settings.png"), fullPage: true });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.goto("/projects/demo-names/stages/analysis");
-  await expect(panel(page).getByRole("button", { name: "选择输出文件夹" })).toBeEnabled();
+  await expect(panel(page).getByRole("button", { name: "选择输出文件夹" })).toHaveCount(0);
   await expect(panel(page).getByRole("link", { name: "选择输出文件夹" })).toHaveCount(0);
   expect(errors).toEqual([]);
 });

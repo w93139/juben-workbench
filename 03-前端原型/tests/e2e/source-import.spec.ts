@@ -1,12 +1,12 @@
+import { seedProject } from "./project-fixture";
 import { expect, test, type Page } from "@playwright/test";
 import { mkdir, rm, truncate, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const storageKey = "juben-workbench:projects:v1";
 async function create(page: Page) {
-  await page.goto("/projects/new?start=research");
-  await page.getByLabel("项目名称", { exact: false }).fill("多格式素材项目");
-  await page.getByRole("button", { name: "创建并进入材料中心" }).click();
+  const base = await seedProject(page, "多格式素材项目", false);
+  await page.goto(`${base}/stages/materials`);
   await expect(page.getByRole("heading", { name: "准备材料", exact: true })).toBeVisible();
 }
 

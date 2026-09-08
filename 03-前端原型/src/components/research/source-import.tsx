@@ -13,7 +13,7 @@ import { ErrorMessage } from "../shared";
 type ImportStatus = "idle" | "running" | "succeeded" | "failed" | "cancelled";
 const phaseLabels = { checking: "正在整理文件信息", transferring: "正在模拟上传", saving: "正在保存材料清单", complete: "导入处理完成" };
 
-export function SourceImport({ project, children }: { project: Project; children: ReactNode }) {
+export function SourceImport({ project, children }: { project: Project; children?: ReactNode }) {
   const service = useService();
   const client = useQueryClient();
   const filePicker = useRef<HTMLInputElement>(null);
@@ -76,7 +76,7 @@ export function SourceImport({ project, children }: { project: Project; children
       <input className="sr-only" ref={(node) => { folderPicker.current = node; node?.setAttribute("webkitdirectory", ""); }} type="file" multiple aria-label="选择参考文件夹" disabled={busy} onChange={(e) => { receive(e.target.files); e.target.value = ""; }} />
     </div>
     <p className="field-hint">选择文件夹后自动导入，包含子文件夹。当前仅模拟登记，文件留在本机。</p>
-    <details className="research-excerpt"><summary>没有材料？使用练习包</summary>{children}</details>
+    {children && <details className="research-excerpt"><summary>历史研究练习资料</summary>{children}</details>}
     {pickerError && <p role="alert" className="error-banner">{pickerError}</p>}
     {batch && <section className="source-import-preview" aria-label="本次导入进度" aria-busy={running}>
       <div className="panel-title"><h3>{running ? phaseLabels[progress.phase] : status === "succeeded" ? "导入完成" : status === "cancelled" ? "导入已取消" : "导入未完成"}</h3><span>本地模拟</span></div>

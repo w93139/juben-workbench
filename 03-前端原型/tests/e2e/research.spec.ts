@@ -1,17 +1,16 @@
+import { seedProject } from "./project-fixture";
 import { expect, test, type Page } from "@playwright/test";
 
 const key = "juben-workbench:projects:v1";
 async function create(page: Page, name: string) {
-  await page.goto("/projects/new");
-  await page.getByLabel("项目名称", { exact: false }).fill(name);
-  await page.getByRole("button", { name: "创建并进入工作台" }).click();
+  await seedProject(page, name, true);
   await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
   const url = page.url();
-  await page.getByRole("link", { name: "继续：准备材料" }).click();
+  await page.goto(`${url}/stages/materials`);
   return url;
 }
 async function recognize(page: Page) {
-  await page.getByText("没有材料？使用练习包", { exact: true }).click();
+  await page.getByText("历史研究练习资料", { exact: true }).click();
   await page.getByRole("button", { name: "载入研究练习包" }).click();
   await page.getByRole("button", { name: "开始模拟 OCR" }).click();
   await expect(page.getByRole("heading", { name: "② 校对识别问题" })).toBeVisible();
@@ -83,7 +82,7 @@ test("模拟失败与取消可以重试，刷新后继续任务，真实文件�
   await page.getByLabel("选择参考文件", { exact: true }).setInputFiles({ name: "真实参考.md", mimeType: "text/markdown", buffer: Buffer.from("不要分析此正文") });
   await expect(page.getByRole("region", { name: "已登记材料" }).getByText(/仅登记，未识别/)).toBeVisible();
   await expect(page.getByRole("button", { name: "开始模拟 OCR" })).toHaveCount(0);
-  await page.getByText("没有材料？使用练习包", { exact: true }).click();
+  await page.getByText("历史研究练习资料", { exact: true }).click();
   await page.getByRole("button", { name: "载入研究练习包" }).click();
   await page.getByText("演示选项", { exact: true }).click();
   await page.getByRole("checkbox", { name: "演示一次失败，体验重试" }).check();

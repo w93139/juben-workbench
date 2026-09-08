@@ -34,6 +34,12 @@ export interface ProjectService {
   list(): Promise<Project[]>;
   get(id: string): Promise<Project>;
   create(input: CreateProjectInput, initialOutput?: OutputSettingsInput): Promise<Project>;
+  createFromSources(files: SourceFileInput[], options?: SourceImportOptions): Promise<SourceImportResult>;
+  startFolderPlan(id: string, revision: number): Promise<Project>;
+  advanceFolderPlan(id: string, revision: number): Promise<Project>;
+  cancelFolderPlan(id: string, revision: number): Promise<Project>;
+  saveFolderDirection(id: string, revision: number, choiceId: string): Promise<Project>;
+  initializeFolderBlueprint(id: string, revision: number): Promise<Project>;
   update(id: string, expectedRevision: number, input: UpdateProjectInput): Promise<Project>;
   setDecision(id: string, expectedRevision: number, decisionId: string, status: DecisionStatus): Promise<Project>;
   getContent(id: string): Promise<DemoContent | null>;

@@ -1,11 +1,10 @@
+import { seedProject } from "./project-fixture";
 import { expect, test } from "@playwright/test";
 
 for (const width of [1440, 960, 390]) {
   test(`${width}px 项目顶部可直接修改状态与查看检查`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 844 });
-    await page.goto("/projects/new?template=demo");
-    await page.getByLabel("项目名称", { exact: false }).fill("入口验收副本");
-    await page.getByRole("button", { name: "创建并进入工作台" }).click();
+    await seedProject(page, "入口验收副本", true);
     await expect(page.getByRole("heading", { name: "入口验收副本", exact: true })).toBeVisible();
     const projectUrl = page.url();
     const edit = page.getByRole("button", { name: "修改决定状态", exact: true });
@@ -43,7 +42,7 @@ for (const width of [1440, 960, 390]) {
   });
 }
 
-test("只读样例明确说明复制后才能改状态，检查可直接打开", async ({ page }) => {
+test("旧样例仅可读，检查可直接打开", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/projects/demo-names");
   await expect(page.getByRole("button", { name: "查看创作决定", exact: true })).toBeInViewport({ ratio: 1 });
@@ -52,8 +51,7 @@ test("只读样例明确说明复制后才能改状态，检查可直接打开",
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByText(/原始样例为只读/)).toBeVisible();
   await expect(dialog.getByRole("combobox")).toHaveCount(0);
-  await dialog.getByRole("link", { name: "创建演示副本", exact: true }).click();
-  await expect(page.getByRole("radio", { name: /使用演示副本/ })).toBeChecked();
+  await expect(dialog.getByRole("link", { name: "创建演示副本", exact: true })).toHaveCount(0);
   await page.goto("/projects/demo-names");
   await page.getByRole("button", { name: "检查与试玩", exact: true }).click();
   await expect(page.getByRole("dialog").getByText("尚未真人试玩", { exact: true })).toBeVisible();

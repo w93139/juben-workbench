@@ -1,12 +1,11 @@
+import { seedProject } from "./project-fixture";
 import { expect, test, type Page } from "@playwright/test";
 
 const key = "juben-workbench:projects:v1";
 const savePanel = (page: Page) => page.getByRole("region", { name: "蓝图保存与版本", exact: true });
 const section = (page: Page, name: string) => page.getByRole("region", { name: `${name}编辑`, exact: true });
 async function create(page: Page, demo = false) {
-  await page.goto(`/projects/new${demo ? "?template=demo" : ""}`);
-  await page.getByLabel("项目名称", { exact: false }).fill("蓝图交互测试");
-  await page.getByRole("button", { name: "创建并进入工作台" }).click();
+  await seedProject(page, "蓝图交互测试", demo);
   await expect(page.getByRole("heading", { name: "蓝图交互测试", exact: true })).toBeVisible();
   const url = `${page.url()}/stages/blueprint`;
   await page.goto(url);

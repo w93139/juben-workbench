@@ -1,21 +1,17 @@
+import { seedProject } from "./project-fixture";
 import { expect, test, type Page } from "@playwright/test";
 const key = "juben-workbench:projects:v1";
 
 async function create(page: Page, name: string, demo = false) {
-  await page.goto(`/projects/new${demo ? "?template=demo" : ""}`);
-  await page.getByLabel("项目名称", { exact: false }).fill(name);
-  await page.getByLabel("创作备注", { exact: false }).fill("一条自己的创意");
-  await page.getByRole("button", { name: "创建并进入工作台" }).click();
+  await seedProject(page, name, demo, "一条自己的创意");
   await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
   return page.url();
 }
 
-test("首页、空项目创建、编辑与刷新恢复", async ({ page }) => {
+test("已有项目编辑、列表与刷新恢复", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "让好故事，经得起推敲。" })).toBeVisible();
-  await page.getByRole("link", { name: "新建剧本项目" }).click();
-  await page.getByLabel("项目名称", { exact: false }).fill("空白故事");
-  await page.getByRole("button", { name: "创建并进入工作台" }).click();
+  await expect(page.getByRole("heading", { name: "从完整剧本，走向新的故事。" })).toBeVisible();
+  await seedProject(page, "空白故事");
   await expect(page.getByRole("heading", { name: "空白故事", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "改名", exact: true }).click();
   await page.getByLabel("项目名称", { exact: true }).fill("新的故事名称");
@@ -37,7 +33,7 @@ test("首页、空项目创建、编辑与刷新恢复", async ({ page }) => {
   await page.getByRole("link", { name: "我的项目", exact: true }).click();
   await page.getByLabel("搜索项目名称").fill("新的故事");
   await expect(page.getByRole("table").getByRole("row")).toHaveCount(2);
-  await page.getByLabel("筛选项目").selectOption("demo");
+  await page.getByLabel("搜索项目名称").fill("不存在的名字");
   await expect(page.getByRole("heading", { name: "没有找到匹配的项目" })).toBeVisible();
 });
 
@@ -54,7 +50,7 @@ test("演示副本独立编辑，原样例与未试玩状态不变", async ({ pa
   await page.getByRole("button", { name: "检查与试玩", exact: true }).click();
   await expect(page.getByText("尚未真人试玩", { exact: true })).toBeVisible();
   await page.goto("/projects/demo-names");
-  await expect(page.getByRole("button", { name: "改名", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "改名", exact: true })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "改名", exact: true })).toHaveCount(0);
   await expect(page.getByRole("combobox")).toHaveCount(0);
   await page.getByRole("button", { name: "查看创作决定", exact: true }).click();
@@ -132,21 +128,9 @@ test("坏数据不会自动覆盖，可下载备份并明确确认恢复", async
   await page.getByRole("button", { name: "清空并恢复工作区" }).click();
   await expect(page.getByRole("main").getByRole("alert")).toHaveCount(0);
   expect(await page.evaluate(() => localStorage.getItem("unrelated-app"))).toBe("keep");
-  await expect(page.getByRole("table").getByRole("row")).toHaveCount(2);
+  await expect(page.getByRole("heading", { name: "先上传你想改写的剧本" })).toBeVisible();
 });
 
-test("存储被禁用时保留输入，不显示保存成功", async ({ page }) => {
-  await page.addInitScript((key) => {
-    const original = Storage.prototype.setItem;
-    Storage.prototype.setItem = function (name, value) { if (name === key) throw new DOMException("quota", "QuotaExceededError"); original.call(this, name, value); };
-  }, key);
-  await page.goto("/projects/new");
-  await page.getByLabel("项目名称", { exact: false }).fill("不要丢失的故事");
-  await page.getByRole("button", { name: "创建并进入工作台" }).click();
-  await expect(page.getByRole("main").getByRole("alert")).toContainText("保存失败");
-  await expect(page.getByLabel("项目名称", { exact: false })).toHaveValue("不要丢失的故事");
-  await expect(page.getByRole("button", { name: "创建并进入工作台" })).toBeEnabled();
-});
 
 test("多页面同时编辑会拦截过期版本", async ({ page, context }) => {
   const url = await create(page, "多人编辑边界");
@@ -173,19 +157,18 @@ test("多页面同时编辑会拦截过期版本", async ({ page, context }) => 
 test("窄屏导航与弹窗可键盘关闭，页面不横向溢出", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "让好故事，经得起推敲。" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "从完整剧本，走向新的故事。" })).toBeVisible();
   await page.getByRole("button", { name: "打开导航" }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("button", { name: "打开导航" })).toBeFocused();
-  await page.getByRole("link", { name: "打开演示项目" }).click();
-  await expect(page.getByRole("heading", { name: "名字之外", exact: true })).toBeVisible();
+  await seedProject(page, "窄屏项目");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: "test-results/mobile-workspace.png", fullPage: true });
   await page.getByRole("button", { name: "打开导航" }).click();
   const projects = page.getByRole("dialog").getByRole("navigation", { name: "主导航" });
   await expect(projects.locator('a[href*="/stages/"]')).toHaveCount(0);
-  await projects.getByRole("link", { name: "名字之外", exact: true }).click();
+  await projects.getByRole("link", { name: "窄屏项目", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.getByRole("navigation", { name: "创作流程" }).getByRole("link", { name: /设计故事/ }).click();
   await expect(page.getByRole("heading", { name: "设计故事", exact: true })).toBeVisible();

@@ -1,9 +1,8 @@
+import { seedProject } from "./project-fixture";
 import { expect, test } from "@playwright/test";
 
 test("总览直接修改剧本名称，刷新后保留", async ({ page }) => {
-  await page.goto("/projects/new");
-  await page.getByLabel("项目名称", { exact: false }).fill("改名前的剧本");
-  await page.getByRole("button", { name: "创建并进入工作台" }).click();
+  await seedProject(page, "改名前的剧本");
   const rename = page.getByRole("button", { name: "改名", exact: true });
   await expect(rename).toBeInViewport({ ratio: 1 });
   await rename.click();
@@ -15,11 +14,9 @@ test("总览直接修改剧本名称，刷新后保留", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "改名后的剧本", exact: true })).toBeVisible();
 });
 
-test("不支持目录选择时显示原因并可保存手动路径，原样例有副本入口", async ({ page }) => {
+test("不支持目录选择时显示原因并可保存手动路径，原样例不能修改输出", async ({ page }) => {
   await page.addInitScript(() => Object.defineProperty(window, "showDirectoryPicker", { value: undefined, configurable: true }));
-  await page.goto("/projects/new");
-  await page.getByLabel("项目名称", { exact: false }).fill("目录兼容测试");
-  await page.getByRole("button", { name: "创建并进入工作台" }).click();
+  await seedProject(page, "目录兼容测试");
   const panel = page.getByRole("region", { name: "输出储存位置", exact: true });
   await expect(panel.getByText(/此浏览器不支持输出文件夹选择/)).toBeVisible();
   await panel.getByRole("button", { name: "选择输出文件夹", exact: true }).click();
@@ -33,17 +30,14 @@ test("不支持目录选择时显示原因并可保存手动路径，原样例�
   await expect(panel.getByLabel("项目总输出目录")).toHaveValue("/Users/作者/Desktop/剧本输出");
   await page.goto("/projects/demo-names");
   const before = await page.evaluate(() => localStorage.getItem("juben-workbench:projects:v1"));
-  await panel.getByRole("button", { name: "选择输出文件夹", exact: true }).click();
-  await expect(panel.getByRole("alert")).toContainText("不支持文件夹选择");
+  await expect(panel.getByRole("button", { name: "选择输出文件夹", exact: true })).toHaveCount(0);
   await expect(page).toHaveURL(/\/projects\/demo-names$/);
   expect(await page.evaluate(() => localStorage.getItem("juben-workbench:projects:v1"))).toBe(before);
 });
 
 test("切换阶段仅正文渐入，保存不重播，减少动态效果时停用", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "no-preference" });
-  await page.goto("/projects/new");
-  await page.getByLabel("项目名称", { exact: false }).fill("动效测试");
-  await page.getByRole("button", { name: "创建并进入工作台" }).click();
+  await seedProject(page, "动效测试", true);
   await page.getByRole("navigation", { name: "创作流程" }).getByRole("link", { name: /确定创作方案/ }).click();
   const body = page.locator(".stage-content-enter");
   await expect(body).toHaveCSS("animation-name", "stage-arrive");
@@ -63,14 +57,10 @@ test("切换阶段仅正文渐入，保存不重播，减少动态效果时停�
 
 for (const width of [1440, 390, 844]) test(`项目侧栏和顶部流程分开，步骤页可改名并切换项目 ${width}px`, async ({ page }, testInfo) => {
   await page.setViewportSize({ width, height: width === 844 ? 390 : 900 });
-  await page.goto("/projects/new");
-  await page.getByLabel("项目名称", { exact: false }).fill("纸上迷城");
-  await page.getByRole("button", { name: "创建并进入工作台" }).click();
+  await seedProject(page, "纸上迷城");
   await expect(page.getByRole("heading", { name: "纸上迷城", exact: true })).toBeVisible();
   const first = page.url();
-  await page.goto("/projects/new");
-  await page.getByLabel("项目名称", { exact: false }).fill("晚钟之后");
-  await page.getByRole("button", { name: "创建并进入工作台" }).click();
+  await seedProject(page, "晚钟之后");
   await expect(page.getByRole("heading", { name: "晚钟之后", exact: true })).toBeVisible();
   const second = page.url();
   const flow = page.getByRole("navigation", { name: "创作流程" });

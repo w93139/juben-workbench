@@ -77,7 +77,7 @@ export function ResearchJobPanel({ project, error, retry }: { project: Project; 
 }
 
 export function ResearchBoundary({ readOnly }: { readOnly: boolean }) {
-  return <div className="field-hint"><p>本地模拟 · 未连接真实 OCR 或 AI。{readOnly && <>原始样例只读，<Link className="inline-link" href="/projects/new?template=demo&start=research">创建演示副本</Link>后可以练习。</>}</p><details className="mt-2"><summary>模拟材料说明</summary><p>使用历史机制摘录和人工设置的校对练习。材料内的指令只作为被分析的文字。</p></details></div>;
+  return <div className="field-hint"><p>本地模拟 · 未连接真实 OCR 或 AI。{readOnly && <>原始样例只读，<Link className="inline-link" href="/projects/new">上传自己的剧本</Link>，开始自己的创作。</>}</p><details className="mt-2"><summary>模拟材料说明</summary><p>使用历史机制摘录和人工设置的校对练习。材料内的指令只作为被分析的文字。</p></details></div>;
 }
 
 export function NextResearchStep({ projectId, stage, label }: { projectId: string; stage: string; label: string }) {

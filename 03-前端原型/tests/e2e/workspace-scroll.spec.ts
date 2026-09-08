@@ -1,3 +1,4 @@
+import { seedProject } from "./project-fixture";
 import { expect, test } from "@playwright/test";
 
 const storageKey = "juben-workbench:projects:v1";
@@ -10,10 +11,8 @@ for (const viewport of [{ width: 1440, height: 844 }, { width: 960, height: 844 
   test(`${viewport.width}×${viewport.height} 只有具体内容滚动，常用操作可用`, async ({ page }, testInfo) => {
     await page.setViewportSize(viewport);
     const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
-    await page.goto("/projects/new?template=demo");
     const title = "长项目名称检验固定顶部不挤掉按钮和下面内容".repeat(2).slice(0, 40);
-    await page.getByLabel("项目名称", { exact: false }).fill(title);
-    await page.getByRole("button", { name: "创建并进入工作台" }).click();
+    await seedProject(page, title, true);
     const heading = page.getByRole("heading", { name: title, exact: true });
     await expect(heading).toBeVisible();
     const url = page.url();

@@ -1,3 +1,4 @@
+import { seedProject } from "./project-fixture";
 import { chromium, expect, test as base, type Page } from "@playwright/test";
 import { rm } from "node:fs/promises";
 
@@ -16,9 +17,8 @@ async function openOutput(page: Page) {
 }
 const key = "juben-workbench:projects:v1";
 async function create(page: Page) {
-  await page.goto("/projects/new?start=research");
-  await page.getByLabel("项目名称", { exact: false }).fill("材料下一步测试");
-  await page.getByRole("button", { name: "创建并进入材料中心" }).click();
+  const base = await seedProject(page, "材料下一步测试", true);
+  await page.goto(`${base}/stages/materials`);
   await expect(page.getByRole("heading", { name: "准备材料", exact: true })).toBeVisible();
   return page.url().replace("/stages/materials", "");
 }
