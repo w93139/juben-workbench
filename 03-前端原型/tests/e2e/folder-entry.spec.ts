@@ -45,10 +45,15 @@ for (const width of [1440, 390]) test(`直接选整本目录自动建项目，�
   await page.reload();
   await page.getByRole("button", { name: "采用大纲并进入设计故事", exact: true }).click();
   await expect(page).toHaveURL(`${base}/stages/blueprint`);
-  await expect(page.getByLabel("故事简介", { exact: true })).not.toHaveValue("");
+  await expect(page.getByLabel("整体故事大纲", { exact: true })).not.toHaveValue("");
   const project = (await saved(page))[0];
-  expect(project.blueprint.draft.characters).toHaveLength(0);
-  expect(project.blueprint.draft.events).toHaveLength(0);
+  expect(project.blueprint.draft.characters).toHaveLength(5);
+  expect(project.blueprint.draft.events).toHaveLength(3);
+  expect(project.blueprint.draft.rounds).toHaveLength(3);
+  expect(project.blueprint.sourceLabel).toMatch(/模拟|预设|Mock/);
+  expect(project.blueprint.draft.events.slice(1).every((event: { causes: string[] }) => event.causes.length > 0)).toBe(true);
+  expect(project.blueprint.draft.clues.every((clue: { supports: string[] }) => clue.supports.length > 0)).toBe(true);
+  expect(JSON.stringify(project.blueprint)).not.toContain("THIS_SOURCE_BODY_MUST_NOT_BE_READ_OR_STORED");
   expect(JSON.stringify(project)).not.toContain("许知微");
   await page.screenshot({ path: testInfo.outputPath(`folder-direction-${width}.png`), fullPage: true });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

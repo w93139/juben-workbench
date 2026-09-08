@@ -465,3 +465,15 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: 3px solid
 .production-text { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.85; background: var(--background); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; max-height: 55vh; overflow-y: auto; }
 .production-evidence { white-space: pre-wrap; overflow-wrap: anywhere; border-left: 3px solid #A17C60; padding: .65rem 1rem; background: #F7F5F1; font-size: .875rem; line-height: 1.75; }
 .production-decision { border-top: 1px solid var(--border); padding-top: 1rem; }
+
+/* Shared locations and contextual planning remain secondary to the active work. */
+.output-location { padding: 10px 14px; background: var(--paper); }
+.output-location > .field-hint { font-size: 11px; margin-top: 7px; }
+.folder-location-copy small { display: block; color: #8c684f; margin-top: 4px; }
+.conversation-log { max-height: 420px; overflow-y: auto; margin: 16px 0; overscroll-behavior: contain; }
+.conversation-message { padding: 14px 16px; border: 1px solid var(--line); border-radius: 8px; margin: 8px 0; background: #f5f2ee; overflow-wrap: anywhere; }
+.conversation-message.user { margin-left: 24px; background: #fff; }
+.conversation-message small { display: block; color: #8b8178; margin: 4px 0 8px; font-size: 11px; }
+.comparison-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.text-preview { white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: 13px; line-height: 1.8; padding: 12px; border: 1px solid var(--line); max-height: 320px; overflow-y: auto; }
+@media (max-width: 600px) { .comparison-grid { grid-template-columns: minmax(0, 1fr); } .conversation-message.user { margin-left: 12px; } }

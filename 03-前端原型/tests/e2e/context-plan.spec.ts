@@ -1,0 +1,37 @@
+import { expect, test } from "@playwright/test";
+import { seedProject } from "./project-fixture";
+
+for (const width of [1440, 390]) test(`第二步上下文、作者方案和历史保留 ${width}px`, async ({ page }, testInfo) => {
+  await page.setViewportSize({ width, height: 950 });
+  const base = await seedProject(page, "方案对话测试");
+  await page.goto(`${base}/stages/materials`);
+  await page.getByLabel("选择参考文件", { exact: true }).setInputFiles({ name: "完整剧本.md", mimeType: "text/markdown", buffer: Buffer.from("DO_NOT_READ_REAL_BODY") });
+  await expect(page.getByText(/已自动保存1份材料/)).toBeVisible();
+  await page.getByRole("button", { name: "模拟拆解并查看建议", exact: true }).click();
+  await expect(page.getByText("流程模拟完成，正文待识别。", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "选择关系与抉择", exact: true }).click();
+  await page.getByLabel("补充想法或提出修改", { exact: true }).fill("减少第二幕阅读，把时间留给交流");
+  await page.getByRole("button", { name: "发送并获取模拟建议", exact: true }).click();
+  await expect(page.getByRole("log", { name: "创作方案对话记录" })).toContainText("这是本地模拟回复");
+  await page.getByLabel("大纲与写作方向", { exact: true }).fill("作者保存的大纲：围绕归还清单展开关系协商");
+  await expect(page.getByRole("button", { name: "采用大纲并进入设计故事", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "保存方案修改", exact: true }).click();
+  await expect(page.getByRole("button", { name: "保存方案修改", exact: true })).toBeDisabled();
+  await page.reload();
+  await expect(page.getByLabel("大纲与写作方向", { exact: true })).toHaveValue("作者保存的大纲：围绕归还清单展开关系协商");
+  await expect(page.getByRole("log")).toContainText("减少第二幕阅读");
+  await page.getByRole("region", { name: "方案上下文对话" }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath(`plan-chat-${width}.png`), fullPage: true });
+  await page.getByRole("button", { name: "选择悬疑还原", exact: true }).click();
+  await page.getByText(/已保存的方案历史/).click();
+  await page.getByText(/更换方向前的方案/).click();
+  await expect(page.getByText("作者保存的大纲：围绕归还清单展开关系协商", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "采用大纲并进入设计故事", exact: true }).click();
+  await expect(page).toHaveURL(`${base}/stages/blueprint`);
+  await expect(page.getByLabel("整体故事大纲", { exact: true })).toHaveValue(/一座浮岛/);
+  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("juben-workbench:projects:v1")!).projects[0]);
+  expect(stored.folderPlan.messages).toHaveLength(2);
+  expect(stored.folderPlan.proposalHistory.length).toBeGreaterThanOrEqual(2);
+  expect(stored.blueprint.draft.characters).toHaveLength(6);
+  expect(JSON.stringify(stored)).not.toContain("DO_NOT_READ_REAL_BODY");
+});

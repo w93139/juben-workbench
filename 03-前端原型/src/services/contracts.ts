@@ -39,6 +39,8 @@ export interface ProjectService {
   advanceFolderPlan(id: string, revision: number): Promise<Project>;
   cancelFolderPlan(id: string, revision: number): Promise<Project>;
   saveFolderDirection(id: string, revision: number, choiceId: string): Promise<Project>;
+  sendFolderMessage(id: string, revision: number, message: string): Promise<Project>;
+  saveFolderProposal(id: string, revision: number, input: BlueprintData): Promise<Project>;
   initializeFolderBlueprint(id: string, revision: number): Promise<Project>;
   update(id: string, expectedRevision: number, input: UpdateProjectInput): Promise<Project>;
   setDecision(id: string, expectedRevision: number, decisionId: string, status: DecisionStatus): Promise<Project>;
@@ -58,6 +60,9 @@ export interface ProjectService {
   retryReviewModel(id: string, revision: number, reviewId: string, modelId: ReviewModelId): Promise<Project>;
   crossReview(id: string, revision: number, reviewId: string): Promise<Project>;
   decideReviewFinding(id: string, revision: number, reviewId: string, findingId: string, decision: ReviewDecision, reason: string): Promise<Project>;
+  sendReviewMessage(id: string, revision: number, reviewId: string, findingId: string, message: string): Promise<Project>;
+  saveReviewProposal(id: string, revision: number, reviewId: string, proposalId: string, content: string): Promise<Project>;
+  decideReviewProposal(id: string, revision: number, reviewId: string, proposalId: string, decision: ReviewDecision, reason: string): Promise<Project>;
   getWorkflow(): Promise<WorkflowStage[]>;
   getResearchCatalog(): Promise<ResearchCatalog>;
   addResearchDemo(id: string, revision: number): Promise<Project>;

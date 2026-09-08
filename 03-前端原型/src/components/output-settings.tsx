@@ -33,8 +33,9 @@ export function OutputSettingsPanel({ project, stage }: { project: Project; stag
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const valid = outputSettingsInputSchema.safeParse({ ...draft, stage });
   const busy = action.isPending || picking;
+  const chosenName = pendingDirectory ? draft.directory?.name : null;
   const location = project.outputSettings.directory?.name || project.outputSettings.rootPath || "尚未选择";
-  function complete(next: Project) { saved(); setPendingDirectory(false); setPickerNote(""); if (project.readOnly && mounted.current) router.replace(pathname.replace(`/projects/${project.id}`, `/projects/${next.id}`)); }
+  function complete(next: Project) { saved(); setPendingDirectory(false); setPickerNote(`已保存输出位置：${next.outputSettings.directory?.name || next.outputSettings.rootPath}。所有步骤共用。`); if (project.readOnly && mounted.current) router.replace(pathname.replace(`/projects/${project.id}`, `/projects/${next.id}`)); }
   function persistOutput(revision: number, input: OutputSettingsInput) {
     return project.readOnly
       ? service.create({ title: `${project.title.slice(0, 32)} · 我的创作`, note: project.note, template: project.template }, input)
@@ -50,7 +51,7 @@ export function OutputSettingsPanel({ project, stage }: { project: Project; stag
       const directory = await service.pickOutputDirectory();
       if (!mounted.current) return;
       if (!directory) {
-        setPickerNote("已取消，原设置保持不变。");
+        setPickerNote("已取消，原设置保持不变。导入原剧本不会自动指定输出文件夹。");
         if (!hadDraft) action.discardDraft();
         return;
       }
@@ -62,10 +63,10 @@ export function OutputSettingsPanel({ project, stage }: { project: Project; stag
     } finally { pickingRef.current = false; if (mounted.current) setPicking(false); }
   }
   return <section className="output-location" aria-label="输出储存位置">
-    <div className="folder-location-row"><div className="folder-location-copy"><FolderOpen size={18} /><div><strong>输出文件夹</strong><p data-testid="output-directory-name">{location}</p></div></div>
+    <div className="folder-location-row"><div className="folder-location-copy"><FolderOpen size={18} /><div><strong>输出文件夹 · 新作成果</strong><p data-testid="output-directory-name">{location}</p>{chosenName && <small role="status">已选择「{chosenName}」 · {action.isPending ? "正在保存" : "待重试保存"}</small>}</div></div>
       <Button variant="outline" disabled={busy} onClick={() => void pickDirectory()}>{picking ? "正在选择文件夹…" : action.isPending ? "正在保存…" : project.outputSettings.directory || project.outputSettings.rootPath ? "更换输出文件夹" : "选择输出文件夹"}</Button>
     </div>
-    <p className="field-hint">{project.readOnly ? "选好后自动保存到你的创作副本，原始样例不变。" : "选好后自动记住，所有步骤共用。"}当前仅记录位置，尚未写出文件。</p>
+    <p className="field-hint">{project.readOnly ? "选好后自动保存到你的创作副本，原始样例不变。" : "选择后自动记住名称，所有步骤共用；不是原剧本的导入位置。"}当前仅记录位置，尚未写出文件。</p>
     {capability.data === "unsupported" && <p className="field-hint" role="status">此浏览器不支持输出文件夹选择。可用桌面 Chrome／Edge，或展开下方备用方式。</p>}
     {capability.data === "insecure" && <p className="field-hint" role="status">请用本机地址或 HTTPS 打开，再选择文件夹。</p>}
     {pickerError != null && <ErrorMessage error={pickerError} />}

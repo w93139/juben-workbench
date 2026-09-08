@@ -13,6 +13,11 @@ import { ErrorMessage } from "../shared";
 type ImportStatus = "idle" | "running" | "succeeded" | "failed" | "cancelled";
 const phaseLabels = { checking: "正在整理文件信息", transferring: "正在模拟上传", saving: "正在保存材料清单", complete: "导入处理完成" };
 
+export function SourceSupplement({ hasMaterials, children }: { hasMaterials: boolean; children: ReactNode }) {
+  const [open, setOpen] = useState(!hasMaterials);
+  return <details className="archive-details mt-3" open={open} onToggle={(event) => { if (event.target === event.currentTarget) setOpen(event.currentTarget.open); }}><summary>补充原剧本材料</summary><div className="p-4">{children}</div></details>;
+}
+
 export function SourceImport({ project, children }: { project: Project; children?: ReactNode }) {
   const service = useService();
   const client = useQueryClient();

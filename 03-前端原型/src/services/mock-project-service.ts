@@ -125,6 +125,8 @@ export class MockProjectService implements ProjectService {
   async advanceFolderPlan(id: string, revision: number) { return this.mutate(id, revision, (project) => folderPlan.advance(project, this.now())); }
   async cancelFolderPlan(id: string, revision: number) { return this.mutate(id, revision, (project) => folderPlan.cancel(project, this.now())); }
   async saveFolderDirection(id: string, revision: number, choiceId: string) { return this.mutate(id, revision, (project) => folderPlan.choose(project, choiceId, this.now())); }
+  async sendFolderMessage(id: string, revision: number, message: string) { return this.mutate(id, revision, (p) => folderPlan.sendMessage(p, message, this.now(), this.uuid)); }
+  async saveFolderProposal(id: string, revision: number, input: BlueprintData) { return this.mutate(id, revision, (p) => folderPlan.saveProposal(p, input, this.now())); }
   async initializeFolderBlueprint(id: string, revision: number) { return this.mutate(id, revision, (project) => folderPlan.initializeBlueprint(project, this.now())); }
 
   private async mutate(id: string, expectedRevision: number, update: (project: Project) => void) {
@@ -241,6 +243,9 @@ export class MockProjectService implements ProjectService {
   async saveDirection(id: string, revision: number, input: OriginalDirection) { return this.mutate(id, revision, (p) => research.saveDirection(p.research, input)); }
   async saveCreativePlan(id: string, revision: number, input: CreativePlanInput) { return this.mutate(id, revision, (p) => research.saveCreativePlan(p.research, input)); }
 
+  async sendReviewMessage(id: string, revision: number, reviewId: string, findingId: string, message: string) { return this.mutate(id, revision, (p) => production.sendReviewMessage(p, reviewId, findingId, message, this.now(), this.uuid)); }
+  async saveReviewProposal(id: string, revision: number, reviewId: string, proposalId: string, content: string) { return this.mutate(id, revision, (p) => production.saveReviewProposal(p, reviewId, proposalId, content, this.now())); }
+  async decideReviewProposal(id: string, revision: number, reviewId: string, proposalId: string, decision: ReviewDecision, reason: string) { return this.mutate(id, revision, (p) => production.decideReviewProposal(p, reviewId, proposalId, decision, reason, this.now())); }
   async getWorkflow() { return structuredClone(workflow); }
   async getBackup() { return this.storage.read(); }
 

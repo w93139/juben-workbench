@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useRouter } from "next/navigation";
+import { PlanDiscussion } from "./plan-discussion";
 import type { Project } from "@/domain/models";
 import { folderPlanCurrent } from "@/domain/folder-plan";
 import { folderArchitecture, folderPlanChoices } from "@/mocks/folder-plans";
@@ -16,7 +16,6 @@ import { useResearchAction } from "./common";
 export function FolderPlan({ project }: { project: Project }) {
   const service = useService();
   const client = useQueryClient();
-  const router = useRouter();
   const action = useResearchAction(project);
   const mounted = useRef(true);
   const [runnerError, setRunnerError] = useState<unknown>(null);
@@ -57,7 +56,7 @@ export function FolderPlan({ project }: { project: Project }) {
       {plan && <div className="research-job mt-4"><p role="status">{stale ? "材料清单已变化，旧建议已过期；请重新模拟拆解。" : running ? plan.progress === 0 ? "正在模拟整理材料清单…" : "正在模拟安排拆解框架与建议…" : plan.status === "cancelled" ? "模拟已取消，材料清单保留。" : "流程模拟完成，正文待识别。"}</p><progress value={plan.progress} max={100} aria-label="拆解流程模拟进度" /><p className="field-hint output-path">本次计划目录：{plan.plannedPath ?? "未设置输出文件夹"}。仅记录位置，结果保存在浏览器中，尚未写出文件。</p></div>}
       {!!runnerError && <><ErrorMessage error={runnerError} /><Button variant="outline" onClick={() => setRunnerError(null)}>重试保存处理进度</Button></>}
       {action.feedback}
-      <div className="research-form-grid mt-5">{folderArchitecture.map((dimension) => <article className="record-card" key={dimension.title}><div className="panel-title"><h3>{dimension.title}</h3><span>待真实识别</span></div><p>{dimension.detail}</p><p className="field-hint">内容与来源位置：尚未提取。</p></article>)}</div>
+      <details className="archive-details mt-5" open={!current}><summary>查看六项架构拆解维度</summary><div className="research-form-grid p-4">{folderArchitecture.map((dimension) => <article className="record-card" key={dimension.title}><div className="panel-title"><h3>{dimension.title}</h3><span>待真实识别</span></div><p>{dimension.detail}</p><p className="field-hint">内容与来源位置：尚未提取。</p></article>)}</div></details>
     </section>
     <section className="panel" id="folder-plan" aria-label="大纲与写作方向建议">
       <div className="panel-title"><h2>选择大纲与写作方向</h2><span>原创方案 · 暂定</span></div>
@@ -69,7 +68,9 @@ export function FolderPlan({ project }: { project: Project }) {
         <p className="mt-3"><strong>可借鉴的抽象机制：</strong>{choice.mechanism}</p><p className="field-hint"><strong>迁移风险：</strong>{choice.risk}</p>
         <Button className="mt-4" variant={selected?.id === choice.id ? "default" : "outline"} aria-pressed={selected?.id === choice.id} disabled={action.isPending || selected?.id === choice.id} onClick={() => action.mutate((revision) => service.saveFolderDirection(project.id, revision, choice.id))}>{selected?.id === choice.id ? "已选择此方向" : `选择${choice.title.split("：")[1]}`}</Button>
       </article>)}</div>}
-      {current && selected && <div className="stage-callout mt-4"><p>当前选择：{selected.title}。人数、时长和故事内容均为暂定，尚未经过真人试玩。</p>{project.blueprint ? <><p>已有故事草稿已保留，新选择不会覆盖已有内容。</p><Link className="button-link mt-3" href={`/projects/${project.id}/stages/blueprint`}>继续编辑故事草稿 →</Link></> : <Button className="mt-3" disabled={action.isPending} onClick={() => action.mutate((revision) => service.initializeFolderBlueprint(project.id, revision), { onSuccess: () => { if (mounted.current) router.push(`/projects/${project.id}/stages/blueprint`); } })}>采用大纲并进入设计故事</Button>}</div>}
+
     </section>
+    {!!plan?.proposalHistory.length && <details className="archive-details"><summary>已保存的方案历史（{plan.proposalHistory.length}）</summary><div className="p-4">{[...plan.proposalHistory].reverse().map(history => <details className="archive-details mt-3" key={history.id}><summary>{history.reason} · 材料版本 {history.sourceRevision}</summary><div className="p-4"><p className="field-hint">只读快照 · {history.savedAt} · {folderPlanChoices.find(c => c.id === history.choiceId)?.title}</p><p className="whitespace-pre-wrap">{history.data.premise}</p><p className="whitespace-pre-wrap mt-4">{history.data.truth}</p><p className="field-hint">{history.data.characters.length} 位角色、{history.data.clues.length} 条线索、{history.data.rounds.length} 轮。旧方案不会覆盖当前蓝图。</p></div></details>)}</div></details>}
+    {current && selected && <PlanDiscussion key={`${project.id}:${plan?.sourceRevision}:${selected.id}`} project={project} />}
   </>;
 }

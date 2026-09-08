@@ -1,3 +1,4 @@
+import { expandSupplement } from "./ui-actions";
 import { seedProject } from "./project-fixture";
 import { expect, test } from "@playwright/test";
 
@@ -11,14 +12,16 @@ for (const width of [1440, 960, 390]) {
     await page.goto(`${base}/stages/materials`);
     await expect(page.getByRole("heading", { name: "准备材料", exact: true })).toBeVisible();
     const materialsUrl = page.url();
-    await page.getByText("历史研究练习资料", { exact: true }).click();
+    await expandSupplement(page);
+  await page.getByText("历史研究练习资料", { exact: true }).click();
     const load = page.getByRole("button", { name: "载入研究练习包", exact: true });
     await expect(load).toBeEnabled();
     await load.click();
     await expect(page.getByRole("button", { name: "练习包已载入", exact: true })).toBeDisabled();
     await expect(page.getByRole("button", { name: "开始模拟 OCR", exact: true })).toBeEnabled();
     await page.reload();
-    await page.getByText("历史研究练习资料", { exact: true }).click();
+    await expandSupplement(page);
+  await page.getByText("历史研究练习资料", { exact: true }).click();
     await expect(page.getByRole("button", { name: "练习包已载入", exact: true })).toBeDisabled();
     await page.goto(materialsUrl.replace("/stages/materials", "/stages/blueprint"));
     await expect(page.getByRole("heading", { name: "设计故事", exact: true })).toBeVisible();
@@ -35,7 +38,8 @@ for (const width of [1440, 960, 390]) {
     await page.screenshot({ path: testInfo.outputPath("five-step-navigation.png") });
     await nav.getByRole("link", { name: /准备材料/ }).click();
     await expect(page).toHaveURL(materialsUrl);
-    await page.getByText("历史研究练习资料", { exact: true }).click();
+    await expandSupplement(page);
+  await page.getByText("历史研究练习资料", { exact: true }).click();
     await expect(page.getByRole("button", { name: "练习包已载入", exact: true })).toBeDisabled();
     const saved = await page.evaluate((key) => JSON.parse(localStorage.getItem(key)!), storageKey);
     expect(saved.projects).toHaveLength(1);

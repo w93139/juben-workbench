@@ -2,7 +2,8 @@ import { z } from "zod";
 import { checkBlueprint } from "@/domain/blueprint";
 import type { Project } from "@/domain/models";
 import { outputPath } from "@/domain/output-settings";
-import { emptyProduction, hasRunningProduction, latestArtifacts, moduleIds, productionLimits, type ProductionModule, type ReviewModelId, type ReviewDecision, type ReviewRun } from "@/domain/production";
+import { emptyProduction, isReviewStale, hasRunningProduction, latestArtifacts, moduleIds, productionLimits, type ProductionModule, type ReviewModelId, type ReviewDecision, type ReviewRun } from "@/domain/production";
+import { mockCoordination, mockRevisionProposal } from "@/mocks/production-coordination";
 import { mockArtifacts, mockReviewOpinions } from "@/mocks/production";
 import { ServiceError } from "./contracts";
 
@@ -67,7 +68,7 @@ export function startReview(p: Project, target: "blueprint" | "manuscript", vers
   const artifacts = latestArtifacts(production, versionId);
   if (target === "manuscript" && !artifacts.length) invalid("此蓝图版本尚无正文，请先生成至少一个模块。");
   production.reviews.push({ id: newId(p, "review", uuid), target, blueprintVersionId: versionId, blueprintRevision: p.blueprint!.revision,
-    artifactIds: target === "manuscript" ? artifacts.map((a) => a.id) : [], createdAt: now, plannedPath: outputPath(p.outputSettings, "review"), staticIssues: checkBlueprint(source.data), crossReviewDone: false, findings: [],
+    artifactIds: target === "manuscript" ? artifacts.map((a) => a.id) : [], createdAt: now, plannedPath: outputPath(p.outputSettings, "review"), staticIssues: checkBlueprint(source.data), crossReviewDone: false, findings: [], coordination: null,
     models: (["model-a", "model-b"] as const).map((id) => ({ id, label: id === "model-a" ? "模拟模型 A · 结构" : "模拟模型 B · 体验", status: "running", simulateFailure: failModel === id, error: null })),
   });
 }
@@ -94,9 +95,51 @@ export function advanceReviewModel(p: Project, reviewId: string, modelId: Review
 }
 export function cancelReviewModel(p: Project, reviewId: string, modelId: ReviewModelId) { const { current } = model(p, reviewId, modelId); if (current.status !== "running") invalid("只有进行中的模型可以取消。"); current.status = "cancelled"; current.error = null; }
 export function retryReviewModel(p: Project, reviewId: string, modelId: ReviewModelId) { idle(p, reviewId); const { run, current } = model(p, reviewId, modelId); if (run.crossReviewDone || !["failed", "cancelled"].includes(current.status)) invalid("只可重试未完成的模型。"); current.status = "running"; current.simulateFailure = false; current.error = null; }
-export function crossReview(p: Project, reviewId: string) { const run = review(p, reviewId); if (run.crossReviewDone || run.models.some((m) => m.status !== "completed")) invalid("需要两侧完成，且每次只进行一轮模拟互审。"); run.crossReviewDone = true; }
+export function crossReview(p: Project, reviewId: string) { const run = review(p, reviewId); if (run.crossReviewDone || run.models.some((m) => m.status !== "completed")) invalid("需要两侧完成，且每次只进行一轮模拟互审。"); run.crossReviewDone = true; run.coordination = mockCoordination(run); }
 export function decideReviewFinding(p: Project, reviewId: string, findingId: string, decision: ReviewDecision, reason: string) {
   const run = review(p, reviewId); const finding = run.findings.find((f) => f.id === findingId) ?? invalid("没有找到这条意见。");
   if (!z.enum(["adopted", "provisional", "rejected"]).safeParse(decision).success || !z.string().trim().min(1).max(3000).safeParse(reason).success) invalid("请选择处理方式并填写理由（1–3000字）。");
+  finding.decision = decision; finding.reason = reason.trim();
+}
+
+
+function editableCoordination(p: Project, reviewId: string) {
+  const run = review(p, reviewId);
+  idle(p);
+  if (isReviewStale(p, run)) invalid("资料已变化，旧审查仅供查看。请用最新版本重新审查后再讨论修订。");
+  if (!run.crossReviewDone || !run.coordination) invalid("请先完成两路独审、一次互审与主 Agent 核对。");
+  return { run, coordination: run.coordination! };
+}
+export function sendReviewMessage(p: Project, reviewId: string, findingId: string, message: string, now: string, uuid: () => string) {
+  const { run, coordination } = editableCoordination(p, reviewId);
+  const finding = run.findings.find((item) => item.id === findingId) ?? invalid("请选择本轮审查的问题作为对话上下文。");
+  const parsed = z.string().trim().min(1).max(2000).safeParse(message);
+  if (!parsed.success) invalid("请输入1至2000字的修改想法。");
+  if (coordination.messages.length + 2 > 120 || coordination.proposals.length >= 60) invalid("本轮对话已达保存上限。请先备份并开启新一轮审查，历史不会删除。");
+  const content = mockRevisionProposal(run, finding, parsed.data!);
+  const ids = new Set([...coordination.messages, ...coordination.proposals].map((item) => item.id));
+  const nextId = (prefix: string) => { const value = `${prefix}-${uuid()}`; if (ids.has(value)) invalid("对话编号冲突，请重试。"); ids.add(value); return value; };
+  coordination.messages.push({ id: nextId("author"), role: "author", findingId, content: parsed.data!, createdAt: now });
+  coordination.messages.push({ id: nextId("coordinator"), role: "coordinator", findingId, content: `我已将你的要求与“${finding.title.slice(0, 400)}”关联，保留当前审查快照中的证据位置。下面提供可编辑的修订方案；请核对后选择。此回复为本地模板模拟，未作语义分析。`, createdAt: now });
+  coordination.proposals.push({ id: nextId("proposal"), findingId, content, decision: "unhandled", reason: "", createdAt: now, updatedAt: now, revision: 1, history: [] });
+}
+export function saveReviewProposal(p: Project, reviewId: string, proposalId: string, content: string, now: string) {
+  const { run, coordination } = editableCoordination(p, reviewId);
+  const proposal = coordination.proposals.find((item) => item.id === proposalId) ?? invalid("没有找到这份修订方案。");
+  const parsed = z.string().trim().min(1).max(6000).safeParse(content);
+  if (!parsed.success) invalid("修订方案需为1至6000字。");
+  if (proposal.content === parsed.data) return;
+  if (proposal.history.length >= 30) invalid("此方案已保存30次修改，请新发一条讨论，历史版本不会删除。");
+  proposal.history.push({ content: proposal.content, decision: proposal.decision, reason: proposal.reason, updatedAt: proposal.updatedAt, revision: proposal.revision });
+  proposal.content = parsed.data!; proposal.revision += 1; proposal.updatedAt = now; proposal.decision = "unhandled"; proposal.reason = "";
+  const finding = run.findings.find((item) => item.id === proposal.findingId);
+  if (finding) { finding.decision = "unhandled"; finding.reason = ""; }
+}
+export function decideReviewProposal(p: Project, reviewId: string, proposalId: string, decision: ReviewDecision, reason: string, now: string) {
+  const { run, coordination } = editableCoordination(p, reviewId);
+  const proposal = coordination.proposals.find((item) => item.id === proposalId) ?? invalid("没有找到这份修订方案。");
+  if (!z.enum(["adopted", "provisional", "rejected"]).safeParse(decision).success || !z.string().trim().min(1).max(3000).safeParse(reason).success) invalid("请选择处理方式并填写1至3000字理由。");
+  proposal.decision = decision; proposal.reason = reason.trim(); proposal.updatedAt = now;
+  const finding = run.findings.find((item) => item.id === proposal.findingId) ?? invalid("方案关联的问题已不存在。");
   finding.decision = decision; finding.reason = reason.trim();
 }

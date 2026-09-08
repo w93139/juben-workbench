@@ -11,6 +11,7 @@ async function create(page: Page, demo = false) {
   await page.goto(url);
   await page.getByRole("button", { name: demo ? "载入演示蓝图" : "建立空白蓝图", exact: true }).click();
   await expect(savePanel(page)).toBeVisible();
+  await expandDetails(page);
   return url;
 }
 async function save(page: Page) {
@@ -18,7 +19,11 @@ async function save(page: Page) {
   await expect(savePanel(page).getByText(/^草稿修订 \d+ · 已保存$/)).toBeVisible();
   await expect(savePanel(page).getByRole("button", { name: "保存蓝图草稿", exact: true })).toBeDisabled();
 }
-async function tab(page: Page, name: string) { await page.getByRole("button", { name, exact: true }).click(); }
+async function expandDetails(page: Page) {
+  const summary = page.getByText("详细结构编辑（按需展开）", { exact: true });
+  if (await summary.locator("..").getAttribute("open") === null) await summary.click();
+}
+async function tab(page: Page, name: string) { await expandDetails(page); await page.getByRole("button", { name, exact: true }).click(); }
 
 for (const width of [1440, 390]) test(`演示蓝图改名、关系同步、刷新和历史版本独立 ${width}px`, async ({ page }, testInfo) => {
   test.setTimeout(60000);
@@ -148,7 +153,7 @@ test("蓝图存储失败与跨页冲突保留本页输入，重试需显式加�
   await expect(page.getByLabel("故事简介", { exact: true })).toHaveValue("本页草稿");
   await page.evaluate(() => sessionStorage.setItem("allow-blueprint", "1"));
   await save(page);
-  const other = await context.newPage(); await other.goto(url);
+  const other = await context.newPage(); await other.goto(url); await expandDetails(other);
   await page.getByLabel("故事简介", { exact: true }).fill("冲突时保留的故事");
   await other.getByLabel("故事简介", { exact: true }).fill("另一页已保存版本");
   await save(other);
@@ -159,7 +164,7 @@ test("蓝图存储失败与跨页冲突保留本页输入，重试需显式加�
   await savePanel(page).getByRole("button", { name: "保留输入，载入最新状态", exact: true }).click();
   await expect(savePanel(page).getByText(/输入已保留。再次保存/)).toBeVisible();
   await save(page);
-  await other.reload();
+  await other.reload(); await expandDetails(other);
   await expect(other.getByLabel("故事简介", { exact: true })).toHaveValue("冲突时保留的故事");
 });
 

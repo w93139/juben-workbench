@@ -58,14 +58,21 @@ for (const width of [1440, 390]) test(`材料中心下一步跳转拆解，门�
 for (const width of [1440, 390]) test(`选完文件夹自动保存，真实引用刷新后可用 ${width}px`, async ({ page }, testInfo) => {
   await page.setViewportSize({ width, height: 900 });
   const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
-  const url = await create(page); await page.goto(`${url}/stages/analysis`);
+  const url = await create(page); await page.goto(url);
   await installPicker(page);
   await panel(page).getByRole("button", { name: "选择输出文件夹" }).click();
   await expect(panel(page).getByText("已保存", { exact: true })).toBeVisible();
   await expect(panel(page).getByTestId("output-directory-name")).toHaveText("桌面测试输出");
+  await expect(panel(page).getByText("已保存输出位置：桌面测试输出。所有步骤共用。", { exact: true })).toBeVisible();
   expect(await page.evaluate(() => (window as unknown as { pickerCall: unknown }).pickerCall)).toEqual({ options: { startIn: "desktop", mode: "read" }, active: true });
   await expect(panel(page).getByRole("button", { name: "保存路径", exact: true })).toBeHidden();
   const saved = await page.evaluate((key) => localStorage.getItem(key), key);
+  for (const stage of ["materials", "analysis", "blueprint", "generation", "export"]) {
+    await page.goto(`${url}/stages/${stage}`);
+    await expect(panel(page).getByTestId("output-directory-name")).toHaveText("桌面测试输出");
+  }
+  await page.goto(`${url}/stages/materials`);
+  await page.screenshot({ path: testInfo.outputPath(`output-name-materials-${width}.png`), fullPage: true });
   await page.reload();
   await expect(panel(page).getByTestId("output-directory-name")).toHaveText("桌面测试输出");
   await installPicker(page);
@@ -92,7 +99,7 @@ test("选择取消、不支持、拒绝和引用存储失败保留原路径", as
   const before = await page.evaluate((key) => localStorage.getItem(key), key);
   await page.evaluate(() => Object.assign(window, { showDirectoryPicker: () => Promise.reject(new DOMException("cancel", "AbortError")) }));
   await panel(page).getByRole("button", { name: "更换输出文件夹" }).click();
-  await expect(panel(page).getByText("已取消，原设置保持不变。", { exact: true })).toBeVisible();
+  await expect(panel(page).getByText(/^已取消，原设置保持不变。/)).toBeVisible();
   await expect(panel(page).getByText("当前输入尚未保存。", { exact: true })).toHaveCount(0);
   await page.evaluate(() => Object.assign(window, { showDirectoryPicker: undefined }));
   await panel(page).getByRole("button", { name: "更换输出文件夹" }).click();

@@ -70,6 +70,7 @@ test("五步可达、结构内容与来源预览可读", async ({ page }) => {
     await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
   }
   await page.getByRole("navigation", { name: "创作流程" }).getByRole("link", { name: /设计故事/ }).click();
+  await page.getByText("详细结构编辑（按需展开）", { exact: true }).click();
   await page.getByRole("button", { name: "人物与关系", exact: true }).click();
   await expect(page.getByRole("heading", { name: "许知微", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "信息与线索", exact: true }).click();

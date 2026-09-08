@@ -32,10 +32,24 @@ const findingSchema = z.object({
 export type ReviewFinding = z.infer<typeof findingSchema>;
 export type ReviewDecision = Exclude<ReviewFinding["decision"], "unhandled">;
 const issueSchema = z.object({ id: z.string(), severity: z.enum(["error", "warning"]), section: z.enum(["overview", "characters", "relationships", "events", "knowledge", "claims", "clues", "rounds", "triggers", "endings"]), recordId: z.string().optional(), message: z.string() });
+export const reviewCoordinationSchema = z.object({
+  summary: z.string().max(6000),
+  mutualChecks: z.array(z.object({ modelId: z.enum(modelIds), findingId: id, conclusion: z.string().max(3000) })).max(400),
+  checks: z.array(z.object({ findingId: id, outcome: z.enum(["needs-evidence", "human-test"]), rationale: z.string().max(3000) })).max(200),
+  messages: z.array(z.object({ id, role: z.enum(["author", "coordinator"]), findingId: id, content: z.string().max(6000), createdAt: z.iso.datetime() })).max(120),
+  proposals: z.array(z.object({
+    id, findingId: id, content: z.string().trim().min(1).max(6000), decision: z.enum(["unhandled", "adopted", "provisional", "rejected"]), reason: z.string().max(3000),
+    createdAt: z.iso.datetime(), updatedAt: z.iso.datetime(), revision: z.number().int().positive(),
+    history: z.array(z.object({ content: z.string().max(6000), decision: z.enum(["unhandled", "adopted", "provisional", "rejected"]), reason: z.string().max(3000), updatedAt: z.iso.datetime(), revision: z.number().int().positive() })).max(30),
+  })).max(60),
+});
+export type ReviewCoordination = z.infer<typeof reviewCoordinationSchema>;
+export type ReviewProposal = ReviewCoordination["proposals"][number];
 export const reviewRunSchema = z.object({
   id, target: z.enum(["blueprint", "manuscript"]), blueprintVersionId: id, blueprintRevision: z.number().int().nonnegative(),
   artifactIds: z.array(id), createdAt: z.iso.datetime(), plannedPath: z.string().nullable(), staticIssues: z.array(issueSchema), models: z.array(reviewModelSchema).length(2),
   findings: z.array(findingSchema), crossReviewDone: z.boolean(),
+  coordination: reviewCoordinationSchema.nullable().default(null),
 });
 export type ReviewRun = z.infer<typeof reviewRunSchema>;
 export const productionWorkspaceSchema = z.object({

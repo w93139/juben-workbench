@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { usesFolderPlan } from "@/domain/folder-plan";
 import type { Project } from "@/domain/models";
 import type { OCRIssue, ResearchCatalog } from "@/domain/research";
-import { SourceImport } from "./source-import";
+import { SourceImport, SourceSupplement } from "./source-import";
 import { SourceList } from "./source-list";
 import { useService } from "../providers";
 import { Button } from "../ui/button";
@@ -37,7 +37,7 @@ export function MaterialsStage({ project, catalog }: { project: Project; catalog
   const processed = state.documents.some((d) => d.origin === "demo" && d.status === "processed");
   if (usesFolderPlan(project)) return <FolderMaterials project={project} />;
   return <>
-    <section className="panel"><div className="panel-title"><h2>① 添加参考材料</h2><span>文件留在本机</span></div><SourceImport key={project.id} project={project}>{project.readOnly ? <Button asChild><Link href="/projects/new">上传自己的剧本</Link></Button> : <Button disabled={busy || hasDemo} onClick={() => action.mutate((rev) => service.addResearchDemo(project.id, rev))}>{hasDemo ? "练习包已载入" : "载入研究练习包"}</Button>}</SourceImport>{project.readOnly && <p className="field-hint">原始样例仅供浏览。上传自己的完整剧本文件夹，开始新项目。</p>}{hasDemo && <p className="field-hint">{processed ? "练习包已经在这个项目中，模拟识别已完成。下一步：在下方校对问题并确认阅读范围。" : "练习包已经在这个项目中，无需重复载入。下一步：点击“开始模拟 OCR”。"}</p>}{action.feedback}
+    <section className="panel"><div className="panel-title"><h2>原剧本材料（输入）</h2><span>文件留在本机</span></div><SourceSupplement hasMaterials={!!state.documents.length}><SourceImport key={project.id} project={project}>{project.readOnly ? <Button asChild><Link href="/projects/new">上传自己的剧本</Link></Button> : <Button disabled={busy || hasDemo} onClick={() => action.mutate((rev) => service.addResearchDemo(project.id, rev))}>{hasDemo ? "练习包已载入" : "载入研究练习包"}</Button>}</SourceImport></SourceSupplement>{project.readOnly && <p className="field-hint">原始样例仅供浏览。上传自己的完整剧本文件夹，开始新项目。</p>}{hasDemo && <p className="field-hint">{processed ? "练习包已经在这个项目中，模拟识别已完成。下一步：在下方校对问题并确认阅读范围。" : "练习包已经在这个项目中，无需重复载入。下一步：点击“开始模拟 OCR”。"}</p>}{action.feedback}
       <SourceList documents={state.documents} />
       {hasDemo && !processed && <div className="research-toolbar"><Button disabled={busy} onClick={() => action.mutate((rev) => service.startResearchJob(project.id, rev, "ocr", fail))}>开始模拟 OCR</Button><details><summary className="field-hint">演示选项</summary><label className="field-hint"><input type="checkbox" checked={fail} disabled={busy} onChange={(e) => setFail(e.target.checked)} /> 演示一次失败，体验重试</label></details></div>}
     </section>
@@ -57,7 +57,7 @@ function FolderMaterials({ project }: { project: Project }) {
   const count = project.research.documents.length;
   const resume = project.folderPlan?.status === "running";
   return <>
-    <section className="panel" aria-label="剧本文件清单"><div className="panel-title"><h2>已导入的剧本材料</h2><span>{count} 份已登记</span></div><p className="story-premise">请把要改写的完整剧本放在一个文件夹里，角色本、主持手册、公共线索、终局和音视频资料可以分子文件夹保存。在这里补充材料会更新当前项目，不会另建项目。</p><SourceImport project={project} /><SourceList documents={project.research.documents} /></section>
+    <section className="panel" aria-label="剧本文件清单"><div className="panel-title"><h2>已导入的剧本材料</h2><span>{count} 份已登记</span></div><p className="story-premise">这里是原剧本的输入材料。已有文件无需重复导入；遗漏时展开“补充原剧本材料”。输出文件夹用于新作成果，与输入材料分开。</p><SourceSupplement hasMaterials={!!count}><SourceImport project={project} /></SourceSupplement><SourceList documents={project.research.documents} /></section>
     <section className="panel" aria-label="识别与拆解准备"><div className="panel-title"><h2>从材料进入拆解</h2><span>正文尚未识别</span></div><p className="story-premise">正式流程会先识别文字或音视频内容，检查缺页、重复、模糊文字及材料完整性，再拆解故事架构并提出原创方案。</p><p className="stage-callout mt-3">目前仅保存文件清单，不能仅凭文件名判断剧本是否完整。尚未执行OCR或音视频转写，下一步仅演示拆解框架和方向选择。</p><div className="flex flex-wrap gap-3 mt-4">{resume ? <Link className="button-link" href={`/projects/${project.id}/stages/analysis`}>继续模拟拆解 →</Link> : <Button disabled={!count || action.isPending} onClick={() => action.mutate((revision) => service.startFolderPlan(project.id, revision), { onSuccess: () => { if (mounted.current) router.push(`/projects/${project.id}/stages/analysis`); } })}>模拟拆解并查看建议</Button>}</div>{action.feedback}</section>
   </>;
 }

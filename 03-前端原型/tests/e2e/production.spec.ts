@@ -148,6 +148,7 @@ test("正文修改先预览且建立新版，旧审查失效，再审固定新�
 test("已保存草稿改变后审查旧版本仍提示复查，未把旧版通过继承给新稿", async ({ page }) => {
   const base = await create(page); await reviewTab(page); await startReview(page); await complete(page);
   await page.goto(`${base}/stages/blueprint`);
+  await page.getByText("详细结构编辑（按需展开）", { exact: true }).click();
   await page.getByLabel("故事简介", { exact: true }).fill("新版故事简介");
   await page.getByRole("button", { name: "保存蓝图草稿", exact: true }).click();
   await expect(page.getByRole("button", { name: "保存蓝图草稿", exact: true })).toBeDisabled();

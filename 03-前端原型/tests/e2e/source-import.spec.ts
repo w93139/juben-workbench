@@ -1,3 +1,4 @@
+import { expandSupplement } from "./ui-actions";
 import { seedProject } from "./project-fixture";
 import { expect, test, type Page } from "@playwright/test";
 import { mkdir, rm, truncate, writeFile } from "node:fs/promises";
@@ -27,11 +28,14 @@ for (const width of [1440, 390]) test(`整文件夹自动导入、多格式、�
     await create(page);
     await expect(page.getByRole("button", { name: "导入文件夹", exact: true })).toBeInViewport({ ratio: 1 });
     const before = await page.evaluate((key) => localStorage.getItem(key), storageKey);
+    await expandSupplement(page);
     await page.getByLabel("选择参考文件夹", { exact: true }).setInputFiles(folder);
     const preview = page.getByRole("region", { name: "本次导入进度" });
     await expect(page.getByRole("progressbar", { name: "模拟上传进度" })).toBeVisible();
     await expect(preview).toContainText("正在");
     expect(await page.evaluate((key) => localStorage.getItem(key), storageKey)).toBe(before);
+    await expect.poll(() => page.evaluate((key) => JSON.parse(localStorage.getItem(key)!).projects[0].research.documents.length, storageKey)).toBe(valid.length);
+    await expandSupplement(page);
     await expect(preview).toContainText(`已自动保存${valid.length}份材料，略过3份`);
     await expect(page.getByRole("progressbar", { name: "模拟上传进度" })).toHaveAttribute("value", "100");
     await expect(page.getByRole("button", { name: /登记 .* 份材料|确认完成/ })).toHaveCount(0);
@@ -67,6 +71,7 @@ for (const width of [1440, 390]) test(`整文件夹自动导入、多格式、�
     expect(raw).not.toContain("未识别的正文");
     await page.reload();
     await expect(page.getByText(`${valid.length}份已登记`, { exact: true })).toBeVisible();
+    await expandSupplement(page);
     await page.getByLabel("选择参考文件夹", { exact: true }).setInputFiles(folder);
     await expect(preview).toContainText(`已自动保存0份材料，略过${valid.length + skipped.length}份`);
     expect(await page.evaluate((key) => localStorage.getItem(key), storageKey)).toBe(raw);
@@ -77,6 +82,7 @@ for (const width of [1440, 390]) test(`整文件夹自动导入、多格式、�
 
 test("自动导入可取消后重试，离开页面中断，原始样例保持只读", async ({ page }) => {
   await create(page);
+  await expandSupplement(page);
   const before = await page.evaluate((key) => localStorage.getItem(key), storageKey);
   const files = [{ name: "第一段.mp3", mimeType: "audio/mpeg", buffer: Buffer.from("录音占位") }, { name: "字幕.vtt", mimeType: "text/vtt", buffer: Buffer.from("字幕占位") }];
   await page.getByLabel("选择参考文件", { exact: true }).setInputFiles(files);
@@ -88,6 +94,7 @@ test("自动导入可取消后重试，离开页面中断，原始样例保持�
   await expect(page.getByRole("region", { name: "已登记材料" })).toContainText("第一段.mp3");
   const projectUrl = page.url();
   const saved = await page.evaluate((key) => localStorage.getItem(key), storageKey);
+  await expandSupplement(page);
   await page.getByLabel("选择参考文件", { exact: true }).setInputFiles({ name: "离开未保存.pdf", mimeType: "application/pdf", buffer: Buffer.from("占位") });
   await page.getByRole("navigation", { name: "创作流程" }).getByRole("link", { name: /确定创作方案/ }).click();
   await page.goto(projectUrl);

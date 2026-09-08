@@ -13,6 +13,7 @@ import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../ui/dialog";
 import { LoadError, Loading } from "../shared";
+import { WholeStory } from "./whole-story";
 import { ArrayEditor, RelationshipMap } from "./fields";
 
 type Focus = { section: string; id?: string; ids?: Record<string, string | undefined> };
@@ -34,6 +35,8 @@ function BlueprintEditor({ project, workspace }: { project: Project; workspace: 
   const [tab, setTab] = useState(0);
   const [focus, storeFocus] = useState<Focus>({ section: "overview" });
   function setFocus(next: Focus) { storeFocus((previous) => ({ ...next, ids: { ...previous.ids, [next.section]: next.id } })); }
+  const [wholeDirty, setWholeDirty] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [showIssues, setShowIssues] = useState(false);
   const [issueFilter, setIssueFilter] = useState("all");
   const [issuePage, setIssuePage] = useState(0);
@@ -49,25 +52,26 @@ function BlueprintEditor({ project, workspace }: { project: Project; workspace: 
   const issues = checkBlueprint(draft);
   const filtered = issues.filter((issue) => issueFilter === "all" || issue.section === issueFilter);
   const shownPage = Math.min(issuePage, Math.max(0, Math.ceil(filtered.length / 20) - 1));
-  useEffect(() => { if (!dirty) return; const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); }; window.addEventListener("beforeunload", warn); return () => window.removeEventListener("beforeunload", warn); }, [dirty]);
+  useEffect(() => { if (!dirty && !wholeDirty) return; const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); }; window.addEventListener("beforeunload", warn); return () => window.removeEventListener("beforeunload", warn); }, [dirty, wholeDirty]);
   function edit(next: BlueprintData) { action.touch(); change(next); }
   function locate(issue: BlueprintIssue) {
     const next = issue.section === "overview" ? 0 : blueprintGroups.findIndex((group) => (group.sections as readonly string[]).includes(issue.section));
-    setTab(Math.max(0, next)); setFocus({ section: issue.section, id: issue.recordId });
+    setDetailsOpen(true); setTab(Math.max(0, next)); setFocus({ section: issue.section, id: issue.recordId });
     requestAnimationFrame(() => document.getElementById(`blueprint-${issue.section}`)?.scrollIntoView({ block: "start" }));
   }
   return <div className="main-stack">
-    <section className="panel" aria-label="蓝图保存与版本"><div className="panel-title"><h2>故事蓝图</h2><span>{project.readOnly ? "原始样例 · 只读" : dirty ? "有未保存修改" : `草稿修订 ${workspace.revision} · 已保存`}</span></div>
+    <section className="panel" aria-label="蓝图保存与版本"><div className="panel-title"><h2>故事蓝图</h2><span>{project.readOnly ? "原始样例 · 只读" : (dirty || wholeDirty) ? "有未保存修改" : `草稿修订 ${workspace.revision} · 已保存`}</span></div>
       <p className="field-hint">作者视角 · 含谜底。所有编辑属于原创方案；保存和建立版本不表示通过审查或真人试玩。</p>
       <p className="field-hint mt-2">{workspace.sourceLabel}</p>
-      {project.readOnly ? <Link className="text-link" href="/projects/new">上传自己的剧本 →</Link> : <form id="blueprint-save-form" onSubmit={(event) => { event.preventDefault(); if (!busy) action.mutate((revision) => service.saveBlueprint(project.id, revision, draft), { onSuccess: saved }); }}><div className="flex flex-wrap gap-3 mt-4"><Button disabled={busy || !dirty}>{action.isPending ? "正在保存…" : "保存蓝图草稿"}</Button><Button type="button" variant="outline" onClick={() => setShowIssues(true)}>检查当前草稿（{issues.length}）</Button></div>{action.feedback}</form>}
+      {project.readOnly ? <Link className="text-link" href="/projects/new">上传自己的剧本 →</Link> : <form id="blueprint-save-form" onSubmit={(event) => { event.preventDefault(); if (!busy && !wholeDirty) action.mutate((revision) => service.saveBlueprint(project.id, revision, draft), { onSuccess: saved }); }}><div className="flex flex-wrap gap-3 mt-4"><Button disabled={busy || wholeDirty || !dirty}>{action.isPending ? "正在保存…" : "保存蓝图草稿"}</Button><Button type="button" variant="outline" onClick={() => setShowIssues(true)}>检查当前草稿（{issues.length}）</Button></div>{action.feedback}</form>}
       {project.readOnly && <Button className="mt-3" variant="outline" onClick={() => setShowIssues(true)}>查看结构缺口（{issues.length}）</Button>}
       {dirty && <p className="field-hint mt-3">切换本页分类会保留输入；离开设计故事页前请先保存。</p>}
       {project.research.direction && <p className="field-hint mt-3">方向目标 {project.research.direction.players} 人／{project.research.direction.minutes} 分钟；当前蓝图 {draft.characters.length} 位角色／{draft.rounds.reduce((sum, round) => sum + round.minutes, 0)} 分钟。方向设置不会自动改写人物或轮次。</p>}
     </section>
     <details className="archive-details" open={showIssues} onToggle={(event) => setShowIssues(event.currentTarget.open)}><summary>结构检查 · {issues.length} 项待处理</summary><div className="p-4 pt-0"><p className="field-hint">检查当前{dirty ? "未保存输入" : "蓝图草稿"}的必填项和关联。这里只验证编号、因果循环及线索获取条件是否填写，不判断文字推理是否成立，也不检测所有时间矛盾或信息泄漏；可前往“生成与检查”练习模拟双审。</p>{!issues.length ? <p role="status" className="success-message">本轮字段与关联检查未发现问题，仍需内容审查与真人试玩。</p> : <><label className="field-label mt-3">筛选问题<select className="plain-select ml-3" value={issueFilter} onChange={(event) => { setIssueFilter(event.target.value); setIssuePage(0); }}><option value="all">全部内容</option><option value="overview">故事真相</option>{Object.entries(sectionLabels).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label><ul className="blueprint-issues">{filtered.slice(shownPage * 20, shownPage * 20 + 20).map((issue) => <li key={issue.id}><span className={`tag ${issue.severity === "error" ? "amber" : "neutral"}`}>{issue.severity === "error" ? "待解决" : "建议补充"}</span><span>{issue.message}</span><Button size="sm" variant="outline" onClick={() => locate(issue)}>定位：{issue.section === "overview" ? "故事真相" : sectionLabels[issue.section]}</Button></li>)}</ul><div className="flex items-center gap-3"><Button variant="outline" size="sm" disabled={shownPage === 0} onClick={() => setIssuePage(shownPage - 1)}>问题上一页</Button><span className="field-hint">{shownPage + 1} / {Math.max(1, Math.ceil(filtered.length / 20))} 页</span><Button variant="outline" size="sm" disabled={(shownPage + 1) * 20 >= filtered.length} onClick={() => setIssuePage(shownPage + 1)}>问题下一页</Button></div></>}</div></details>
-    <BlueprintSections data={draft} change={edit} disabled={busy} tab={tab} setTab={setTab} focus={focus} setFocus={setFocus} />
-    <section className="panel" aria-label="蓝图版本"><div className="panel-title"><h2>版本与审查准备</h2><span>{versionMatches ? "当前内容与最新版本一致" : lastVersion ? "草稿与版本不同 · 待建立新版" : "尚未建立版本"}</span></div><p className="field-hint">版本是保存当时蓝图的独立副本，供后续审查和生成使用。最多保留20份；可以保留待修订版本，缺项不会因此变成已通过。</p>{!project.readOnly && <form className="mt-4" onSubmit={(event) => { event.preventDefault(); if (!busy && !dirty) action.mutate((revision) => service.publishBlueprintVersion(project.id, revision, versionName), { onSuccess: () => setVersionName("") }); }}><label className="field-label">版本名称<Input value={versionName} maxLength={80} placeholder="例如：第一次结构草稿" onChange={(event) => setVersionName(event.target.value)} disabled={busy} /></label><Button className="mt-3" disabled={busy || dirty || !versionName.trim()}>建立蓝图版本</Button>{dirty && <p className="field-hint">先保存当前修改，再建立版本。</p>}</form>}
+    <WholeStory project={project} data={workspace.draft} disabled={busy || dirty} onDirtyChange={setWholeDirty} />
+    <details className="archive-details" open={detailsOpen} onToggle={(e) => setDetailsOpen(e.currentTarget.open)}><summary>详细结构编辑（按需展开）</summary><div className="p-4">{wholeDirty && <p className="field-hint">整体调整尚未保存，详细编辑暂时只读，避免两份修改相互覆盖。</p>}<BlueprintSections data={draft} change={edit} disabled={busy || wholeDirty} tab={tab} setTab={setTab} focus={focus} setFocus={setFocus} /></div></details>
+    <section className="panel" aria-label="蓝图版本"><div className="panel-title"><h2>版本与审查准备</h2><span>{versionMatches ? "当前内容与最新版本一致" : lastVersion ? "草稿与版本不同 · 待建立新版" : "尚未建立版本"}</span></div><p className="field-hint">版本是保存当时蓝图的独立副本，供后续审查和生成使用。最多保留20份；可以保留待修订版本，缺项不会因此变成已通过。</p>{!project.readOnly && <form className="mt-4" onSubmit={(event) => { event.preventDefault(); if (!busy && !dirty && !wholeDirty) action.mutate((revision) => service.publishBlueprintVersion(project.id, revision, versionName), { onSuccess: () => setVersionName("") }); }}><label className="field-label">版本名称<Input value={versionName} maxLength={80} placeholder="例如：第一次结构草稿" onChange={(event) => setVersionName(event.target.value)} disabled={busy} /></label><Button className="mt-3" disabled={busy || dirty || wholeDirty || !versionName.trim()}>建立蓝图版本</Button>{(dirty || wholeDirty) && <p className="field-hint">先保存当前修改，再建立版本。</p>}</form>}
       <div className="record-list">{[...workspace.versions].reverse().map((version) => <div className="record-item" key={version.id}><div><strong>{version.label}</strong><p className="field-hint">{new Date(version.createdAt).toLocaleString("zh-CN")} · {checkBlueprint(version.data).length} 项结构提示 · 未进行真实AI审查</p></div><Button variant="outline" size="sm" onClick={() => { setPreviewTab(0); setPreview(version); }}>查看版本：{version.label}</Button></div>)}</div>
       <p className="field-hint mt-4">下一步可进入“生成与检查”对所选版本模拟双审并生成正文；目前尚未调用真实模型。</p><Link className="text-link" href={`/projects/${project.id}/stages/review#blueprint-review-ready`}>进入蓝图审查准备 →</Link>
     </section>

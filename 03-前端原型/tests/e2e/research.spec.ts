@@ -1,3 +1,4 @@
+import { expandSupplement } from "./ui-actions";
 import { seedProject } from "./project-fixture";
 import { expect, test, type Page } from "@playwright/test";
 
@@ -10,6 +11,7 @@ async function create(page: Page, name: string) {
   return url;
 }
 async function recognize(page: Page) {
+  await expandSupplement(page);
   await page.getByText("历史研究练习资料", { exact: true }).click();
   await page.getByRole("button", { name: "载入研究练习包" }).click();
   await page.getByRole("button", { name: "开始模拟 OCR" }).click();
@@ -79,9 +81,11 @@ for (const width of [1440, 390]) test(`参考研究到原创方向完整流程 $
 
 test("模拟失败与取消可以重试，刷新后继续任务，真实文件不冒充已识别", async ({ page }) => {
   await create(page, "任务恢复");
+  await expandSupplement(page);
   await page.getByLabel("选择参考文件", { exact: true }).setInputFiles({ name: "真实参考.md", mimeType: "text/markdown", buffer: Buffer.from("不要分析此正文") });
   await expect(page.getByRole("region", { name: "已登记材料" }).getByText(/仅登记，未识别/)).toBeVisible();
   await expect(page.getByRole("button", { name: "开始模拟 OCR" })).toHaveCount(0);
+  await expandSupplement(page);
   await page.getByText("历史研究练习资料", { exact: true }).click();
   await page.getByRole("button", { name: "载入研究练习包" }).click();
   await page.getByText("演示选项", { exact: true }).click();
@@ -111,8 +115,10 @@ test("文件登记失败保留待登记清单，可重试后保存", async ({ pa
       original.call(this, name, value);
     };
   }, key);
+  await expandSupplement(page);
   await page.getByLabel("选择参考文件", { exact: true }).setInputFiles({ name: "待保存.md", mimeType: "text/markdown", buffer: Buffer.from("资料") });
   await expect(page.getByRole("heading", { name: "导入未完成" })).toBeVisible();
+  await expandSupplement(page);
   await page.getByText("查看本批文件与略过原因", { exact: true }).click();
   await expect(page.getByRole("region", { name: "本次导入进度" }).getByText("待保存.md", { exact: true })).toBeVisible();
   await expect(page.getByRole("progressbar", { name: "模拟上传进度" })).not.toHaveAttribute("value", "100");
