@@ -36,6 +36,32 @@ export class EvaluationBudgetLedger {
       this.db.exec("COMMIT"); return recovered;
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
+  claimResume(sessionId: string, ownerId: string, leaseMs: number, expectedViewRevision: number) {
+    const now = Date.now(); this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = this.db.prepare("SELECT view_json FROM evaluation_result WHERE session_id = ?").get(sessionId) as { view_json: string } | undefined;
+      let view: { status?: unknown; resumeCount?: unknown; resumeAllowed?: unknown; viewRevision?: unknown };
+      try { view = JSON.parse(result?.view_json ?? "null"); } catch { throw new LocalApiError(409, "测评记录无法核对，未继续付费调用。"); }
+      if (!view || view.status !== "blocked" || (view.resumeCount ?? 0) !== 0 || (view.resumeAllowed ?? true) !== true || (view.viewRevision ?? 0) !== expectedViewRevision) throw new LocalApiError(409, "测评状态已由其他进程更新，未重复续测。");
+      const current = this.db.prepare("SELECT owner_id, state, lease_until FROM evaluation_run WHERE session_id = ?").get(sessionId) as { owner_id: string; state: string; lease_until: number } | undefined;
+      if (current?.state === "running" && current.lease_until > now) throw new LocalApiError(409, "另一工作台进程正在执行这轮测评，未重复发起调用。");
+      this.db.prepare("INSERT INTO evaluation_run(session_id, owner_id, state, lease_until) VALUES (?, ?, 'running', ?) ON CONFLICT(session_id) DO UPDATE SET owner_id = excluded.owner_id, state = 'running', lease_until = excluded.lease_until").run(sessionId, ownerId, now + leaseMs);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+  claimRecovery(sessionId: string, ownerId: string, leaseMs: number, expectedViewRevision: number) {
+    const now = Date.now(); this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = this.db.prepare("SELECT view_json FROM evaluation_result WHERE session_id = ?").get(sessionId) as { view_json: string } | undefined;
+      let view: { status?: unknown; viewRevision?: unknown };
+      try { view = JSON.parse(result?.view_json ?? "null"); } catch { throw new LocalApiError(409, "测评恢复记录无法核对。"); }
+      if (!view || !["running", "cancelling"].includes(String(view.status)) || (view.viewRevision ?? 0) !== expectedViewRevision) throw new LocalApiError(409, "测评状态已由其他进程更新，不使用旧状态恢复。");
+      const current = this.db.prepare("SELECT owner_id, state, lease_until FROM evaluation_run WHERE session_id = ?").get(sessionId) as { owner_id: string; state: string; lease_until: number } | undefined;
+      if (current?.state === "running" && current.lease_until > now && current.owner_id !== ownerId) throw new LocalApiError(409, "另一工作台进程仍在执行测评。");
+      this.db.prepare("INSERT INTO evaluation_run(session_id, owner_id, state, lease_until) VALUES (?, ?, 'running', ?) ON CONFLICT(session_id) DO UPDATE SET owner_id = excluded.owner_id, state = 'running', lease_until = excluded.lease_until").run(sessionId, ownerId, now + leaseMs);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
   heartbeatRun(sessionId: string, ownerId: string, leaseMs: number) {
     const result = this.db.prepare("UPDATE evaluation_run SET lease_until = ? WHERE session_id = ? AND owner_id = ? AND state = 'running'").run(Date.now() + leaseMs, sessionId, ownerId);
     if (result.changes !== 1) throw new LocalApiError(409, "本轮测评执行权已失效，未发起新的调用。");
@@ -73,13 +99,29 @@ export class EvaluationBudgetLedger {
       this.db.exec("COMMIT"); return this.snapshot(reservation.session_id);
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
-  markUncertain(callId: string): BudgetSnapshot {
+  settleAndSaveView(sessionId: string, callId: string, actualFen: number, serialize: (budget: BudgetSnapshot) => string): { budget: BudgetSnapshot; serialized: string } {
+    if (!Number.isSafeInteger(actualFen) || actualFen < 0) throw new LocalApiError(400, "模型实际费用无效。");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const reservation = this.db.prepare("SELECT session_id, max_fen, state FROM evaluation_reservation WHERE call_id = ?").get(callId) as { session_id: string; max_fen: number; state: string } | undefined;
+      if (!reservation || reservation.session_id !== sessionId || reservation.state !== "reserved") throw new LocalApiError(409, "测评预算记录不存在或已经结算。");
+      if (actualFen > reservation.max_fen) throw new LocalApiError(409, "实际用量超过预留上限，已停止后续测评并等待核对账单。");
+      this.db.prepare("UPDATE evaluation_reservation SET state = 'settled', actual_fen = ? WHERE call_id = ?").run(actualFen, callId);
+      this.db.prepare("UPDATE evaluation_budget SET reserved_fen = reserved_fen - ?, spent_fen = spent_fen + ? WHERE session_id = ?").run(reservation.max_fen, actualFen, sessionId);
+      const budget = this.snapshot(sessionId); const serialized = serialize(budget);
+      if (Buffer.byteLength(serialized, "utf8") > 200_000) throw new LocalApiError(413, "模型测评记录过大，未能安全保存。");
+      this.db.prepare("INSERT INTO evaluation_result(session_id, view_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET view_json = excluded.view_json, updated_at = excluded.updated_at").run(sessionId, serialized, Date.now());
+      this.db.exec("COMMIT"); return { budget, serialized };
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+  markUncertain(callId: string, knownMinimumFen?: number): BudgetSnapshot {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const reservation = this.db.prepare("SELECT session_id, max_fen, state FROM evaluation_reservation WHERE call_id = ?").get(callId) as { session_id: string; max_fen: number; state: string } | undefined;
       if (!reservation || reservation.state !== "reserved") throw new LocalApiError(409, "测评预算记录不存在或已经处理。");
-      this.db.prepare("UPDATE evaluation_reservation SET state = 'uncertain' WHERE call_id = ?").run(callId);
-      this.db.prepare("UPDATE evaluation_budget SET reserved_fen = reserved_fen - ?, uncertain_fen = uncertain_fen + ? WHERE session_id = ?").run(reservation.max_fen, reservation.max_fen, reservation.session_id);
+      const uncertainFen = Math.max(reservation.max_fen, Number.isSafeInteger(knownMinimumFen) && knownMinimumFen! >= 0 ? knownMinimumFen! : 0);
+      this.db.prepare("UPDATE evaluation_reservation SET state = 'uncertain', actual_fen = ? WHERE call_id = ?").run(uncertainFen, callId);
+      this.db.prepare("UPDATE evaluation_budget SET reserved_fen = reserved_fen - ?, uncertain_fen = uncertain_fen + ? WHERE session_id = ?").run(reservation.max_fen, uncertainFen, reservation.session_id);
       this.db.exec("COMMIT"); return this.snapshot(reservation.session_id);
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }

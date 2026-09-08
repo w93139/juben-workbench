@@ -31,6 +31,7 @@ test("四步导航、紧凑目录选择与跨页面刷新持久化", async ({ pa
 });
 
 test("实际读取TXT并刷新保留正文，未配置模型不伪造分析", async ({page}) => {
+  await page.route("**/api/studio/capability", route => route.fulfill({ json: { configured: false, message: "模型尚未连接，请配置主模型与两路审查模型后使用。" } }));
   await seedProject(page,"实际读取");
   await page.getByLabel("上传原剧本文件",{exact:true}).filter({hasNot:page.locator("h2")}).setInputFiles(txt);
   await expect(page.getByText(/已读取 · .*字/)).toBeVisible();

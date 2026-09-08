@@ -10,6 +10,8 @@ const priceItemSchema = z.object({
   name: modelId, displayName: z.string().trim().min(1).max(300), provider: z.string().trim().min(1).max(120), status: z.string(),
   contextLength: z.union([z.string(), z.number()]).nullable().optional(), inPrice: z.string(), outPrice: z.string(), type: z.string().nullable().optional(),
   offShelfFlag: z.union([z.boolean(), z.number(), z.string()]).nullable().optional(),
+  modelProtocolCompatibility: z.record(z.string(), z.boolean()).optional(),
+  protocolParameters: z.array(z.object({ protocolName: z.string(), parameters: z.record(z.string(), z.boolean()) }).passthrough()).optional(),
 }).passthrough();
 const catalogSchema = z.object({ success: z.literal(true), data: z.object({ items: z.array(priceItemSchema).max(1000) }).passthrough() }).passthrough();
 
@@ -38,11 +40,15 @@ function context(value: string | number | null | undefined) { const parsed = Num
 function available(item: z.infer<typeof priceItemSchema>) {
   const off = item.offShelfFlag; return item.status === "RELEASED" && item.type === "TEXT_GENERATE" && !(off === true || off === 1 || off === "1" || off === "true");
 }
+function supportsRequiredFormat(item: z.infer<typeof priceItemSchema>) {
+  const parameters = item.protocolParameters?.find(protocol => protocol.protocolName === "openai_chat_completions")?.parameters;
+  return item.modelProtocolCompatibility?.openai_chat_completions === true && parameters?.response_format === true;
+}
 const excluded = /(embedding|rerank|ocr|vision|image|audio|speech|tts|moderation|code|coder|medical|sante|fin(?:ance)?)/i;
 function family(candidate: ModelCandidate) { return candidate.provider.toLowerCase() || candidate.id.split(/[-_.]/)[0]!.toLowerCase(); }
 function totalPrice(candidate: ModelCandidate) { return candidate.inputPriceMicroCnyPerMillion + candidate.outputPriceMicroCnyPerMillion; }
 
-export async function discoverAntModels(connection: ProviderConnection, fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<ModelCandidate[]> {
+export async function discoverAntModels(connection: ProviderConnection, fetcher: typeof fetch = fetch, signal?: AbortSignal, preferredIds: string[] = []): Promise<ModelCandidate[]> {
   const modelsUrl = new URL(connection.baseUrl.replace(/\/+$/, "") + "/models");
   if (modelsUrl.origin !== "https://maas-api.antdigital.com" || modelsUrl.pathname !== "/v1/models") throw new LocalApiError(400, "自动选型当前只支持蚂蚁数科官方模型地址。");
   const timeout = AbortSignal.timeout(20_000); const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
@@ -57,7 +63,7 @@ export async function discoverAntModels(connection: ProviderConnection, fetcher:
   const permitted = new Set(models.data.data.map(item => item.id));
   const priced = catalog.data.data.items.flatMap((item): ModelCandidate[] => {
     const input = parsePrice(item.inPrice), output = parsePrice(item.outPrice);
-    if (!permitted.has(item.name) || !available(item) || input == null || output == null || excluded.test(item.name)) return [];
+    if (!permitted.has(item.name) || !available(item) || !supportsRequiredFormat(item) || input == null || output == null || excluded.test(item.name)) return [];
     const candidate = modelCandidateSchema.safeParse({ id: item.name, displayName: item.displayName, provider: item.provider, contextLength: context(item.contextLength), inputPriceMicroCnyPerMillion: input, outputPriceMicroCnyPerMillion: output });
     return candidate.success ? [candidate.data] : [];
   });
@@ -69,9 +75,10 @@ export async function discoverAntModels(connection: ProviderConnection, fetcher:
   const higherTier = [...usable].sort((a, b) => totalPrice(b) - totalPrice(a) || (b.contextLength ?? 0) - (a.contextLength ?? 0))[0];
   const economical = [...byFamily.values()].map(items => items.sort((a, b) => totalPrice(a) - totalPrice(b) || (b.contextLength ?? 0) - (a.contextLength ?? 0))[0]!)
     .sort((a, b) => totalPrice(a) - totalPrice(b));
-  const selected: ModelCandidate[] = higherTier ? [higherTier] : [];
-  for (const candidate of economical) if (!selected.some(item => item.id === candidate.id) && !selected.some(item => family(item) === family(candidate))) { selected.push(candidate); if (selected.length === 4) break; }
-  if (selected.length < 3) for (const candidate of usable.sort((a, b) => totalPrice(a) - totalPrice(b))) if (!selected.some(item => item.id === candidate.id)) { selected.push(candidate); if (selected.length === 4) break; }
+  const selected: ModelCandidate[] = preferredIds.flatMap(id => usable.find(candidate => candidate.id === id) ?? []).slice(0, 4);
+  if (higherTier && selected.length < 4 && !selected.some(item => item.id === higherTier.id)) selected.push(higherTier);
+  for (const candidate of economical) { if (selected.length >= 4) break; if (!selected.some(item => item.id === candidate.id) && !selected.some(item => family(item) === family(candidate))) selected.push(candidate); }
+  if (selected.length < 3) for (const candidate of usable.sort((a, b) => totalPrice(a) - totalPrice(b))) { if (selected.length >= 4) break; if (!selected.some(item => item.id === candidate.id)) selected.push(candidate); }
   if (selected.length < 3) throw new LocalApiError(409, "当前账号缺少三个有明确人民币价格的不同文本模型，无法进行三模型选型。");
   return selected;
 }

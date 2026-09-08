@@ -58,7 +58,7 @@ export function StudioConnection() {
       await cache.invalidateQueries({ queryKey: ["studio-capability"] });
     } catch (failure) { setError(failure); } finally { setBusy(false); }
   }
-  async function action(value: "discover" | "start" | "cancel") {
+  async function action(value: "discover" | "start" | "resume" | "cancel") {
     setBusy(true); setError(null); setSaved(false);
     try {
       const next = evaluationViewSchema.parse(await localJson("/api/studio/evaluation", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: value }) }));
@@ -66,6 +66,7 @@ export function StudioConnection() {
     } catch (failure) { setError(failure); } finally { setBusy(false); }
   }
   const roleName = (id: string) => evaluation?.candidates.find(candidate => candidate.id === id)?.displayName || id;
+  const hasRecordedCost = !!evaluation && evaluation.spentFen + evaluation.reservedFen + evaluation.uncertainFen > 0;
 
   return <>
     <Button size="sm" variant="outline" onClick={() => { setSettings(null); setEvaluation(null); setLoading(true); setError(null); setSaved(false); setApiKey(""); setOpen(true); }}><Settings2 size={15} />配置模型</Button>
@@ -85,17 +86,20 @@ export function StudioConnection() {
 
         {settings?.providerConfigured && <section className="space-y-3 rounded-xl border border-[var(--border)] p-4">
           <div><p className="field-label">2 · 读取候选模型</p><p className="field-hint mt-1">读取当前Key可调用的文本模型，并与蚂蚁公开的人民币价格表核对。这一步不生成内容。</p></div>
-          <Button type="button" variant="outline" disabled={locked || settings.configured && evaluation?.status === "completed"} onClick={() => void action("discover")}>{busy ? "正在读取…" : settings.configured && evaluation?.status === "completed" ? "本轮选型已完成" : evaluation?.candidates.length ? "重新读取候选模型" : "读取候选模型（免费）"}</Button>
+          {!hasRecordedCost && <Button type="button" variant="outline" disabled={locked || settings.configured && evaluation?.status === "completed"} onClick={() => void action("discover")}>{busy ? "正在读取…" : settings.configured && evaluation?.status === "completed" ? "本轮选型已完成" : evaluation?.candidates.length ? "重新读取候选模型" : "读取候选模型（免费）"}</Button>}
+          {hasRecordedCost && <p className="field-hint">已有费用和得分记录。候选与价格会在续测时核对，不会清空现有结果。</p>}
           {!!evaluation?.candidates.length && <div className="grid gap-2 sm:grid-cols-2">{evaluation.candidates.map(candidate => <div className="rounded-lg bg-[var(--muted)] p-3 text-sm" key={candidate.id}><strong>{candidate.displayName}</strong><p className="field-hint mt-1 break-all">{candidate.id} · {candidate.provider}</p><p className="field-hint">输入 {priceLabel(candidate.inputPriceMicroCnyPerMillion)} · 输出 {priceLabel(candidate.outputPriceMicroCnyPerMillion)}</p></div>)}</div>}
         </section>}
 
         {evaluation?.status !== "idle" && evaluation?.candidates.length ? <section className="space-y-3 rounded-xl border border-[var(--border)] p-4">
-          <div><p className="field-label">3 · 小样测评与自动分配</p><p className="field-hint mt-1">固定测试“结构拆解、原创方向、一致性审查”，不发送你的剧本；达到质量线后，同等表现优先费用更低的模型。最多{evaluation.maximumCalls}次短调用；按当前公开价加安全余量最多预留{money(evaluation.plannedMaximumFen)}，工作台估算限额{money(evaluation.budgetCapFen)}。</p></div>
+          <div><p className="field-label">3 · 小样测评与自动分配</p><p className="field-hint mt-1">固定测试“结构拆解、原创方向、一致性审查”，不发送你的剧本；达到质量线后，同等表现优先费用更低的模型。最多{evaluation.maximumCalls}次短调用；按当前公开价加安全余量，{evaluation.resumeCount ? "剩余调用" : "本轮"}最多预留{money(evaluation.plannedMaximumFen)}，工作台估算限额{money(evaluation.budgetCapFen)}。</p></div>
           <div className="h-2 overflow-hidden rounded-full bg-[var(--muted)]"><div className="h-full bg-[#333333] transition-all" style={{ width: `${evaluation.maximumCalls ? evaluation.completedCalls / evaluation.maximumCalls * 100 : 0}%` }} /></div>
           <p role="status" className="text-sm">{evaluation.phase} · 已完成 {evaluation.completedCalls}/{evaluation.maximumCalls} · 已核算 {money(evaluation.spentFen)}{evaluation.uncertainFen ? ` · 待核对 ${money(evaluation.uncertainFen)}` : ""}</p>
           {evaluation.status === "discovered" && <Button type="button" disabled={busy} onClick={() => void action("start")}>开始受限测评</Button>}
+          {evaluation.status === "blocked" && evaluation.resumeAllowed && evaluation.completedCalls < evaluation.maximumCalls && evaluation.resumeCount < 1 && <div className="space-y-2"><p className="field-hint">已完成题目不会重测；待核对金额继续计入10元上限。点击后先免费核对候选与价格，再继续剩余付费调用。</p><Button type="button" disabled={busy} onClick={() => void action("resume")}>{busy ? "正在核对…" : "核对价格并继续测评"}</Button></div>}
+          {evaluation.status === "blocked" && !evaluation.resumeAllowed && <p className="field-hint">本次用量或记录存在异常，已关闭自动续测，避免重复扣费。</p>}
           {evaluation.status === "running" && <Button type="button" variant="outline" disabled={busy} onClick={() => void action("cancel")}><Square size={14} />停止测评</Button>}
-          {!!evaluation.scores.length && <div className="space-y-2">{evaluation.scores.map(score => <div className="rounded-lg bg-[var(--muted)] p-3 text-sm" key={score.modelId}><div className="flex items-center justify-between gap-3"><span className="break-all">{roleName(score.modelId)}</span><strong>{score.total}分 · {money(score.costFen)}</strong></div><p className="field-hint mt-1">结构 {score.structure} · 证据 {score.evidence} · 原创 {score.originality} · 格式 {score.format} · {(score.latencyMs / 1000).toFixed(1)}秒 · {score.promptTokens + score.completionTokens} Token</p><p className="field-hint mt-1">{score.notes.join("；")}</p></div>)}</div>}
+          {!!evaluation.scores.length && <div className="space-y-2">{evaluation.scores.map(score => <div className="rounded-lg bg-[var(--muted)] p-3 text-sm" key={score.modelId}><div className="flex items-center justify-between gap-3"><span className="break-all">{roleName(score.modelId)}</span><strong>{score.total}分 · {money(score.costFen)}</strong></div><p className="field-hint mt-1">结构 {score.structure} · 证据 {score.evidence} · 原创 {score.originality} · 格式 {score.format} · {(score.latencyMs / 1000).toFixed(1)}秒 · {score.promptTokens + score.completionTokens} Token{score.usageEstimated ? "（上限估算）" : ""}</p><p className="field-hint mt-1">{score.notes.join("；")}</p></div>)}</div>}
           {evaluation.allocation && <div className="stage-callout"><strong>自动分配完成</strong><p className="mt-2">主模型：{roleName(evaluation.allocation.mainModel)}</p><p>审查 A：{roleName(evaluation.allocation.reviewA)}</p><p>审查 B：{roleName(evaluation.allocation.reviewB)}</p></div>}
           {evaluation.error && <p className="text-sm text-[var(--danger)]">{evaluation.error}</p>}
         </section> : null}

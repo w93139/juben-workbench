@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { discoverAntModels } from "@/server/model-discovery";
 
 const connection = { baseUrl: "https://maas-api.antdigital.com/v1", apiKey: "test-only-placeholder" };
-const item = (name: string, provider: string, input: string, output: string, contextLength = 128000) => ({ name, displayName: name.toUpperCase(), provider, status: "RELEASED", contextLength, inPrice: input, outPrice: output, type: "TEXT_GENERATE", offShelfFlag: 0 });
+const item = (name: string, provider: string, input: string, output: string, contextLength = 128000) => ({ name, displayName: name.toUpperCase(), provider, status: "RELEASED", contextLength, inPrice: input, outPrice: output, type: "TEXT_GENERATE", offShelfFlag: 0, modelProtocolCompatibility: { openai_chat_completions: true }, protocolParameters: [{ protocolName: "openai_chat_completions", parameters: { response_format: true } }] });
 function fetcher(permitted = ["premium", "cheap-a", "cheap-b", "cheap-c", "ocr-model"]) {
   return vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
     void options;
@@ -23,5 +23,11 @@ describe("蚂蚁模型发现", () => {
     const unauthorized = vi.fn(async () => new Response("secret-detail", { status: 401 }));
     await expect(discoverAntModels(connection, unauthorized as typeof fetch)).rejects.toThrow("拒绝了API Key");
     await expect(discoverAntModels(connection, fetcher(["one"]) as typeof fetch)).rejects.toThrow("缺少三个");
+  });
+  it("排除不支持评测JSON格式的模型", async () => {
+    const call = vi.fn(async (input: string | URL | Request) => String(input).endsWith("/models")
+      ? Response.json({ data: ["bad", "a", "b", "c"].map(id => ({ id })) })
+      : Response.json({ success: true, data: { items: [{ ...item("bad", "Bad", "¥0/M", "¥0/M"), protocolParameters: [{ protocolName: "openai_chat_completions", parameters: { response_format: false } }] }, item("a", "A", "¥1/M", "¥2/M"), item("b", "B", "¥2/M", "¥3/M"), item("c", "C", "¥3/M", "¥4/M")] } }));
+    await expect(discoverAntModels(connection, call as typeof fetch)).resolves.not.toEqual(expect.arrayContaining([expect.objectContaining({ id: "bad" })]));
   });
 });

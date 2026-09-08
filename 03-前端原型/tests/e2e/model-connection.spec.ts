@@ -28,3 +28,19 @@ test("先安全保存蚂蚁连接，再免费读取候选模型；不会自动�
   expect(discoveryCalls).toBe(1); expect(contentCalls).toBe(0); expect(await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))).not.toContain("test-only-connection-secret");
   await page.screenshot({ path: "test-results/model-connection-desktop.png" });
 });
+
+test("中断后明确保留已完成结果，由用户点击才继续剩余测评", async ({ page }) => {
+  const models = [candidate("model-a", "A", 1), candidate("model-b", "B", 2), candidate("model-c", "C", 3)];
+  const blocked = { ...idle, status: "blocked", phase: "测评因费用或服务状态停止", connectionRevision: 1, priceCheckedAt: Date.now(), spentFen: 20, uncertainFen: 2, candidates: models, scores: [{ modelId: "model-a", total: 64, structure: 71, evidence: 48, originality: 53, format: 100, latencyMs: 1000, promptTokens: 6000, completionTokens: 75, costFen: 20, usageEstimated: false, notes: ["未达到金标"] }], completedCalls: 3, maximumCalls: 9, plannedMaximumFen: 50, resumeCount: 0, error: "模型服务未返回用量" };
+  await page.route("**/api/studio/capability", route => route.fulfill({ json: { configured: false, message: "待选型" } }));
+  await page.route("**/api/studio/settings", route => route.fulfill({ json: { baseUrl: "https://maas-api.antdigital.com/v1", mainModel: "", reviewA: "", reviewB: "", hasApiKey: true, providerConfigured: true, configured: false, source: "local", revision: 1, environmentLocked: false } }));
+  await page.route("**/api/studio/evaluation", async route => {
+    if (route.request().method() === "GET") return route.fulfill({ json: blocked });
+    expect(route.request().postDataJSON()).toEqual({ action: "resume" });
+    return route.fulfill({ status: 202, json: { ...blocked, status: "running", phase: "已保留完成结果，正在继续剩余测评", resumeCount: 1, error: null } });
+  });
+  await page.goto("/"); await page.getByRole("button", { name: "配置模型", exact: true }).click();
+  const dialog = page.getByRole("dialog"); await expect(dialog.getByText(/已完成题目不会重测/)).toBeVisible();
+  await dialog.getByRole("button", { name: "核对价格并继续测评" }).click();
+  await expect(dialog.getByText(/已保留完成结果，正在继续剩余测评/)).toBeVisible();
+});

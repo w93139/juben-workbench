@@ -9,7 +9,7 @@ import { StudioSettingsStore } from "@/server/studio-settings";
 
 const roots: string[] = [];
 const modelIds = ["premium", "cheap-a", "cheap-b", "cheap-c"];
-const catalogItem = (name: string, index: number) => ({ name, displayName: name, provider: `P${index}`, status: "RELEASED", contextLength: 128000, inPrice: `¥${index + 1}/M`, outPrice: `¥${index + 2}/M`, type: "TEXT_GENERATE", offShelfFlag: 0 });
+const catalogItem = (name: string, index: number) => ({ name, displayName: name, provider: `P${index}`, status: "RELEASED", contextLength: 128000, inPrice: `¥${index + 1}/M`, outPrice: `¥${index + 2}/M`, type: "TEXT_GENERATE", offShelfFlag: 0, modelProtocolCompatibility: { openai_chat_completions: true }, protocolParameters: [{ protocolName: "openai_chat_completions", parameters: { response_format: true } }] });
 const fetcher = async (input: string | URL | Request) => String(input).endsWith("/models") ? Response.json({ data: modelIds.map(id => ({ id })) }) : Response.json({ success: true, data: { items: modelIds.map(catalogItem) } });
 const transport: EvaluationTransport = async (_connection, _model, _system, prompt) => {
   const content = prompt.includes("测试片段")
@@ -49,6 +49,54 @@ describe("剧本领域小样测评", () => {
     const { engine } = setup(async () => { throw new DOMException("timeout", "AbortError"); }); await engine.discover(fetcher as typeof fetch); engine.start(); const done = await finished(engine);
     expect(done.status).toBe("blocked"); expect(done.completedCalls).toBe(0); expect(done.uncertainFen).toBeGreaterThan(0); expect(done.allocation).toBeNull();
   });
+  it("用户续测时保留已完成得分，只补做剩余候选", async () => {
+    let calls = 0; const successful = new Map<string, number>();
+    const interrupted: EvaluationTransport = async (...args) => { calls++; if (calls === 5) throw new DOMException("upstream ended", "AbortError"); const key = `${args[1]}:${args[3].slice(0, 20)}`; successful.set(key, (successful.get(key) ?? 0) + 1); return transport(...args); };
+    const { engine } = setup(interrupted); await engine.discover(fetcher as typeof fetch); engine.start(); const stopped = await finished(engine);
+    expect(stopped).toMatchObject({ status: "blocked", completedCalls: 4, resumeCount: 0 }); expect(stopped.scores).toHaveLength(1); expect(stopped.taskResults).toHaveLength(4);
+    await engine.resume(fetcher as typeof fetch); const done = await finished(engine);
+    expect(done).toMatchObject({ status: "completed", completedCalls: 12, resumeCount: 1 }); expect(done.scores).toHaveLength(4); expect(done.uncertainFen).toBeGreaterThan(0); expect(calls).toBe(13); expect([...successful.values()].every(count => count === 1)).toBe(true);
+  });
+  it("并发续测只有一个请求能进入价格核对", async () => {
+    let calls = 0;
+    const interrupted: EvaluationTransport = async (...args) => { calls++; if (calls === 4) throw new DOMException("upstream ended", "AbortError"); return transport(...args); };
+    const { engine } = setup(interrupted); await engine.discover(fetcher as typeof fetch); engine.start(); await finished(engine);
+    let release!: (response: Response) => void;
+    const delayed = async (input: string | URL | Request) => String(input).endsWith("/models") ? fetcher(input) : new Promise<Response>(resolve => { release = resolve; });
+    const first = engine.resume(delayed as typeof fetch); await Promise.resolve();
+    await expect(engine.resume(fetcher as typeof fetch)).rejects.toThrow("请勿重复点击");
+    release(Response.json({ success: true, data: { items: modelIds.map(catalogItem) } })); await first; await finished(engine);
+    expect(calls).toBe(13);
+  });
+  it("另一个进程持有旧blocked视图时不能在首次续测后再次续测", async () => {
+    let calls = 0;
+    const twiceInterrupted: EvaluationTransport = async (...args) => { calls++; if (calls === 4 || calls === 5) throw new DOMException("upstream ended", "AbortError"); return transport(...args); };
+    const { root, settings, engine } = setup(twiceInterrupted); await engine.discover(fetcher as typeof fetch); engine.start(); await finished(engine);
+    const stale = new ModelEvaluationEngine(settings, twiceInterrupted, () => new EvaluationBudgetLedger(join(root, "budget.sqlite")), () => {}); expect(stale.get().resumeCount).toBe(0);
+    await engine.resume(fetcher as typeof fetch); const stoppedAgain = await finished(engine); expect(stoppedAgain.resumeCount).toBe(1);
+    await expect(stale.resume(fetcher as typeof fetch)).rejects.toThrow("其他进程更新"); expect(calls).toBe(5);
+  });
+  it("另一个进程缓存的旧running视图不能覆盖续测后的最新blocked结果", async () => {
+    let rejectCall!: (reason: Error) => void; let calls = 0;
+    const pending: EvaluationTransport = async () => { calls++; return await new Promise((_, reject) => { rejectCall = reject; }); };
+    const { root, settings, engine } = setup(pending); await engine.discover(fetcher as typeof fetch); engine.start();
+    const observer = new ModelEvaluationEngine(settings, pending, () => new EvaluationBudgetLedger(join(root, "budget.sqlite")), () => {}); expect(observer.get().status).toBe("running");
+    const staleCancel = new ModelEvaluationEngine(settings, pending, () => new EvaluationBudgetLedger(join(root, "budget.sqlite")), () => {}); expect(staleCancel.get().status).toBe("running");
+    const staleConnection = new ModelEvaluationEngine(settings, pending, () => new EvaluationBudgetLedger(join(root, "budget.sqlite")), () => {}); expect(staleConnection.get().status).toBe("running");
+    rejectCall(new DOMException("first stopped", "AbortError")); await finished(engine);
+    await engine.resume(fetcher as typeof fetch); rejectCall(new DOMException("second stopped", "AbortError")); const latest = await finished(engine); expect(latest.resumeCount).toBe(1);
+    expect(() => staleCancel.cancel()).toThrow("没有可停止的在途调用"); expect(staleCancel.get()).toMatchObject({ status: "blocked", resumeCount: 1 });
+    staleConnection.connectionChanged(); expect(staleConnection.get()).toMatchObject({ status: "blocked", resumeCount: 1 });
+    const future = latest.updatedAt + 121_000; vi.spyOn(Date, "now").mockReturnValue(future);
+    expect(observer.get()).toMatchObject({ status: "blocked", resumeCount: 1, viewRevision: latest.viewRevision });
+    await expect(observer.resume(fetcher as typeof fetch)).rejects.toThrow("已经续测过一次"); expect(calls).toBe(2);
+  });
+  it("已知Token用量超过预留时记录较大待核对金额并禁止续测", async () => {
+    const overage: EvaluationTransport = async (...args) => ({ ...await transport(...args), promptTokens: 1_000_000, completionTokens: 900 });
+    const { engine } = setup(overage); await engine.discover(fetcher as typeof fetch); engine.start(); const stopped = await finished(engine);
+    expect(stopped.status).toBe("blocked"); expect(stopped.resumeAllowed).toBe(false); expect(stopped.uncertainFen).toBeGreaterThan(2);
+    await expect(engine.resume(fetcher as typeof fetch)).rejects.toThrow("不允许自动续测");
+  });
   it("只复述字段名和JSON结构但没有金标证据的模型不能获得角色", async () => {
     const shallow: EvaluationTransport = async (_connection, _model, _system, prompt) => ({ content: JSON.stringify(prompt.includes("测试片段")
       ? { facts: [{ statement: "这是普通事实一", sourceQuote: "这里没有真实原句一", kind: "明确事实" }, { statement: "这是普通事实二", sourceQuote: "这里没有真实原句二", kind: "明确事实" }, { statement: "这是普通事实三", sourceQuote: "这里没有真实原句三", kind: "明确事实" }], inferences: [{ statement: "这是没有依据的分析推断", supportQuotes: ["这里没有真实原句一", "这里没有真实原句二"] }], causalChain: ["普通节点一", "普通节点二", "普通节点三"], unknowns: ["这是普通问题"] }
@@ -76,13 +124,17 @@ describe("剧本领域小样测评", () => {
     const { engine } = setup(delayed); await engine.discover(fetcher as typeof fetch); engine.start(); const done = await finished(engine);
     expect(done.status).toBe("blocked"); expect(calls).toBe(1); expect(done.completedCalls).toBe(1); expect(done.reservedFen).toBe(0); expect(done.uncertainFen).toBe(0);
   });
-  it("真实传输要求完成标志、Token用量和实际模型编号一致", async () => {
+  it("真实传输要求完成标志和模型编号一致，缺少Token用量时按上限估算", async () => {
     const connection = { baseUrl: "https://maas-api.antdigital.com/v1", apiKey: "test-only" };
     const original = globalThis.fetch;
     try {
       globalThis.fetch = async () => Response.json({ model: "model-a", choices: [{ finish_reason: "stop", message: { content: "{}" } }], usage: { prompt_tokens: 10, completion_tokens: 5 } });
-      await expect(antEvaluationTransport(connection, "model-a", "system", "prompt", new AbortController().signal)).resolves.toMatchObject({ promptTokens: 10, completionTokens: 5 });
+      await expect(antEvaluationTransport(connection, "model-a", "system", "prompt", new AbortController().signal)).resolves.toMatchObject({ promptTokens: 10, completionTokens: 5, usageEstimated: false });
       await expect(antEvaluationTransport(connection, "model-b", "system", "prompt", new AbortController().signal)).rejects.toThrow("实际模型");
+      globalThis.fetch = async () => Response.json({ model: "model-a", choices: [{ finish_reason: "stop", message: { content: "{}" } }] });
+      await expect(antEvaluationTransport(connection, "model-a", "system", "prompt", new AbortController().signal)).resolves.toMatchObject({ promptTokens: 8000, completionTokens: 900, usageEstimated: true });
+      globalThis.fetch = async () => Response.json({ model: "model-a", choices: [{ finish_reason: "stop", message: { content: "{}" } }], usage: { prompt_tokens: 30000 } });
+      await expect(antEvaluationTransport(connection, "model-a", "system", "prompt", new AbortController().signal)).rejects.toThrow("异常Token用量");
     } finally { globalThis.fetch = original; }
   });
 });
