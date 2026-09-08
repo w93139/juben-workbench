@@ -22,10 +22,13 @@ test("首页、空项目创建、编辑与刷新恢复", async ({ page }) => {
   await page.getByLabel("创作备注", { exact: true }).fill("我的创作方向：一次有后果的选择。");
   await page.getByRole("button", { name: "保存修改" }).click();
   await expect(page.getByRole("heading", { name: "新的故事名称", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "修改决定状态", exact: true }).click();
   await page.getByLabel("主要体验状态").selectOption("provisional");
   await expect(page.getByText("决定状态已保存")).toBeVisible();
   await page.reload();
+  await page.getByRole("button", { name: "修改决定状态", exact: true }).click();
   await expect(page.getByLabel("主要体验状态")).toHaveValue("provisional");
+  await page.keyboard.press("Escape");
   await expect(page.getByText("我的创作方向：一次有后果的选择。", { exact: true })).toBeVisible();
   await page.getByRole("link", { name: "全部项目", exact: true }).click();
   await page.getByLabel("搜索项目名称").fill("新的故事");
@@ -36,32 +39,40 @@ test("首页、空项目创建、编辑与刷新恢复", async ({ page }) => {
 
 test("演示副本独立编辑，原样例与未试玩状态不变", async ({ page }) => {
   const url = await create(page, "演示副本甲", true);
+  await page.getByRole("button", { name: "修改决定状态", exact: true }).click();
   const decision = page.getByRole("combobox").first();
   await decision.selectOption("open");
   await expect(page.getByText("决定状态已保存")).toBeVisible();
   await page.reload();
+  await page.getByRole("button", { name: "修改决定状态", exact: true }).click();
   await expect(page.getByRole("combobox").first()).toHaveValue("open");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "检查与试玩", exact: true }).click();
   await expect(page.getByText("尚未真人试玩", { exact: true })).toBeVisible();
   await page.goto("/projects/demo-names");
   await expect(page.getByRole("button", { name: "编辑项目" })).toHaveCount(0);
   await expect(page.getByRole("combobox")).toHaveCount(0);
+  await page.getByRole("button", { name: "查看创作决定", exact: true }).click();
   await expect(page.getByText("已确定", { exact: true }).first()).toBeVisible();
   await create(page, "演示副本乙", true);
+  await page.getByRole("button", { name: "修改决定状态", exact: true }).click();
   await expect(page.getByRole("combobox").first()).toHaveValue("confirmed");
   await page.goto(url);
+  await page.getByRole("button", { name: "修改决定状态", exact: true }).click();
   await expect(page.getByRole("combobox").first()).toHaveValue("open");
 });
 
-test("九个阶段可达、结构内容与来源预览可读", async ({ page }) => {
+test("五步可达、结构内容与来源预览可读", async ({ page }) => {
   await page.goto("/projects/demo-names");
-  for (const name of ["材料中心", "参考本拆解", "机制提炼", "原创方向", "原创蓝图", "正文生成", "审查中心", "真人试玩", "成品与导出"]) {
+  for (const name of ["准备材料", "确定创作方案", "设计故事", "生成与检查", "试玩与导出"]) {
     await page.getByRole("navigation", { name: "主导航" }).getByRole("link", { name, exact: false }).click();
     await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
   }
-  await page.getByRole("navigation").getByRole("link", { name: "原创蓝图" }).click();
+  await page.getByRole("navigation").getByRole("link", { name: "设计故事" }).click();
   await expect(page.getByRole("heading", { name: "许知微", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "谁知道什么", exact: true }).click();
   await expect(page.getByText("KF-01", { exact: true })).toBeVisible();
+  await page.getByText("项目资料与来源", { exact: true }).click();
   await page.getByRole("button", { name: "交叉验证的范围", exact: true }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await expect(page.getByRole("dialog").getByText(/03-交叉验证记录/).first()).toBeVisible();
@@ -135,8 +146,8 @@ test("窄屏导航与弹窗可键盘关闭，页面不横向溢出", async ({ pa
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: "test-results/mobile-workspace.png", fullPage: true });
   await page.getByRole("button", { name: "打开导航" }).click();
-  await page.getByRole("dialog").getByRole("link", { name: "原创蓝图" }).click();
-  await expect(page.getByRole("heading", { name: "原创蓝图", exact: true })).toBeVisible();
+  await page.getByRole("dialog").getByRole("link", { name: "设计故事" }).click();
+  await expect(page.getByRole("heading", { name: "设计故事", exact: true })).toBeVisible();
   await expect(page.getByRole("dialog")).toHaveCount(0);
 });
 
@@ -181,3 +192,14 @@ test("后台读取损坏数据不会卸载正在编辑的草稿", async ({ page,
   await page.getByRole("button", { name: "保存修改" }).click();
   await expect(page.getByRole("heading", { name: "未保存的标题", exact: true })).toBeVisible();
 });
+
+for (const [id, name] of [["mechanisms", "确定创作方案"], ["direction", "确定创作方案"], ["review", "生成与检查"], ["playtest", "试玩与导出"]]) {
+  test(`旧入口 ${id} 仍可浏览且只激活所属步骤`, async ({ page }) => {
+    await page.goto(`/projects/demo-names/stages/${id}`);
+    await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
+    const nav = page.getByRole("navigation", { name: "主导航" });
+    await expect(nav.locator('[aria-current="page"]')).toHaveCount(1);
+    await expect(nav.locator('[aria-current="page"]')).toContainText(name);
+    expect(await page.evaluate((key) => localStorage.getItem(key), key)).toBeNull();
+  });
+}

@@ -8,13 +8,14 @@ import { AppFrame, ProjectLink } from "./app-frame";
 import { Input } from "./ui/input";
 import { useContent, useService } from "./providers";
 import { LoadError, Loading } from "./shared";
+import { workflowStep } from "@/domain/workflow-view";
 import { currentStage, formatDate } from "@/domain/presentation";
 import type { DemoContent, Project } from "@/domain/models";
 
 function ProjectTable({ projects, demo }: { projects: Project[]; demo: DemoContent | null }) {
   return <div className="table-wrap"><table className="project-table"><thead><tr><th>项目名称</th><th>当前阶段</th><th className="table-secondary">材料准备</th><th className="table-secondary">检查记录</th><th className="table-secondary">最近修改</th><th><span className="sr-only">打开</span></th></tr></thead><tbody>
     {projects.map((project) => <tr key={project.id}><td><Link href={`/projects/${project.id}`} className="project-name"><span className="project-icon"><FileText size={17} /></span><span><strong>{project.title}</strong><small>{project.readOnly ? "原创演示 · 只读" : project.template === "names-beyond" ? "演示副本 · 本机保存" : "原创项目 · 本机保存"}</small></span></Link></td>
-      <td><span className={`tag ${project.template === "blank" ? "neutral" : "amber"}`}>{({ materials: "准备材料", analysis: "参考拆解", mechanisms: "机制取舍", direction: "原创方向", blueprint: "待建蓝图", generation: "正文生成", review: "审查修订", playtest: "待真人试玩", export: "成品导出" })[currentStage(project)]}</span></td>
+      <td><span className={`tag ${project.template === "blank" ? "neutral" : "amber"}`}>{workflowStep(currentStage(project)).name}</span></td>
       <td className="table-secondary">{project.template === "blank" ? "尚未准备" : demo ? `${demo.deliverables.filter((d) => d.complete).length} / ${demo.deliverables.length} 类齐备` : "读取中"}</td>
       <td className="table-secondary"><span className="table-status">{project.template === "blank" ? "尚未检查" : "有历史检查记录"}</span></td>
       <td className="table-secondary"><span className="table-date">{formatDate(project.updatedAt)}</span></td>

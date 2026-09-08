@@ -377,3 +377,16 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: 3px solid
 .source-format-guide p { margin: 9px 0; }
 .source-pagination { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: flex-end; margin-top: 16px; font-size: 12px; }
 .research-toolbar input:not([type=file]) { flex: 1; min-width: 120px; }
+
+/* Five-step workspace: one scrolling content column and compact shared settings. */
+.output-location, .archive-details { border: 1px solid var(--line, #dedbd3); border-radius: 8px; background: var(--paper, #faf9f6); }
+.output-location > summary, .archive-details > summary { cursor: pointer; padding: 13px 16px; font-size: 13px; }
+.output-location > summary small { margin-left: 16px; color: #77756e; overflow-wrap: anywhere; font-size: 12px; }
+.output-location > .panel { border: 0; margin: 0; }
+.archive-details > .panel { border: 0; }
+.archive-details > label, .archive-details > input, .archive-details > p, .archive-details > .output-stage-links { margin-left: 16px; margin-right: 16px; max-width: calc(100% - 32px); }
+.output-stage-links { display: flex; flex-wrap: wrap; gap: 8px 16px; padding-bottom: 16px; font-size: 12px; }
+.output-stage-links a { text-decoration: underline; text-underline-offset: 3px; }
+.output-stage-links a[aria-current] { font-weight: 700; }
+#creative-plan-form, #reference-analysis, #review-records { scroll-margin-top: 16px; }
+@media (max-width: 600px) { .output-location > summary small { display: block; margin: 7px 0 0; } }

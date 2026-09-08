@@ -2,9 +2,8 @@ import { expect, test } from "@playwright/test";
 
 const storageKey = "juben-workbench:projects:v1";
 const stages = [
-  ["materials", "材料中心"], ["analysis", "参考本拆解"], ["mechanisms", "机制提炼"],
-  ["direction", "原创方向"], ["blueprint", "原创蓝图"], ["generation", "正文生成"],
-  ["review", "审查中心"], ["playtest", "真人试玩"], ["export", "成品与导出"],
+  ["materials", "准备材料"], ["analysis", "确定创作方案"], ["blueprint", "设计故事"],
+  ["generation", "生成与检查"], ["export", "试玩与导出"],
 ];
 
 for (const viewport of [{ width: 1440, height: 844 }, { width: 960, height: 844 }, { width: 390, height: 844 }, { width: 844, height: 390 }]) {
@@ -34,11 +33,11 @@ for (const viewport of [{ width: 1440, height: 844 }, { width: 960, height: 844 
     await expect.poll(() => details.evaluate((el) => el.scrollTop)).toBeGreaterThan(100);
 
     // Client-side navigation resets the detail pane, without mutating project state.
-    await page.getByRole("group", { name: "项目常用操作" }).getByRole("link", { name: "继续参考研究", exact: true }).click();
+    await page.getByRole("group", { name: "项目常用操作" }).getByRole("link", { name: "继续：准备材料", exact: true }).click();
     await expect(page).toHaveURL(`${url}/stages/materials`);
     await expect.poll(() => details.evaluate((el) => el.scrollTop)).toBe(0);
     await page.goto(`${url}/stages/blueprint`);
-    const blueprintHeading = page.getByRole("heading", { name: "原创蓝图", exact: true });
+    const blueprintHeading = page.getByRole("heading", { name: "设计故事", exact: true });
     await expect(blueprintHeading).toBeVisible();
     const blueprintBefore = await blueprintHeading.boundingBox();
     const box = await details.boundingBox();
@@ -48,7 +47,7 @@ for (const viewport of [{ width: 1440, height: 844 }, { width: 960, height: 844 
     await expect.poll(() => details.evaluate((el) => el.scrollTop)).toBeGreaterThan(200);
     expect(await blueprintHeading.boundingBox()).toEqual(blueprintBefore);
     await expect(edit).toBeInViewport({ ratio: 1 });
-    const next = page.getByRole("group", { name: "项目常用操作" }).getByRole("link", { name: "下一步：正文生成", exact: true });
+    const next = page.getByRole("group", { name: "项目常用操作" }).getByRole("link", { name: "下一步：生成与检查", exact: true });
     await expect(next).toBeInViewport({ ratio: 1 });
     const checks = page.getByRole("button", { name: "检查与试玩", exact: true });
     await expect(checks).toBeInViewport({ ratio: 1 });
@@ -67,7 +66,7 @@ for (const viewport of [{ width: 1440, height: 844 }, { width: 960, height: 844 
   });
 }
 
-for (const width of [1440, 390]) test(`${width}px 九个阶段顶部下一步逐页导航，不写完成状态`, async ({ page }) => {
+for (const width of [1440, 390]) test(`${width}px 五个步骤顶部下一步逐页导航，不写完成状态`, async ({ page }) => {
   await page.setViewportSize({ width, height: 844 });
   await page.goto("/projects/demo-names/stages/materials");
   for (const [index, [id, name]] of stages.entries()) {

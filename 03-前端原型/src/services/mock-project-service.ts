@@ -2,7 +2,7 @@ import { z } from "zod";
 import { inspectSourceImport, sourceImportPolicy } from "@/domain/source-import";
 import { outputPath, outputSettingsInputSchema, type OutputSettingsInput } from "@/domain/output-settings";
 import { checkImportCancelled, runMockSourceImport } from "./mock-source-import";
-import { emptyResearch, type SourceFileInput, type IssueResolution, type MechanismChoice, type OriginalDirection } from "@/domain/research";
+import { emptyResearch, type SourceFileInput, type IssueResolution, type MechanismChoice, type OriginalDirection, type CreativePlanInput } from "@/domain/research";
 import * as research from "./research-operations";
 import snapshot from "@/mocks/names-beyond.json";
 import { workflow } from "@/mocks/workflow";
@@ -171,6 +171,7 @@ export class MockProjectService implements ProjectService {
   async confirmMaterialAudit(id: string, revision: number, note: string) { return this.mutate(id, revision, (p) => research.confirmAudit(p.research, note)); }
   async chooseMechanism(id: string, revision: number, input: MechanismChoice) { return this.mutate(id, revision, (p) => research.chooseMechanism(p.research, input)); }
   async saveDirection(id: string, revision: number, input: OriginalDirection) { return this.mutate(id, revision, (p) => research.saveDirection(p.research, input)); }
+  async saveCreativePlan(id: string, revision: number, input: CreativePlanInput) { return this.mutate(id, revision, (p) => research.saveCreativePlan(p.research, input)); }
 
   async getWorkflow() { return structuredClone(workflow); }
   async getBackup() { return this.storage.read(); }

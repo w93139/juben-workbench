@@ -1,7 +1,7 @@
 import type { SourceImportPreview } from "@/domain/source-import";
 import type { OutputSettingsInput, PickedOutputDirectory } from "@/domain/output-settings";
 import type { CreateProjectInput, DecisionStatus, DemoContent, Project, UpdateProjectInput, WorkflowStage } from "@/domain/models";
-import type { SourceFileInput, IssueResolution, MechanismChoice, OriginalDirection, ResearchCatalog } from "@/domain/research";
+import type { SourceFileInput, IssueResolution, MechanismChoice, OriginalDirection, ResearchCatalog, CreativePlanInput } from "@/domain/research";
 
 export type ServiceErrorCode = "NOT_FOUND" | "READ_ONLY" | "CONFLICT" | "INVALID_INPUT" | "STORAGE_UNAVAILABLE" | "STORAGE_CORRUPT" | "STORAGE_VERSION" | "CANCELLED" | "DIRECTORY_UNAVAILABLE";
 
@@ -47,6 +47,7 @@ export interface ProjectService {
   confirmMaterialAudit(id: string, revision: number, note: string): Promise<Project>;
   chooseMechanism(id: string, revision: number, input: MechanismChoice): Promise<Project>;
   saveDirection(id: string, revision: number, input: OriginalDirection): Promise<Project>;
+  saveCreativePlan(id: string, revision: number, input: CreativePlanInput): Promise<Project>;
   getBackup(): Promise<string | null>;
   resetLocalProjects(expectedBackup: string): Promise<void>;
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import type { Project } from "@/domain/models";
 import { outputPath, outputSettingsInputSchema, outputStages, type OutputStage } from "@/domain/output-settings";
 import { useResearchAction, useResearchDraft } from "./research/common";
@@ -8,6 +9,10 @@ import { useService } from "./providers";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { ErrorMessage } from "./shared";
+
+export function OutputLocation({ project, stage }: { project: Project; stage: OutputStage }) {
+  return <details className="output-location"><summary><span>更改输出位置</span><small>{outputPath(project.outputSettings, stage) ?? "输出位置未设置 · 当前保存在此浏览器"}</small></summary><OutputSettingsPanel project={project} stage={stage} /></details>;
+}
 
 export function OutputSettingsPanel({ project, stage }: { project: Project; stage: OutputStage }) {
   const service = useService();
@@ -43,8 +48,12 @@ export function OutputSettingsPanel({ project, stage }: { project: Project; stag
       {pickerNote && <p role="status" className="field-hint">{pickerNote}</p>}
       <label className="field-label" htmlFor="output-root">项目总输出目录</label>
       {draft.directory ? <><Input id="output-root" value={`所选文件夹：${draft.directory.name}`} readOnly disabled={busy} /><p className="field-hint">已记住所选文件夹。浏览器未提供完整本机路径；真正导出时会再检查是否允许保存。</p></> : <Input id="output-root" value={draft.rootPath} placeholder="也可手动填写，例如 /Users/你的用户名/Desktop/剧本输出" maxLength={512} disabled={busy} onChange={(event) => { action.touch(); change({ ...draft, rootPath: event.target.value }); }} />}
+      <details className="archive-details mt-4"><summary>高级：阶段子目录</summary>
       <label className="field-label mt-4" htmlFor="output-folder">本阶段子目录</label>
       <Input id="output-folder" value={draft.folder} maxLength={120} disabled={busy} onChange={(event) => { action.touch(); change({ ...draft, folder: event.target.value }); }} />
+      <p className="field-hint mt-3">需要分别设置其他输出时，可切换对应位置。切换前请保存当前输入。</p>
+      <div className="output-stage-links">{Object.entries(outputStages).map(([id, item]) => <Link key={id} aria-current={id === stage ? "page" : undefined} href={`/projects/${project.id}/stages/${id}`}>{item.label}</Link>)}</div>
+      </details>
       {!valid.success && <p role="alert" className="field-hint">{valid.error.issues[0]?.message}</p>}
       <p className="field-hint mt-4">计划输出位置（输入预览）：</p><p className="output-path" data-testid="output-path-preview">{valid.success ? planned ?? "未设置本机目录，当前内容保存在此浏览器的项目中。" : "请先修正上面的路径。"}</p>
       <Button className="mt-4" disabled={busy || !valid.success}>{action.isPending ? "正在保存路径…" : "保存输出路径"}</Button>

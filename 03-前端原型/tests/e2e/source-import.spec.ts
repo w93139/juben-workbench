@@ -7,7 +7,7 @@ async function create(page: Page) {
   await page.goto("/projects/new?start=research");
   await page.getByLabel("项目名称", { exact: false }).fill("多格式素材项目");
   await page.getByRole("button", { name: "创建并进入材料中心" }).click();
-  await expect(page.getByRole("heading", { name: "材料中心", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "准备材料", exact: true })).toBeVisible();
 }
 
 for (const width of [1440, 390]) test(`整文件夹自动导入、多格式、大文件和重复略过 ${width}px`, async ({ page }, testInfo) => {
@@ -89,7 +89,7 @@ test("自动导入可取消后重试，离开页面中断，原始样例保持�
   const projectUrl = page.url();
   const saved = await page.evaluate((key) => localStorage.getItem(key), storageKey);
   await page.getByLabel("选择参考文件", { exact: true }).setInputFiles({ name: "离开未保存.pdf", mimeType: "application/pdf", buffer: Buffer.from("占位") });
-  await page.getByRole("link", { name: "02 参考本拆解", exact: false }).click();
+  await page.getByRole("link", { name: "02 确定创作方案", exact: false }).click();
   await page.goto(projectUrl);
   await expect(page.getByText("2份已登记", { exact: true })).toBeVisible();
   expect(await page.evaluate((key) => localStorage.getItem(key), storageKey)).toBe(saved);

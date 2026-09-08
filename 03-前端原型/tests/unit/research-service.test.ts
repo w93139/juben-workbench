@@ -162,3 +162,59 @@ describe("A阶段数据兼容", () => {
     expect((await service.get(project.id)).research.documents).toHaveLength(1);
   });
 });
+
+describe("集中创作方案", () => {
+  const choices = [{ id: "P03" as const, choice: "adapt" as const, reason: "重建私人信息触发条件" }];
+
+  it("研究前允许保存不完整方向草稿，刷新后保留，不能冒充确认", async () => {
+    const { storage, service, project } = await setup();
+    const direction = { ...defaultDirection, genre: "", deduction: 10, idea: "先记录六人故事", players: 6 };
+    const p = await service.saveCreativePlan(project.id, project.revision, { choices, direction, confirm: false });
+    expect(p.research).toMatchObject({ choices, direction, directionConfirmed: false });
+    expect(p.revision).toBe(project.revision + 1);
+    const raw = storage.raw;
+    expect((await new MockProjectService(storage).get(p.id)).research.direction).toEqual(direction);
+    expect(storage.raw).toBe(raw);
+    expect(JSON.parse(raw!).schemaVersion).toBe(3);
+    await expect(service.saveCreativePlan(p.id, p.revision, { choices, direction: defaultDirection, confirm: true })).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(storage.raw).toBe(raw);
+  });
+
+  it("确认机制与方向只提交一个版本，材料变化保留方案但撤销确认", async () => {
+    const { service, project } = await setup();
+    let p = await audit(service, project);
+    p = await finish(service, await service.startResearchJob(p.id, p.revision, "analysis"));
+    const revision = p.revision;
+    p = await service.saveCreativePlan(p.id, p.revision, { choices, direction: defaultDirection, confirm: true });
+    expect(p.revision).toBe(revision + 1);
+    expect(p.research).toMatchObject({ choices, direction: defaultDirection, directionConfirmed: true });
+    p = await service.resolveOCRIssue(p.id, p.revision, { id: "ocr-time", status: "retained", resolution: "时间仍待确认" });
+    expect(p.research).toMatchObject({ choices, direction: defaultDirection, directionConfirmed: false });
+  });
+
+  it("非法方向、重复取舍、未采用机制、冲突和写入失败都不部分保存", async () => {
+    const { storage, service, project } = await setup();
+    let p = await audit(service, project);
+    p = await finish(service, await service.startResearchJob(p.id, p.revision, "analysis"));
+    p = await service.saveCreativePlan(p.id, p.revision, { choices, direction: defaultDirection, confirm: true });
+    const raw = storage.raw;
+    for (const input of [
+      { choices, direction: { ...defaultDirection, genre: "" }, confirm: true },
+      { choices, direction: { ...defaultDirection, deduction: 99 }, confirm: true },
+      { choices: [choices[0], choices[0]], direction: defaultDirection, confirm: false },
+      { choices: [{ ...choices[0], choice: "omit" as const }], direction: defaultDirection, confirm: true },
+    ]) {
+      await expect(service.saveCreativePlan(p.id, p.revision, input)).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      expect(storage.raw).toBe(raw);
+    }
+    const changed = { choices: [{ ...choices[0], reason: "新的理由" }], direction: { ...defaultDirection, genre: "新题材" }, confirm: false };
+    await expect(service.saveCreativePlan(p.id, p.revision - 1, changed)).rejects.toMatchObject({ code: "CONFLICT" });
+    storage.fail = true;
+    await expect(service.saveCreativePlan(p.id, p.revision, changed)).rejects.toMatchObject({ code: "STORAGE_UNAVAILABLE" });
+    expect(storage.raw).toBe(raw);
+    expect((await service.get(p.id)).research.directionConfirmed).toBe(true);
+    storage.fail = false;
+    p = await service.saveCreativePlan(p.id, p.revision, changed);
+    expect(p.research).toMatchObject({ choices: changed.choices, direction: changed.direction, directionConfirmed: false });
+  });
+});

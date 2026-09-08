@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { inspectSourceImport, sourceImportPolicy, sourceKinds } from "@/domain/source-import";
 import rawCatalog from "@/mocks/research.json";
-import { directionSchema, issueResolutionSchema, mechanismChoiceSchema, researchCatalogSchema, sourceFileInputSchema, type IssueResolution, type MechanismChoice, type OriginalDirection, type ResearchState, type SourceFileInput } from "@/domain/research";
+import { creativePlanInputSchema, directionSchema, issueResolutionSchema, mechanismChoiceSchema, researchCatalogSchema, sourceFileInputSchema, type CreativePlanInput, type IssueResolution, type MechanismChoice, type OriginalDirection, type ResearchState, type SourceFileInput } from "@/domain/research";
 import { ServiceError } from "./contracts";
 
 export const researchCatalog = researchCatalogSchema.parse(rawCatalog);
@@ -107,4 +107,20 @@ export function saveDirection(state: ResearchState, input: OriginalDirection) {
   analysisReady(state);
   if (!state.choices.some((c) => c.choice !== "omit")) invalid("请至少保留或改造一个有依据的机制，再确定原创方向。");
   state.direction = validate(directionSchema, input); state.directionConfirmed = true;
+}
+
+// Validate the complete plan before assigning either half. The service commits
+// this operation under one revision check and one storage write.
+export function saveCreativePlan(state: ResearchState, input: CreativePlanInput) {
+  idle(state);
+  const value = validate(creativePlanInputSchema, input);
+  if (value.confirm) {
+    analysisReady(state);
+    if (state.auditRevision !== state.materialRevision || state.issues.some((issue) => issue.status === "open")) invalid("请先完成当前材料审计，明确保留缺口后再确认方案。");
+    if (!value.choices.some((choice) => choice.choice !== "omit")) invalid("请至少采用一个机制；也可以先保存草稿。");
+    validate(directionSchema, value.direction);
+  }
+  state.choices = value.choices;
+  state.direction = value.direction;
+  state.directionConfirmed = value.confirm;
 }
