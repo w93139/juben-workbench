@@ -199,3 +199,12 @@
 - Scope：根README／AGENTS／.gitignore、scripts同步工具及测试、Mac入口、01需求目录05—07说明、PRD追加。初始化本地Git及新远程，不修改应用业务文件和存储。
 - Verify：Python语法与unittest；隔离本地bare仓库测试同步、重复、失败与远程冲突、危险文件和私有范围保护；拟上传文件清单与常见凭证检查；首次push后gh核对private及远程HEAD，再克隆到临时目录验证文件齐备；独立只读复审。
 - Risks/assumptions：用户“后端数据”当前实际只有类型、Mock和前端服务接口；已经询问范围和同步时机，先采用保守的私有代码仓库和每轮验证后同步，不声称用户已回复或浏览器数据已备份。仓库中含必要演示故事摘要，完整原材料保持本机。
+
+### GitHub同步与计划验证
+
+- 真实远程已创建：w93139/juben-workbench，Private，默认main；本地使用账号noreply邮箱，认证由GitHub CLI密钥环处理，无密钥写入仓库。
+- Python编译检查、Mac入口zsh语法、git diff --cached --check通过；最终8项隔离bare Git集成测试通过（5.996秒）。首次、重复、第二次更新、只检查不写、推送失败重试、远程领先保护、私有目标与push地址、范围和凭证、未推送历史均覆盖。
+- 独立审查发现push.followTags用户配置会附带本地标签；新增回归先失败，再以--no-follow-tags修正。独立复审8/8通过（5.86秒），Ready，无遗留Blocker／Important。
+- 首次暂存88项，常见凭证与敏感文件检查通过。git check-ignore验证agent-blueprint、完整原参考目录、依赖、构建和测试产物被排除；应用业务和浏览器数据未修改。
+- 初始版本bf298a9647eeca2b544f1d8c56a18a222887631b已实际推送；远程只有main，没有额外标签。重新从GitHub克隆到独立临时目录，88个文件哈希全部一致，排除目录未出现，Mock可解析，Mac入口可执行；临时目录已清理。
+- GitHub同步规则、手动入口、LiteLLM所在F3后端计划和5项人工验收清单已写入仓库。浏览器创作状态与真实数据库未备份，不能以代码同步冒充。
