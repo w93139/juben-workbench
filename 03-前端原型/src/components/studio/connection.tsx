@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Download, FileText, LoaderCircle, Settings2, Square } from "lucide-react";
+import { Download, FileText, LoaderCircle, RefreshCw, Settings2, Square } from "lucide-react";
 import { MODEL_SHORTLIST, MODEL_SHORTLIST_VERSION } from "@/domain/model-shortlist";
 import type { SafeStudioSettings } from "@/server/studio-settings";
 import { evaluationViewSchema, MODEL_RESPONSE_POLICY_VERSION, MODEL_EVALUATION_TASK_VERSION, evaluationSummary, exclusionExplanation, priceLabel, type EvaluationView } from "@/domain/model-evaluation";
@@ -31,25 +31,45 @@ export function StudioConnection() {
   const [draft, setDraft] = useState<Draft>({ baseUrl: ANT_BASE_URL, mainModel: "", reviewA: "", reviewB: "" });
   const [apiKey, setApiKey] = useState(""); const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(false); const [busy, setBusy] = useState(false); const [saved, setSaved] = useState(false);
+  const [syncTick, setSyncTick] = useState(0); const [syncError, setSyncError] = useState(false); const [lastSyncedAt, setLastSyncedAt] = useState(0);
+  const acceptView = useCallback((next: EvaluationView) => setEvaluation(current => !current || next.viewRevision >= current.viewRevision ? next : current), []);
   const [report, setReport] = useState<EvaluationReport | null>(null); const [showReport, setShowReport] = useState(false);
 
-  function applyConnection({ safe, view }: Awaited<ReturnType<typeof fetchConnection>>) {
-    setSettings(safe); setDraft({ baseUrl: safe.baseUrl || ANT_BASE_URL, mainModel: safe.mainModel, reviewA: safe.reviewA, reviewB: safe.reviewB }); setEvaluation(view);
-  }
+  const applyConnection = useCallback(({ safe, view }: Awaited<ReturnType<typeof fetchConnection>>) => {
+    setSettings(safe); setDraft({ baseUrl: safe.baseUrl || ANT_BASE_URL, mainModel: safe.mainModel, reviewA: safe.reviewA, reviewB: safe.reviewB }); acceptView(view); setLastSyncedAt(Date.now());
+  }, [acceptView]);
   useEffect(() => {
     if (!open) return;
     const abort = new AbortController();
-    void fetchConnection(abort.signal).then(applyConnection).catch(failure => { if (!abort.signal.aborted) setError(failure); }).finally(() => { if (!abort.signal.aborted) setLoading(false); });
+    void fetchConnection(abort.signal).then(value => { if (!abort.signal.aborted) applyConnection(value); }).catch(failure => { if (!abort.signal.aborted) setError(failure); }).finally(() => { if (!abort.signal.aborted) setLoading(false); });
     return () => abort.abort();
-  }, [open]);
+  }, [open, applyConnection]);
   useEffect(() => {
-    if (!open || !evaluation || !["running", "cancelling"].includes(evaluation.status)) return;
-    const timer = window.setInterval(() => void localJson("/api/studio/evaluation").then(value => {
-      const next = evaluationViewSchema.parse(value); setEvaluation(next);
-      if (next.status === "completed") { void fetchConnection().then(applyConnection).catch(setError); void cache.invalidateQueries({ queryKey: ["studio-capability"] }); }
-    }).catch(setError), 1200);
-    return () => window.clearInterval(timer);
-  }, [open, evaluation, cache]);
+    if (!open || busy || loading) return;
+    const abort = new AbortController(); let pending = false;
+    async function refresh() {
+      if (pending || abort.signal.aborted) return;
+      pending = true;
+      try {
+        const next = evaluationViewSchema.parse(await localJson("/api/studio/evaluation", { signal: abort.signal, cache: "no-store" }));
+        if (abort.signal.aborted) return;
+        // Older or duplicate polling snapshots must not undo a newer action.
+        setEvaluation(current => !current || next.viewRevision > current.viewRevision ? next : current);
+        setSyncError(false); setLastSyncedAt(Date.now());
+        if (next.status === "completed") {
+          const safe = await localJson("/api/studio/settings", { signal: abort.signal, cache: "no-store" }) as SafeStudioSettings;
+          if (!abort.signal.aborted) { setSettings(safe); void cache.invalidateQueries({ queryKey: ["studio-capability"] }); }
+        }
+      } catch { if (!abort.signal.aborted) setSyncError(true); }
+      finally { pending = false; }
+    }
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), ["running", "cancelling"].includes(evaluation?.status ?? "") ? 1200 : 3000);
+    const onFocus = () => void refresh();
+    const onVisibility = () => { if (document.visibilityState === "visible") void refresh(); };
+    window.addEventListener("focus", onFocus); document.addEventListener("visibilitychange", onVisibility);
+    return () => { abort.abort(); window.clearInterval(timer); window.removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", onVisibility); };
+  }, [open, busy, loading, evaluation?.status, cache, syncTick]);
   const locked = loading || busy || settings?.environmentLocked === true || evaluation?.status === "running" || evaluation?.status === "cancelling";
   async function save(event: React.FormEvent) {
     event.preventDefault(); if (locked || !settings) return;
@@ -64,7 +84,7 @@ export function StudioConnection() {
     setBusy(true); setError(null); setSaved(false);
     try {
       const next = evaluationViewSchema.parse(await localJson("/api/studio/evaluation", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: value }) }));
-      setEvaluation(next);
+      acceptView(next); setLastSyncedAt(Date.now());
     } catch (failure) { setError(failure); } finally { setBusy(false); }
   }
   async function loadReport() {
@@ -76,7 +96,7 @@ export function StudioConnection() {
         latest = evaluationViewSchema.parse(await localJson("/api/studio/evaluation"));
         value = await localJson("/api/studio/evaluation/report") as EvaluationReport;
       }
-      setEvaluation(latest); setReport(value); setShowReport(value.viewRevision === latest.viewRevision); return value;
+      acceptView(latest); setReport(value); setShowReport(value.viewRevision === latest.viewRevision); return value;
     }
     catch (failure) { setError(failure); return null; } finally { setBusy(false); }
   }
@@ -94,6 +114,7 @@ export function StudioConnection() {
   const legacyRules = !!evaluation && evaluation.taskVersion !== MODEL_EVALUATION_TASK_VERSION && hasRecordedCost;
   const canPrepare = legacyRules && !!evaluation && ["blocked", "failed", "cancelled"].includes(evaluation.status);
   const canPrepareResearch = evaluation && ["blocked", "failed", "cancelled"].includes(evaluation.status) && evaluation.taskVersion === MODEL_EVALUATION_TASK_VERSION && evaluation.candidatePolicyVersion !== MODEL_SHORTLIST_VERSION && !["usage", "budget"].includes(evaluation.lastFailure?.category ?? "");
+  const priceExpired = evaluation?.status === "discovered" && (!evaluation.priceCheckedAt || lastSyncedAt - evaluation.priceCheckedAt > 10 * 60 * 1000);
   const displayPhase = evaluation ? evaluationSummary(evaluation) : "";
   const partialModels = evaluation ? [...new Set(evaluation.taskResults.map(item => item.modelId))].filter(id => !evaluation.scores.some(item => item.modelId === id)) : [];
   async function downloadArchivedReport() {
@@ -108,7 +129,7 @@ export function StudioConnection() {
 
 
   return <>
-    <Button size="sm" variant="outline" onClick={() => { setSettings(null); setEvaluation(null); setReport(null); setShowReport(false); setLoading(true); setError(null); setSaved(false); setApiKey(""); setOpen(true); }}><Settings2 size={15} />配置模型</Button>
+    <Button size="sm" variant="outline" onClick={() => { setSettings(null); setEvaluation(null); setReport(null); setShowReport(false); setLoading(true); setError(null); setSyncError(false); setSaved(false); setApiKey(""); setOpen(true); }}><Settings2 size={15} />配置模型</Button>
     <Dialog open={open} onOpenChange={value => { if (busy) return; setOpen(value); if (!value) { setApiKey(""); setError(null); } }}><DialogContent className="sm:max-w-2xl"><DialogTitle>连接蚂蚁平台并自动选型</DialogTitle><DialogDescription>先保存连接，再读取候选模型。只有你点击“开始测评”后才会产生费用；工作台按平台公开价估算并保留安全余量。</DialogDescription>
       {loading ? <p role="status">正在读取连接设置…</p> : <div className="space-y-5">
         {settings?.environmentLocked && <p className="stage-callout">当前配置由服务端环境变量管理，页面只读。{!settings.configured && "环境变量尚不完整，请在服务端补齐。"}</p>}
@@ -132,14 +153,18 @@ export function StudioConnection() {
         </section>}
 
         {evaluation?.status !== "idle" && evaluation?.candidates.length ? <section className="space-y-3 rounded-xl border border-[var(--border)] p-4">
+          <div className="flex items-center justify-between gap-3"><p className="field-hint">窗口打开时自动同步最新状态</p><Button type="button" variant="outline" size="sm" disabled={busy || loading} onClick={() => setSyncTick(tick => tick + 1)}><RefreshCw size={14} />刷新状态</Button></div>
+          {syncError && <p role="alert" className="text-sm text-[var(--danger)]">暂时无法同步，下面是最后一次读取的状态；请检查本地服务或点击刷新状态。</p>}
           <div><p className="field-label">3 · 小样测评与自动分配</p><p className="field-hint mt-1">固定测试“结构拆解、原创方向、一致性审查”，不发送你的剧本；达到质量线后，同等表现优先费用更低的模型。当前计划含{evaluation.maximumCalls}道题（异常请求可能额外计费）；按当前公开价加安全余量，{evaluation.resumeCount ? "剩余调用" : "本轮"}最多预留{money(evaluation.plannedMaximumFen)}，工作台估算限额{money(evaluation.budgetCapFen)}。</p></div>
+          {evaluation.status === "discovered" && <div role="status" className="rounded-lg border border-[var(--border)] bg-[#f1eee8] p-3"><strong>新计划已准备，尚未开始</strong><p className="mt-1 text-sm">已保留 {evaluation.completedCalls} 道题的结果，剩余 {Math.max(0, evaluation.maximumCalls - evaluation.completedCalls)} 道待验证。下方历史记录不代表新计划失败。</p></div>}
           {evaluation.candidatePolicyVersion === MODEL_SHORTLIST_VERSION ? <p className="field-hint">本轮采用研究清单。首批最多3个模型，只在需要时换入清单内的唯一替补；已有同规则结果保留。</p> : <p className="field-hint">本轮沿用先前的候选计划。后续免费核对候选时使用研究清单，已完成结果保留。</p>}
           <div role="progressbar" aria-label="模型测评完成进度" aria-valuemin={0} aria-valuemax={evaluation.maximumCalls} aria-valuenow={evaluation.completedCalls} aria-valuetext={`已记录${evaluation.completedCalls}/${evaluation.maximumCalls}道题`} className="h-2 overflow-hidden rounded-full bg-[#e3ded6]"><div className="h-full bg-[#333333] transition-all" style={{ width: `${evaluation.maximumCalls ? Math.min(100, evaluation.completedCalls / evaluation.maximumCalls * 100) : 0}%` }} /></div>
           {evaluation.status === "running" && <p className="flex items-center gap-2 text-sm"><LoaderCircle aria-hidden="true" size={16} className="animate-spin motion-reduce:animate-none" />正在等待本题回答，完成后更新进度。</p>}
           <p role="status" className="text-sm">{displayPhase} · 已记录 {evaluation.completedCalls}/{evaluation.maximumCalls} 道题 · 已核算 {money(evaluation.spentFen)}{evaluation.uncertainFen ? ` · 待核对 ${money(evaluation.uncertainFen)}` : ""}</p>
           {evaluation.status === "discovered" && (evaluation.responsePolicyVersion !== MODEL_RESPONSE_POLICY_VERSION || evaluation.taskVersion !== MODEL_EVALUATION_TASK_VERSION) && <div className="space-y-2"><p className="field-hint">答题长度已升级，需要免费刷新一次候选价格和最高费用计划。</p><Button type="button" variant="outline" disabled={busy} onClick={() => void action("discover")}>更新测评计划（免费）</Button></div>}
+          {priceExpired && <p className="field-hint">报价已超过10分钟，请先免费刷新候选与费用，再开始测评。刷新不会调用模型。</p>}
           {evaluation.status === "discovered" && evaluation.carriedBudget && <Button type="button" variant="outline" disabled={busy} onClick={() => void action("prepare")}>刷新候选与费用（免费）</Button>}
-          {evaluation.status === "discovered" && evaluation.responsePolicyVersion === MODEL_RESPONSE_POLICY_VERSION && evaluation.taskVersion === MODEL_EVALUATION_TASK_VERSION && <Button type="button" disabled={busy} onClick={() => void action("start")}>开始受限测评</Button>}
+          {evaluation.status === "discovered" && evaluation.responsePolicyVersion === MODEL_RESPONSE_POLICY_VERSION && evaluation.taskVersion === MODEL_EVALUATION_TASK_VERSION && <Button type="button" disabled={busy || !!priceExpired || syncError} onClick={() => void action("start")}>开始受限测评</Button>}
           {!legacyRules && canUpgradeTruncated && <div className="space-y-2"><p className="field-hint">这轮所有候选共用了旧版每题900 Token上限，所以多个模型会出现相同的length提示。它表示回答被提前截断，不是模型损坏。新版提供4096 Token；继续后仍无法完整回答的候选会自动跳过并替换。</p><Button type="button" disabled={busy} onClick={() => void action("resume")}>{busy ? "正在核对…" : "使用新版长度继续测评"}</Button></div>}
           {!legacyRules && !canUpgradeTruncated && evaluation.status === "blocked" && evaluation.resumeAllowed && evaluation.completedCalls < evaluation.maximumCalls && evaluation.resumeCount < 3 && <div className="space-y-2"><p className="field-hint">已完成题目不会重测。点击后先免费核对候选与价格，再继续剩余付费调用；真正不兼容的候选会自动跳过。</p><Button type="button" disabled={busy} onClick={() => void action("resume")}>{busy ? "正在核对…" : "核对价格并继续测评"}</Button></div>}
           {!canPrepareResearch && !legacyRules && !canUpgradeTruncated && evaluation.status === "blocked" && !evaluation.resumeAllowed && <p className="field-hint">本次用量、费用或候选数量无法继续安全核对，已停止自动调用，避免重复扣费。</p>}
@@ -149,7 +174,7 @@ export function StudioConnection() {
           {evaluation.archivedViewRevision != null && <div className="space-y-2"><p className="field-hint">费用包含历史测评。准备计划和下载报告均不调用模型。</p><Button variant="outline" disabled={busy} onClick={() => void downloadArchivedReport()}>下载上一轮报告</Button></div>}
           {!!partialModels.length && <div className="space-y-2">{partialModels.map(id => <div className="rounded-lg border border-[var(--border)] p-3 text-sm" key={id}><strong>{roleName(id)} · 部分完成 {evaluation.taskResults.filter(item => item.modelId === id).length}/3 题</strong><p className="field-hint">答案不完整或后续调用未完成，暂不合成总分。</p></div>)}</div>}
           {!!evaluation.scores.length && <div className="space-y-2">{evaluation.scores.map(score => <div className="rounded-lg bg-[var(--muted)] p-3 text-sm" key={score.modelId}><div className="flex items-center justify-between gap-3"><span className="break-all">{roleName(score.modelId)}</span><strong>{score.total}分（{legacyRules ? "旧规则记录" : "三题已完成"}） · {money(score.costFen)}</strong></div><p className="field-hint mt-1">结构 {score.structure} · 证据 {score.evidence} · 原创 {score.originality} · 格式 {score.format} · {(score.latencyMs / 1000).toFixed(1)}秒 · {score.promptTokens + score.completionTokens} Token{score.usageEstimated ? "（上限估算）" : ""}</p><p className="field-hint mt-1">{score.notes.join("；")}</p></div>)}</div>}
-          {!!evaluation.excludedModels.length && <div className="stage-callout"><strong>未完成与历史记录</strong>{evaluation.excludedModels.map(item => <p className="mt-1" key={item.modelId}>{roleName(item.modelId)}：{exclusionExplanation(item, evaluation)}</p>)}</div>}
+          {!!evaluation.excludedModels.length && (evaluation.archivedViewRevision != null && evaluation.startedAt == null ? <details className="stage-callout"><summary className="cursor-pointer">查看历史未完成记录（不属于本次新调用）</summary>{evaluation.excludedModels.map(item => <p className="mt-1" key={item.modelId}>{roleName(item.modelId)}：{exclusionExplanation(item, evaluation)}</p>)}</details> : <div className="stage-callout"><strong>未完成与历史记录</strong>{evaluation.excludedModels.map(item => <p className="mt-1" key={item.modelId}>{roleName(item.modelId)}：{exclusionExplanation(item, evaluation)}</p>)}</div>)}
           {evaluation.allocation && <div className="stage-callout"><strong>自动分配完成</strong><p className="mt-2">主模型：{roleName(evaluation.allocation.mainModel)}</p><p>审查 A：{roleName(evaluation.allocation.reviewA)}</p><p>审查 B：{roleName(evaluation.allocation.reviewB)}</p></div>}
           {evaluation.error && !canPrepare && <p className="text-sm text-[var(--danger)]">{evaluation.error}</p>}
           {!['idle','discovered','running','cancelling'].includes(evaluation.status) && (evaluation.completedCalls > 0 || evaluation.excludedModels.length > 0 || evaluation.spentFen > 0 || evaluation.uncertainFen > 0 || evaluation.lastFailure != null) && <div className="space-y-3 border-t border-[var(--border)] pt-3"><div className="flex flex-wrap gap-2"><Button type="button" variant="outline" disabled={busy} onClick={() => report && report.viewRevision === evaluation.viewRevision ? setShowReport(value => !value) : void loadReport()}><FileText size={15} />{showCurrentReport ? "收起测评报告" : "查看测评报告"}</Button><Button type="button" variant="outline" disabled={busy} onClick={() => void downloadReport()}><Download size={15} />下载报告（Markdown）</Button></div>{showCurrentReport && <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-lg bg-[var(--muted)] p-3 text-xs leading-6">{report.markdown}</pre>}</div>}
