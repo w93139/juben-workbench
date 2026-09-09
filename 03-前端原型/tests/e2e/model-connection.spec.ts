@@ -16,7 +16,7 @@ test("先安全保存蚂蚁连接，再免费读取候选模型；不会自动�
   await page.route("**/api/studio/evaluation", async route => {
     if (route.request().method() === "GET") return route.fulfill({ json: idle });
     const body = route.request().postDataJSON(); expect(body.action).toBe("discover"); discoveryCalls++;
-    return route.fulfill({ json: { ...idle, status: "discovered", phase: "候选模型已就绪，尚未产生模型费用", priceCheckedAt: Date.now(), candidates: [candidate("model-a", "A", 1), candidate("model-b", "B", 2), candidate("model-c", "C", 3)], maximumCalls: 9, plannedMaximumFen: 90, responsePolicyVersion: "openai-json/2-4096" } });
+    return route.fulfill({ json: { ...idle, status: "discovered", phase: "候选模型已就绪，尚未产生模型费用", priceCheckedAt: Date.now(), candidates: [candidate("model-a", "A", 1), candidate("model-b", "B", 2), candidate("model-c", "C", 3)], maximumCalls: 9, plannedMaximumFen: 90, responsePolicyVersion: "openai-json/3-model-limits" } });
   });
   await page.route(/\/api\/studio\/(analyze|blueprint|review)$/, route => { contentCalls++; return route.abort(); });
   await page.goto("/"); await seedProject(page, "连接验收"); await page.getByRole("button", { name: "配置模型", exact: true }).click();
@@ -56,7 +56,7 @@ test("旧版length截断会解释为答题空间不足，并提供新版长度�
   await page.route("**/api/studio/evaluation", async route => {
     if (route.request().method() === "GET") return route.fulfill({ json: blocked });
     expect(route.request().postDataJSON()).toEqual({ action: "resume" });
-    return route.fulfill({ status: 202, json: { ...blocked, status: "running", phase: "已加长答题空间，正在重新测评此前被截断的候选", excludedModels: [], resumeCount: 0, responsePolicyVersion: "openai-json/2-4096", error: null } });
+    return route.fulfill({ status: 202, json: { ...blocked, status: "running", phase: "已加长答题空间，正在重新测评此前被截断的候选", excludedModels: [], resumeCount: 0, responsePolicyVersion: "openai-json/3-model-limits", error: null } });
   });
   await page.goto("/"); await page.getByRole("button", { name: "配置模型", exact: true }).click(); const dialog = page.getByRole("dialog");
   await expect(dialog.getByText(/回答达到旧版长度上限，正文被截断；不是模型损坏/)).toBeVisible();
@@ -72,7 +72,7 @@ test("旧轮停下后显示历史评分限制，免费规划不开始调用且�
   await page.route("**/api/studio/evaluation", async route => {
     if (route.request().method() === "GET") return route.fulfill({ json: blocked });
     expect(route.request().postDataJSON()).toEqual({ action: "prepare" }); prepares++;
-    return route.fulfill({ json: { ...blocked, status: "discovered", taskVersion: "juben-model-eval/1.1", responsePolicyVersion: "openai-json/2-4096", archivedViewRevision: 27, taskResults: [], excludedModels: [], completedCalls: 0, maximumCalls: 9, priceCheckedAt: Date.now(), phase: "修订版测评计划已准备" } });
+    return route.fulfill({ json: { ...blocked, status: "discovered", taskVersion: "juben-model-eval/1.1", responsePolicyVersion: "openai-json/3-model-limits", archivedViewRevision: 27, taskResults: [], excludedModels: [], completedCalls: 0, maximumCalls: 9, priceCheckedAt: Date.now(), phase: "修订版测评计划已准备" } });
   });
   await page.goto("/"); await page.getByRole("button", { name: "配置模型", exact: true }).click(); const dialog = page.getByRole("dialog");
   await expect(dialog.getByText(/本轮已停止/)).toBeVisible(); await expect(dialog.getByText(/部分完成 1\/3/)).toBeVisible();
@@ -109,7 +109,7 @@ test("停止的窗口自动显示外部准备的新计划，旧响应不能覆�
   let posts = 0, reads = 0;
   const models = [candidate("qwen3.8-max", "Qwen", 1), candidate("deepseek-v4-pro-0813", "DeepSeek", 2), candidate("kimi-k3", "Kimi", 3)];
   const blocked = { ...idle, status: "blocked", viewRevision: 42, candidates: models, completedCalls: 3, maximumCalls: 9, spentFen: 91, uncertainFen: 63, error: "旧轮服务错误", phase: "本轮已停止" };
-  const ready = { ...blocked, status: "discovered", viewRevision: 43, error: null, phase: "新计划已就绪", responsePolicyVersion: "openai-json/2-4096", candidatePolicyVersion: "script-research/2026-09-09", priceCheckedAt: Date.now(), archivedViewRevision: 42, carriedBudget: { spentFen: 91, uncertainFen: 63 }, excludedModels: [{ modelId: "lingdt", displayName: "历史候选", reason: "旧轮回答被截断", costFen: 1, usageEstimated: false, occurredAt: Date.now() }] };
+  const ready = { ...blocked, status: "discovered", viewRevision: 43, error: null, phase: "新计划已就绪", responsePolicyVersion: "openai-json/3-model-limits", candidatePolicyVersion: "script-research/2026-09-09", priceCheckedAt: Date.now(), archivedViewRevision: 42, carriedBudget: { spentFen: 91, uncertainFen: 63 }, excludedModels: [{ modelId: "lingdt", displayName: "历史候选", reason: "旧轮回答被截断", costFen: 1, usageEstimated: false, occurredAt: Date.now() }] };
   let view: object = blocked;
   await page.route("**/api/studio/settings", route => route.fulfill({ json: { baseUrl: "https://maas-api.antdigital.com/v1", mainModel: "", reviewA: "", reviewB: "", hasApiKey: true, providerConfigured: true, configured: false, source: "local", revision: 1, environmentLocked: false } }));
   await page.route("**/api/studio/evaluation", route => { reads++; if (route.request().method() !== "GET") posts++; return route.fulfill({ json: view }); });
@@ -132,7 +132,7 @@ test("停止的窗口自动显示外部准备的新计划，旧响应不能覆�
 
 test("报价过期明确提示免费刷新，回到页面同步而不开始收费", async ({ page }) => {
   let reads = 0;
-  let view: object = { ...idle, status: "discovered", viewRevision: 50, candidates: [candidate("qwen3.8-max", "Qwen", 1)], completedCalls: 3, maximumCalls: 9, responsePolicyVersion: "openai-json/2-4096", priceCheckedAt: Date.now() - 11 * 60 * 1000, archivedViewRevision: 42, carriedBudget: { spentFen: 91, uncertainFen: 63 } };
+  let view: object = { ...idle, status: "discovered", viewRevision: 50, candidates: [candidate("qwen3.8-max", "Qwen", 1)], completedCalls: 3, maximumCalls: 9, responsePolicyVersion: "openai-json/3-model-limits", priceCheckedAt: Date.now() - 11 * 60 * 1000, archivedViewRevision: 42, carriedBudget: { spentFen: 91, uncertainFen: 63 } };
   await page.route("**/api/studio/settings", route => route.fulfill({ json: { baseUrl: "https://maas-api.antdigital.com/v1", mainModel: "", reviewA: "", reviewB: "", hasApiKey: true, providerConfigured: true, configured: false, source: "local", revision: 1, environmentLocked: false } }));
   await page.route("**/api/studio/evaluation", route => { expect(route.request().method()).toBe("GET"); reads++; return route.fulfill({ json: view }); });
   await page.goto("/"); await page.getByRole("button", { name: "配置模型", exact: true }).click(); const dialog = page.getByRole("dialog");
@@ -142,4 +142,44 @@ test("报价过期明确提示免费刷新，回到页面同步而不开始收�
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect.poll(() => reads).toBeGreaterThan(before);
   await expect(dialog.getByRole("button", { name: "开始受限测评", exact: true })).toBeEnabled();
+});
+
+test("当前截断与中断给出免费修复入口，失败反馈在操作位置显示且不启动付费", async ({ page }) => {
+  const models = [candidate("qwen3.8-max", "Qwen", 1), candidate("deepseek-v4-pro-0813", "DeepSeek", 2), candidate("kimi-k3", "Moonshot", 3)];
+  let posts = 0;
+  const blocked = { ...idle, status: "blocked", connectionRevision: 1, candidates: models, candidatePolicyVersion: "script-research/2026-09-09", responsePolicyVersion: "openai-json/2-4096", spentFen: 96, uncertainFen: 122, completedCalls: 3, maximumCalls: 9, viewRevision: 48, lastFailure: { modelId: "kimi-k3", taskIndex: 0, category: "service", occurredAt: Date.now() }, error: "模型测评未完成；请检查蚂蚁平台额度和模型权限。" };
+  await page.route("**/api/studio/settings", route => route.fulfill({ json: { baseUrl: "https://maas-api.antdigital.com/v1", mainModel: "", reviewA: "", reviewB: "", hasApiKey: true, providerConfigured: true, configured: false, source: "local", revision: 1, environmentLocked: false } }));
+  await page.route("**/api/studio/evaluation", async route => {
+    if (route.request().method() === "GET") return route.fulfill({ json: blocked });
+    posts++; expect(route.request().postDataJSON().action).toBe("prepare");
+    return route.fulfill({ status: 409, json: { error: "候选价格暂时无法核对，未发起付费调用。" } });
+  });
+  await page.goto("/"); await page.getByRole("button", { name: "配置模型", exact: true }).click(); const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("button", { name: "核对价格并继续测评" })).toHaveCount(0);
+  await expect(dialog.getByText(/旧记录未保存具体异常/)).toBeVisible();
+  await dialog.getByRole("button", { name: "准备修复计划（免费）" }).click();
+  const feedback = dialog.locator('[role="alert"][tabindex="-1"]');
+  await expect(feedback).toBeVisible(); await expect(feedback).toBeFocused();
+  await expect(feedback).toContainText("候选价格暂时无法核对");
+  expect(posts).toBe(1); await expect(dialog.getByRole("button", { name: "开始受限测评" })).toHaveCount(0);
+});
+
+test("长推理请求显示已等待时间与上限，刷新不会触发第二次请求", async ({ page }) => {
+  let posts = 0;
+  await page.route("**/api/studio/settings", route => route.fulfill({ json: { baseUrl: "https://maas-api.antdigital.com/v1", mainModel: "", reviewA: "", reviewB: "", hasApiKey: true, providerConfigured: true, configured: false, source: "local", revision: 1, environmentLocked: false } }));
+  await page.route("**/api/studio/evaluation", route => {
+    if (route.request().method() === "POST") posts++;
+    return route.fulfill({ json: { ...idle, status: "running", phase: "正在测评 Kimi", candidates: [candidate("kimi-k3", "Moonshot", 1)], maximumCalls: 9, activeRequest: { modelId: "kimi-k3", startedAt: Date.now() - 91000, timeoutMs: 240000 } } });
+  });
+  await page.goto("/"); await page.getByRole("button", { name: "配置模型", exact: true }).click(); const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText(/已等待 9\d 秒 · 最长 240 秒/)).toBeVisible();
+  await expect(dialog.getByRole("progressbar")).toBeVisible(); expect(posts).toBe(0);
+});
+
+test("首次读取候选失败也在按钮附近显示错误，不要求先有候选", async ({ page }) => {
+  await page.route("**/api/studio/settings", route => route.fulfill({ json: { baseUrl: "https://maas-api.antdigital.com/v1", mainModel: "", reviewA: "", reviewB: "", hasApiKey: true, providerConfigured: true, configured: false, source: "local", revision: 1, environmentLocked: false } }));
+  await page.route("**/api/studio/evaluation", route => route.request().method() === "GET" ? route.fulfill({ json: idle }) : route.fulfill({ status: 502, json: { error: "无法读取候选清单，未进行付费测评。" } }));
+  await page.goto("/"); await page.getByRole("button", { name: "配置模型", exact: true }).click(); const dialog = page.getByRole("dialog");
+  await dialog.getByRole("button", { name: "读取候选模型（免费）" }).click();
+  const feedback = dialog.locator('[role="alert"][tabindex="-1"]'); await expect(feedback).toBeVisible(); await expect(feedback).toBeFocused(); await expect(feedback).toContainText("无法读取候选清单");
 });

@@ -4,6 +4,10 @@ import type { ProviderConnection } from "./studio-settings";
 import { LocalApiError } from "./local-security";
 import { RESEARCH_SELECTION_POLICY, type CandidateSelectionPolicy } from "@/domain/model-shortlist";
 
+export class CandidateAvailabilityError extends LocalApiError {
+  constructor() { super(409, "研究清单中可继续使用的候选不足三个（包含本轮或历史排除），未开始新的付费调用。请查看未完成记录；重新点击不会解决相同排除原因。"); }
+}
+
 const MAX_RESPONSE_BYTES = 2_000_000;
 const modelId = z.string().trim().min(1).max(200).refine(value => !/[\x00-\x20\x7f]/.test(value));
 const upstreamSchema = z.object({ data: z.array(z.object({ id: modelId }).passthrough()).max(1000) }).passthrough();
@@ -76,6 +80,6 @@ export async function discoverAntModels(connection: ProviderConnection, fetcher:
     const candidate = usable.find(item => item.id === id);
     if (candidate && !selected.some(item => item.id === id)) selected.push(candidate);
   }
-  if (selected.length < 3) throw new LocalApiError(409, "研究清单中缺少三个当前账号可用、格式受支持且价格明确的候选。不会扩大到其他模型或继续付费测评。");
+  if (selected.length < 3) throw new CandidateAvailabilityError();
   return selected;
 }

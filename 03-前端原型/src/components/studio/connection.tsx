@@ -1,11 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Download, FileText, LoaderCircle, RefreshCw, Settings2, Square } from "lucide-react";
 import { MODEL_SHORTLIST, MODEL_SHORTLIST_VERSION } from "@/domain/model-shortlist";
 import type { SafeStudioSettings } from "@/server/studio-settings";
-import { evaluationViewSchema, MODEL_RESPONSE_POLICY_VERSION, MODEL_EVALUATION_TASK_VERSION, evaluationSummary, exclusionExplanation, priceLabel, type EvaluationView } from "@/domain/model-evaluation";
+import { evaluationViewSchema, MODEL_RESPONSE_POLICY_VERSION, MODEL_EVALUATION_TASK_VERSION, evaluationSummary, evaluationErrorMessage, responseRepairModelIds, evaluationResponseProfile, exclusionExplanation, priceLabel, type EvaluationView } from "@/domain/model-evaluation";
 import { localJson } from "@/services/studio-client";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -30,6 +30,10 @@ export function StudioConnection() {
   const [evaluation, setEvaluation] = useState<EvaluationView | null>(null);
   const [draft, setDraft] = useState<Draft>({ baseUrl: ANT_BASE_URL, mainModel: "", reviewA: "", reviewB: "" });
   const [apiKey, setApiKey] = useState(""); const [error, setError] = useState<unknown>(null);
+  const [actionError, setActionError] = useState<unknown>(null);
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const actionFeedback = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (actionError) { actionFeedback.current?.focus(); actionFeedback.current?.scrollIntoView({ block: "nearest" }); } }, [actionError]);
   const [loading, setLoading] = useState(false); const [busy, setBusy] = useState(false); const [saved, setSaved] = useState(false);
   const [syncTick, setSyncTick] = useState(0); const [syncError, setSyncError] = useState(false); const [lastSyncedAt, setLastSyncedAt] = useState(0);
   const acceptView = useCallback((next: EvaluationView) => setEvaluation(current => !current || next.viewRevision >= current.viewRevision ? next : current), []);
@@ -81,11 +85,11 @@ export function StudioConnection() {
     } catch (failure) { setError(failure); } finally { setBusy(false); }
   }
   async function action(value: "discover" | "start" | "resume" | "prepare" | "cancel") {
-    setBusy(true); setError(null); setSaved(false);
+    setBusy(true); setError(null); setActionError(null); setPendingAction(value); setSaved(false);
     try {
       const next = evaluationViewSchema.parse(await localJson("/api/studio/evaluation", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: value }) }));
       acceptView(next); setLastSyncedAt(Date.now());
-    } catch (failure) { setError(failure); } finally { setBusy(false); }
+    } catch (failure) { setActionError(failure); } finally { setBusy(false); setPendingAction(null); }
   }
   async function loadReport() {
     setBusy(true); setError(null);
@@ -110,7 +114,8 @@ export function StudioConnection() {
   const failedLengthModel = evaluation?.lastFailure?.category === "response" && evaluation.lastFailure.modelId
     ? evaluation.excludedModels.find(item => item.modelId === evaluation.lastFailure?.modelId && /length|长度上限|被截断/i.test(item.reason) && item.costFen != null)
     : undefined;
-  const canUpgradeTruncated = evaluation?.status === "blocked" && evaluation.responsePolicyVersion !== MODEL_RESPONSE_POLICY_VERSION && evaluation.reservedFen === 0 && !!failedLengthModel;
+  const canRepairResponse = !!evaluation && responseRepairModelIds(evaluation).length > 0;
+  const canUpgradeTruncated = !canRepairResponse && evaluation?.status === "blocked" && evaluation.responsePolicyVersion !== MODEL_RESPONSE_POLICY_VERSION && evaluation.reservedFen === 0 && !!failedLengthModel;
   const legacyRules = !!evaluation && evaluation.taskVersion !== MODEL_EVALUATION_TASK_VERSION && hasRecordedCost;
   const canPrepare = legacyRules && !!evaluation && ["blocked", "failed", "cancelled"].includes(evaluation.status);
   const canPrepareResearch = evaluation && ["blocked", "failed", "cancelled"].includes(evaluation.status) && evaluation.taskVersion === MODEL_EVALUATION_TASK_VERSION && evaluation.candidatePolicyVersion !== MODEL_SHORTLIST_VERSION && !["usage", "budget"].includes(evaluation.lastFailure?.category ?? "");
@@ -129,7 +134,7 @@ export function StudioConnection() {
 
 
   return <>
-    <Button size="sm" variant="outline" onClick={() => { setSettings(null); setEvaluation(null); setReport(null); setShowReport(false); setLoading(true); setError(null); setSyncError(false); setSaved(false); setApiKey(""); setOpen(true); }}><Settings2 size={15} />配置模型</Button>
+    <Button size="sm" variant="outline" onClick={() => { setSettings(null); setEvaluation(null); setReport(null); setShowReport(false); setLoading(true); setError(null); setActionError(null); setSyncError(false); setSaved(false); setApiKey(""); setOpen(true); }}><Settings2 size={15} />配置模型</Button>
     <Dialog open={open} onOpenChange={value => { if (busy) return; setOpen(value); if (!value) { setApiKey(""); setError(null); } }}><DialogContent className="sm:max-w-2xl"><DialogTitle>连接蚂蚁平台并自动选型</DialogTitle><DialogDescription>先保存连接，再读取候选模型。只有你点击“开始测评”后才会产生费用；工作台按平台公开价估算并保留安全余量。</DialogDescription>
       {loading ? <p role="status">正在读取连接设置…</p> : <div className="space-y-5">
         {settings?.environmentLocked && <p className="stage-callout">当前配置由服务端环境变量管理，页面只读。{!settings.configured && "环境变量尚不完整，请在服务端补齐。"}</p>}
@@ -148,6 +153,8 @@ export function StudioConnection() {
           <details className="rounded-lg bg-[#f1eee8] p-3 text-sm"><summary className="cursor-pointer font-medium">根据公开资料筛选：3 个首选＋1 个替补</summary><p className="field-hint mt-2">资料核对：2026-09-09。先研究，再用三道剧本小样验证；公开榜单不等于剧本创作效果，推荐分工尚待验证。</p>{MODEL_SHORTLIST.map(item => <div className="mt-3" key={item.id}><strong>{item.name} · {item.focus}</strong><p className="field-hint">{item.reason}</p><a className="underline" href={item.url} target="_blank" rel="noreferrer">官方资料</a></div>)}<p className="mt-3"><a className="underline" href="https://arena.ai/leaderboard/text/creative-writing" target="_blank" rel="noreferrer">公开创意写作评测</a> · 评测版本和推理设置可能与平台不同。</p></details>
           <div><p className="field-label">2 · 读取候选模型</p><p className="field-hint mt-1">读取当前Key可调用的文本模型，并与蚂蚁公开的人民币价格表核对。这一步不生成内容。</p></div>
           {!hasRecordedCost && <Button type="button" variant="outline" disabled={locked || settings.configured && evaluation?.status === "completed"} onClick={() => void action("discover")}>{busy ? "正在读取…" : settings.configured && evaluation?.status === "completed" ? "本轮选型已完成" : evaluation?.candidates.length ? "重新读取候选模型" : "读取候选模型（免费）"}</Button>}
+          {!evaluation?.candidates.length && pendingAction && <p role="status">正在免费读取候选与价格…</p>}
+          {!evaluation?.candidates.length && actionError != null && <div ref={actionFeedback} tabIndex={-1} role="alert" className="rounded-lg border border-[var(--danger)] p-3 text-sm text-[var(--danger)]"><strong>本次操作未完成</strong><ErrorMessage error={actionError} /></div>}
           {hasRecordedCost && <p className="field-hint">已有费用和得分记录。候选与价格会在续测时核对，不会清空现有结果。</p>}
           {!!evaluation?.candidates.length && <div className="grid gap-2 sm:grid-cols-2">{evaluation.candidates.map(candidate => <div className="rounded-lg bg-[var(--muted)] p-3 text-sm" key={candidate.id}><strong>{candidate.displayName}</strong><p className="field-hint mt-1 break-all">{candidate.id} · {candidate.provider}</p><p className="field-hint">输入 {priceLabel(candidate.inputPriceMicroCnyPerMillion)} · 输出 {priceLabel(candidate.outputPriceMicroCnyPerMillion)}</p></div>)}</div>}
         </section>}
@@ -159,15 +166,19 @@ export function StudioConnection() {
           {evaluation.status === "discovered" && <div role="status" className="rounded-lg border border-[var(--border)] bg-[#f1eee8] p-3"><strong>新计划已准备，尚未开始</strong><p className="mt-1 text-sm">已保留 {evaluation.completedCalls} 道题的结果，剩余 {Math.max(0, evaluation.maximumCalls - evaluation.completedCalls)} 道待验证。下方历史记录不代表新计划失败。</p></div>}
           {evaluation.candidatePolicyVersion === MODEL_SHORTLIST_VERSION ? <p className="field-hint">本轮采用研究清单。首批最多3个模型，只在需要时换入清单内的唯一替补；已有同规则结果保留。</p> : <p className="field-hint">本轮沿用先前的候选计划。后续免费核对候选时使用研究清单，已完成结果保留。</p>}
           <div role="progressbar" aria-label="模型测评完成进度" aria-valuemin={0} aria-valuemax={evaluation.maximumCalls} aria-valuenow={evaluation.completedCalls} aria-valuetext={`已记录${evaluation.completedCalls}/${evaluation.maximumCalls}道题`} className="h-2 overflow-hidden rounded-full bg-[#e3ded6]"><div className="h-full bg-[#333333] transition-all" style={{ width: `${evaluation.maximumCalls ? Math.min(100, evaluation.completedCalls / evaluation.maximumCalls * 100) : 0}%` }} /></div>
-          {evaluation.status === "running" && <p className="flex items-center gap-2 text-sm"><LoaderCircle aria-hidden="true" size={16} className="animate-spin motion-reduce:animate-none" />正在等待本题回答，完成后更新进度。</p>}
+          {evaluation.status === "running" && <p className="flex items-center gap-2 text-sm"><LoaderCircle aria-hidden="true" size={16} className="animate-spin motion-reduce:animate-none" />{evaluation.activeRequest ? `正在等待本题回答 · 已等待 ${Math.max(0, Math.floor((lastSyncedAt - evaluation.activeRequest.startedAt) / 1000))} 秒 · 最长 ${evaluation.activeRequest.timeoutMs / 1000} 秒；完整返回后记录成绩，请勿重复点击。` : "正在等待本题回答，完成后更新进度。"}</p>}
           <p role="status" className="text-sm">{displayPhase} · 已记录 {evaluation.completedCalls}/{evaluation.maximumCalls} 道题 · 已核算 {money(evaluation.spentFen)}{evaluation.uncertainFen ? ` · 待核对 ${money(evaluation.uncertainFen)}` : ""}</p>
+          {pendingAction && <p role="status" className="flex items-center gap-2 text-sm"><LoaderCircle size={16} className="animate-spin" />{pendingAction === "prepare" ? "正在免费准备计划并核对价格…" : pendingAction === "resume" ? "正在核对续测条件与价格…" : "正在提交操作，请稍候…"}</p>}
+          {actionError != null && <div ref={actionFeedback} tabIndex={-1} role="alert" className="rounded-lg border border-[var(--danger)] p-3 text-sm text-[var(--danger)]"><strong>本次操作未完成</strong><ErrorMessage error={actionError} /></div>}
+          {canRepairResponse && <div className="stage-callout"><strong>已修复请求设置，可以准备剩余测评</strong><p className="mt-2">原设置只有4096 Token和90秒等待。DeepSeek的推理可能用完空间；Kimi默认最高推理强度，小样不需要一直使用最高档。</p><p className="mt-2">新设置：DeepSeek Pro最多16384 Token；Kimi最多8192 Token、低推理档，两者最长等待4分钟。Qwen已完成成绩保留。只恢复这两个设置已调整的模型；旧失败与费用归档保留，不会清零。</p><p className="mt-2">先免费生成费用计划。之后点击开始才会再次请求未完成题目，可能新增费用；新设置仍需实际验证。</p><Button className="mt-3" disabled={busy} onClick={() => void action("prepare")}>准备修复计划（免费）</Button></div>}
+          {evaluation.status === "discovered" && evaluation.responsePolicyVersion === MODEL_RESPONSE_POLICY_VERSION && <p className="field-hint">待测请求设置：{evaluation.candidates.filter(item => !evaluation.scores.some(score => score.modelId === item.id)).map(item => { const profile = evaluationResponseProfile(item.id); return `${item.displayName} 最多${profile.maxTokens} Token / ${profile.timeoutMs / 1000}秒${profile.reasoningEffort ? " / 低推理档" : ""}`; }).join("；")}。设置为最大空间，实际费用按返回用量核算。</p>}
           {evaluation.status === "discovered" && (evaluation.responsePolicyVersion !== MODEL_RESPONSE_POLICY_VERSION || evaluation.taskVersion !== MODEL_EVALUATION_TASK_VERSION) && <div className="space-y-2"><p className="field-hint">答题长度已升级，需要免费刷新一次候选价格和最高费用计划。</p><Button type="button" variant="outline" disabled={busy} onClick={() => void action("discover")}>更新测评计划（免费）</Button></div>}
           {priceExpired && <p className="field-hint">报价已超过10分钟，请先免费刷新候选与费用，再开始测评。刷新不会调用模型。</p>}
           {evaluation.status === "discovered" && evaluation.carriedBudget && <Button type="button" variant="outline" disabled={busy} onClick={() => void action("prepare")}>刷新候选与费用（免费）</Button>}
           {evaluation.status === "discovered" && evaluation.responsePolicyVersion === MODEL_RESPONSE_POLICY_VERSION && evaluation.taskVersion === MODEL_EVALUATION_TASK_VERSION && <Button type="button" disabled={busy || !!priceExpired || syncError} onClick={() => void action("start")}>开始受限测评</Button>}
           {!legacyRules && canUpgradeTruncated && <div className="space-y-2"><p className="field-hint">这轮所有候选共用了旧版每题900 Token上限，所以多个模型会出现相同的length提示。它表示回答被提前截断，不是模型损坏。新版提供4096 Token；继续后仍无法完整回答的候选会自动跳过并替换。</p><Button type="button" disabled={busy} onClick={() => void action("resume")}>{busy ? "正在核对…" : "使用新版长度继续测评"}</Button></div>}
-          {!legacyRules && !canUpgradeTruncated && evaluation.status === "blocked" && evaluation.resumeAllowed && evaluation.completedCalls < evaluation.maximumCalls && evaluation.resumeCount < 3 && <div className="space-y-2"><p className="field-hint">已完成题目不会重测。点击后先免费核对候选与价格，再继续剩余付费调用；真正不兼容的候选会自动跳过。</p><Button type="button" disabled={busy} onClick={() => void action("resume")}>{busy ? "正在核对…" : "核对价格并继续测评"}</Button></div>}
-          {!canPrepareResearch && !legacyRules && !canUpgradeTruncated && evaluation.status === "blocked" && !evaluation.resumeAllowed && <p className="field-hint">本次用量、费用或候选数量无法继续安全核对，已停止自动调用，避免重复扣费。</p>}
+          {!canRepairResponse && !legacyRules && !canUpgradeTruncated && evaluation.status === "blocked" && evaluation.resumeAllowed && evaluation.completedCalls < evaluation.maximumCalls && evaluation.resumeCount < 3 && <div className="space-y-2"><p className="field-hint">已完成题目不会重测。点击后先免费核对候选与价格，再继续剩余付费调用；真正不兼容的候选会自动跳过。</p><Button type="button" disabled={busy} onClick={() => void action("resume")}>{busy ? "正在核对…" : "核对价格并继续测评"}</Button></div>}
+          {!canRepairResponse && !canPrepareResearch && !legacyRules && !canUpgradeTruncated && evaluation.status === "blocked" && !evaluation.resumeAllowed && <p className="field-hint">本次用量、费用或候选数量无法继续安全核对，已停止自动调用，避免重复扣费。</p>}
           {evaluation.status === "running" && <Button type="button" variant="outline" disabled={busy} onClick={() => void action("cancel")}><Square size={14} />停止测评</Button>}
           {legacyRules && <div className="stage-callout"><strong>旧版评分记录需要复核</strong><p className="mt-1">旧题目未说明部分格式要求，引用句号也可能被误判。这里的分数仅作历史记录，不能直接判断模型能力；旧答案未保存，无法重新核分。</p>{canPrepare && <><p className="mt-2">免费准备修订版计划后，再由你点击开始。旧报告与累计费用保留，新旧规则成绩不混用。</p><Button type="button" className="mt-2" variant="outline" disabled={busy} onClick={() => void action("prepare")}>准备修订版测评计划（免费）</Button></>}</div>}
           {canPrepareResearch && <div className="stage-callout"><p>可以按研究清单准备定向验证，已有同规则成绩和费用保留。前轮未完整返回的请求不再重复。</p><Button className="mt-2" variant="outline" disabled={busy} onClick={() => void action("prepare")}>准备针对性测评（免费）</Button></div>}
@@ -176,7 +187,7 @@ export function StudioConnection() {
           {!!evaluation.scores.length && <div className="space-y-2">{evaluation.scores.map(score => <div className="rounded-lg bg-[var(--muted)] p-3 text-sm" key={score.modelId}><div className="flex items-center justify-between gap-3"><span className="break-all">{roleName(score.modelId)}</span><strong>{score.total}分（{legacyRules ? "旧规则记录" : "三题已完成"}） · {money(score.costFen)}</strong></div><p className="field-hint mt-1">结构 {score.structure} · 证据 {score.evidence} · 原创 {score.originality} · 格式 {score.format} · {(score.latencyMs / 1000).toFixed(1)}秒 · {score.promptTokens + score.completionTokens} Token{score.usageEstimated ? "（上限估算）" : ""}</p><p className="field-hint mt-1">{score.notes.join("；")}</p></div>)}</div>}
           {!!evaluation.excludedModels.length && (evaluation.archivedViewRevision != null && evaluation.startedAt == null ? <details className="stage-callout"><summary className="cursor-pointer">查看历史未完成记录（不属于本次新调用）</summary>{evaluation.excludedModels.map(item => <p className="mt-1" key={item.modelId}>{roleName(item.modelId)}：{exclusionExplanation(item, evaluation)}</p>)}</details> : <div className="stage-callout"><strong>未完成与历史记录</strong>{evaluation.excludedModels.map(item => <p className="mt-1" key={item.modelId}>{roleName(item.modelId)}：{exclusionExplanation(item, evaluation)}</p>)}</div>)}
           {evaluation.allocation && <div className="stage-callout"><strong>自动分配完成</strong><p className="mt-2">主模型：{roleName(evaluation.allocation.mainModel)}</p><p>审查 A：{roleName(evaluation.allocation.reviewA)}</p><p>审查 B：{roleName(evaluation.allocation.reviewB)}</p></div>}
-          {evaluation.error && !canPrepare && <p className="text-sm text-[var(--danger)]">{evaluation.error}</p>}
+          {evaluation.error && !canPrepare && <p className="text-sm text-[var(--danger)]">{evaluationErrorMessage(evaluation)}</p>}
           {!['idle','discovered','running','cancelling'].includes(evaluation.status) && (evaluation.completedCalls > 0 || evaluation.excludedModels.length > 0 || evaluation.spentFen > 0 || evaluation.uncertainFen > 0 || evaluation.lastFailure != null) && <div className="space-y-3 border-t border-[var(--border)] pt-3"><div className="flex flex-wrap gap-2"><Button type="button" variant="outline" disabled={busy} onClick={() => report && report.viewRevision === evaluation.viewRevision ? setShowReport(value => !value) : void loadReport()}><FileText size={15} />{showCurrentReport ? "收起测评报告" : "查看测评报告"}</Button><Button type="button" variant="outline" disabled={busy} onClick={() => void downloadReport()}><Download size={15} />下载报告（Markdown）</Button></div>{showCurrentReport && <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-lg bg-[var(--muted)] p-3 text-xs leading-6">{report.markdown}</pre>}</div>}
         </section> : null}
         <p className="stage-callout">公开价可能与最终账单口径不同，建议同时在蚂蚁平台设置账号侧消费限额。测评只代表固定小样表现；未经真人试玩的效果不会写成“已验证”。</p>

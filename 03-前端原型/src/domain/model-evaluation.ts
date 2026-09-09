@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const MODEL_RESPONSE_POLICY_VERSION = "openai-json/2-4096";
+export const MODEL_RESPONSE_POLICY_VERSION = "openai-json/3-model-limits";
 export const MODEL_EVALUATION_TASK_VERSION = "juben-model-eval/1.1";
 
 export const responseDiagnosticSchema = z.object({
@@ -9,6 +9,8 @@ export const responseDiagnosticSchema = z.object({
   reasoningCharacters: z.number().int().nonnegative(),
   reasoningTokens: z.number().int().nonnegative().nullable(),
   requestedOutputTokens: z.number().int().positive(),
+  reasoningEffort: z.literal("low").optional(),
+  timeoutMs: z.number().int().positive().optional(),
 }).strict();
 
 const text = (max: number) => z.string().trim().min(1).max(max);
@@ -53,7 +55,8 @@ export const evaluationViewSchema = z.object({
   responsePolicyVersion: z.string().trim().min(1).max(100).nullable().default(null),
   archivedViewRevision: z.number().int().nonnegative().nullable().default(null),
   carriedBudget: z.object({ spentFen: z.number().int().nonnegative(), uncertainFen: z.number().int().nonnegative() }).strict().nullable().default(null),
-  lastFailure: z.object({ modelId: text(200).nullable(), taskIndex: z.number().int().min(0).max(2).nullable(), category: z.enum(["service", "response", "usage", "budget"]), occurredAt: z.number().int().nonnegative() }).strict().nullable().default(null),
+  activeRequest: z.object({ modelId: text(200), startedAt: z.number().int().nonnegative(), timeoutMs: z.number().int().positive() }).strict().nullable().optional(),
+  lastFailure: z.object({ modelId: text(200).nullable(), taskIndex: z.number().int().min(0).max(2).nullable(), category: z.enum(["service", "response", "usage", "budget"]), code: z.enum(["local", "timeout", "network", "auth", "rate_limit", "upstream", "request", "response", "cancelled"]).optional(), elapsedMs: z.number().int().nonnegative().optional(), occurredAt: z.number().int().nonnegative() }).strict().nullable().default(null),
   error: z.string().max(2000).nullable(),
 });
 export type EvaluationView = z.infer<typeof evaluationViewSchema>;
@@ -82,3 +85,24 @@ export function exclusionExplanation(item: ExcludedModel, view: EvaluationView) 
 }
 
 export function priceLabel(microCnyPerMillion: number) { return `¥${(microCnyPerMillion / 1_000_000).toFixed(2)}/百万Token`; }
+
+// These are request settings, not an assertion of model quality or provider availability.
+export function evaluationResponseProfile(modelId: string) {
+  if (modelId === "deepseek-v4-pro-0813") return { maxTokens: 16384, timeoutMs: 240000 };
+  if (modelId === "kimi-k3") return { maxTokens: 8192, timeoutMs: 240000, reasoningEffort: "low" as const };
+  return { maxTokens: 4096, timeoutMs: 90000 };
+}
+export function responseRepairModelIds(view: EvaluationView): string[] {
+  if (view.responsePolicyVersion !== "openai-json/2-4096" || view.taskVersion !== MODEL_EVALUATION_TASK_VERSION ||
+    !["blocked", "failed", "cancelled"].includes(view.status) || view.reservedFen !== 0 ||
+    ["usage", "budget"].includes(view.lastFailure?.category ?? "")) return [];
+  return ["deepseek-v4-pro-0813", "kimi-k3"].filter(id => !view.scores.some(score => score.modelId === id) && (
+    view.excludedModels.some(item => item.modelId === id && item.costFen != null && /length|被截断/.test(item.reason)) ||
+    view.lastFailure?.modelId === id && view.lastFailure.category === "service"
+  ));
+}
+export function evaluationErrorMessage(view: EvaluationView) {
+  if (view.error?.includes("请检查蚂蚁平台额度和模型权限") && !view.lastFailure?.code)
+    return "上次请求未完整返回；旧记录未保存具体异常，无法据此判断余额或权限问题。";
+  return view.error;
+}

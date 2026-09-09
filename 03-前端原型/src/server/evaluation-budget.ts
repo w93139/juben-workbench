@@ -2,7 +2,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { LocalApiError } from "./local-security";
-import { evaluationViewSchema, MODEL_EVALUATION_TASK_VERSION } from "@/domain/model-evaluation";
+import { evaluationViewSchema, responseRepairModelIds, MODEL_EVALUATION_TASK_VERSION } from "@/domain/model-evaluation";
 import { MODEL_SHORTLIST_VERSION } from "@/domain/model-shortlist";
 
 export interface BudgetSnapshot { capFen: number; spentFen: number; reservedFen: number; uncertainFen: number }
@@ -36,7 +36,7 @@ export class EvaluationBudgetLedger {
       const run = this.db.prepare("SELECT state, lease_until FROM evaluation_run WHERE session_id = ?").get(sessionId) as { state: string; lease_until: number } | undefined;
       const refreshing = view.status === "discovered" && view.archivedViewRevision != null && view.carriedBudget != null && view.startedAt == null;
       const researchChange = view.candidatePolicyVersion !== MODEL_SHORTLIST_VERSION && !["usage", "budget"].includes(view.lastFailure?.category ?? "");
-      if ((!refreshing && (!["blocked", "failed", "cancelled"].includes(view.status) || (view.taskVersion === MODEL_EVALUATION_TASK_VERSION && !researchChange))) || view.viewRevision !== expectedRevision || budget.reservedFen !== 0 || (run?.state === "running" && run.lease_until > Date.now())) throw new LocalApiError(409, "测评状态已变化或仍有在途请求，未重新规划。");
+      if ((!refreshing && (!["blocked", "failed", "cancelled"].includes(view.status) || (view.taskVersion === MODEL_EVALUATION_TASK_VERSION && !researchChange && !responseRepairModelIds(view).length))) || view.viewRevision !== expectedRevision || budget.reservedFen !== 0 || (run?.state === "running" && run.lease_until > Date.now())) throw new LocalApiError(409, "测评状态已变化或仍有在途请求，未重新规划。");
       const sameRules = view.taskVersion === MODEL_EVALUATION_TASK_VERSION;
       const retainedScores = view.scores.filter(item => next.candidates.some(candidate => candidate.id === item.modelId));
       const retainedTasks = view.taskResults.filter(item => next.candidates.some(candidate => candidate.id === item.modelId));

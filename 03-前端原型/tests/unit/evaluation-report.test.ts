@@ -20,7 +20,7 @@ describe("模型测评报告", () => {
   });
   it("新截断和空正文按实际诊断解释，终态不继续承诺自动替补", () => {
     const diagnostic = { finishReason: "length", contentCharacters: 0, reasoningCharacters: 100, reasoningTokens: 4096, requestedOutputTokens: 4096 };
-    const view = evaluationViewSchema.parse({ ...base, resumeAllowed: false, responsePolicyVersion: "openai-json/2-4096", taskVersion: "juben-model-eval/1.1", excludedModels: [{ modelId: "b", displayName: "B", reason: "服务以length结束，正文可能不完整", costFen: 2, usageEstimated: false, occurredAt: 1, responseDiagnostic: diagnostic }, { modelId: "c", displayName: "C", reason: "旧版length截断，保留为本轮自动替补候选", costFen: 1, usageEstimated: false, occurredAt: 1 }] });
+    const view = evaluationViewSchema.parse({ ...base, resumeAllowed: false, responsePolicyVersion: "openai-json/3-model-limits", taskVersion: "juben-model-eval/1.1", excludedModels: [{ modelId: "b", displayName: "B", reason: "服务以length结束，正文可能不完整", costFen: 2, usageEstimated: false, occurredAt: 1, responseDiagnostic: diagnostic }, { modelId: "c", displayName: "C", reason: "旧版length截断，保留为本轮自动替补候选", costFen: 1, usageEstimated: false, occurredAt: 1 }] });
     const report = buildEvaluationReport(view);
     expect(report.markdown).toContain("本轮已停止"); expect(report.markdown).toContain("本次上限4096 Token");
     expect(report.markdown).toContain("最终正文 0 字符"); expect(report.markdown).toContain("推理用量 4096"); expect(report.markdown).toContain("本轮已经停止，不会自动再测");
@@ -44,4 +44,11 @@ describe("模型测评报告", () => {
     const partial = evaluationViewSchema.parse({ ...base, scores: [], completedCalls: 1, spentFen: 1, uncertainFen: 0, taskResults: [{ modelId: "qwen", taskIndex: 0, structure: 70, evidence: 80, originality: 50, format: 100, latencyMs: 100, promptTokens: 10, completionTokens: 20, costFen: 1, usageEstimated: false, notes: ["部分结果"] }] });
     const report = buildEvaluationReport(partial); expect(report.markdown).toContain("已完成 1/3 道，仅保留逐题记录，不合成总分"); expect(report.markdown).toContain("结构与证据拆解：结构 70");
   });
+});
+
+it("修复报告区分旧异常未知与新版参数，并保留累计费用", () => {
+  const view = evaluationViewSchema.parse({ ...base, taskVersion: "juben-model-eval/1.1", responsePolicyVersion: "openai-json/3-model-limits", candidates: [{ ...base.candidates[0], id: "kimi-k3", displayName: "Kimi K3" }], error: "模型测评未完成；请检查蚂蚁平台额度和模型权限。", lastFailure: { modelId: "kimi-k3", taskIndex: 0, category: "service", occurredAt: Date.now() } });
+  const report = buildEvaluationReport(view).markdown;
+  expect(report).toContain("旧记录未保存具体异常"); expect(report).not.toContain("请检查蚂蚁平台额度和模型权限");
+  expect(report).toContain("最大8192 Token，等待上限240秒，推理档low"); expect(report).toContain("待平台核对：¥0.04");
 });

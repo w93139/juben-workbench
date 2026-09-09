@@ -29,7 +29,7 @@ describe("蚂蚁模型发现", () => {
   it("格式不支持时换入替补；两个排除后不漫游搜索新模型", async () => {
     const call = fetcher(undefined, { [ids[0]!]: { protocolParameters: [{ protocolName: "openai_chat_completions", parameters: { response_format: false } }] } });
     expect((await discoverAntModels(connection, call as typeof fetch)).map(item => item.id)).toEqual(ids.slice(1));
-    await expect(discoverAntModels(connection, fetcher() as typeof fetch, undefined, [], ids.slice(0, 2))).rejects.toThrow("不会扩大到其他模型");
+    await expect(discoverAntModels(connection, fetcher() as typeof fetch, undefined, [], ids.slice(0, 2))).rejects.toThrow("候选不足三个");
   });
   it("保留旧轮已完成候选，但新名额只从研究清单选择", async () => {
     const result = await discoverAntModels(connection, fetcher() as typeof fetch, undefined, ["premium"]);
@@ -39,6 +39,6 @@ describe("蚂蚁模型发现", () => {
     await expect(discoverAntModels({ ...connection, baseUrl: "https://other.invalid/v1" }, fetcher() as typeof fetch)).rejects.toThrow("只支持蚂蚁数科");
     const unauthorized = vi.fn(async () => new Response("secret-detail", { status: 401 }));
     await expect(discoverAntModels(connection, unauthorized as typeof fetch)).rejects.toThrow("拒绝了API Key");
-    await expect(discoverAntModels(connection, fetcher(["one"]) as typeof fetch)).rejects.toThrow("缺少三个");
+    await expect(discoverAntModels(connection, fetcher(["one"]) as typeof fetch)).rejects.toThrow("候选不足三个");
   });
 });
