@@ -2,6 +2,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { LocalApiError } from "./local-security";
+import { evaluationViewSchema, MODEL_EVALUATION_TASK_VERSION } from "@/domain/model-evaluation";
 
 export interface BudgetSnapshot { capFen: number; spentFen: number; reservedFen: number; uncertainFen: number }
 export interface ResponsePolicyUpgradeClaim { expectedPolicyVersion: string | null; expectedFailureModelId: string }
@@ -21,6 +22,38 @@ export class EvaluationBudgetLedger {
     this.db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS evaluation_budget (session_id TEXT PRIMARY KEY, cap_fen INTEGER NOT NULL, spent_fen INTEGER NOT NULL DEFAULT 0, reserved_fen INTEGER NOT NULL DEFAULT 0, uncertain_fen INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS evaluation_reservation (call_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, max_fen INTEGER NOT NULL, state TEXT NOT NULL CHECK(state IN ('reserved','settled','uncertain')), actual_fen INTEGER, FOREIGN KEY(session_id) REFERENCES evaluation_budget(session_id)); CREATE TABLE IF NOT EXISTS evaluation_result (session_id TEXT PRIMARY KEY, view_json TEXT NOT NULL, updated_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS evaluation_run (session_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('running','completed','blocked','cancelled')), lease_until INTEGER NOT NULL);");
   }
   close() { this.db.close(); }
+  loadArchive(sessionId: string, revision: number) {
+    this.ensureArchive();
+    return (this.db.prepare("SELECT view_json FROM evaluation_archive WHERE session_id = ? AND view_revision = ?").get(sessionId, revision) as { view_json: string } | undefined)?.view_json ?? null;
+  }
+  private ensureArchive() { this.db.exec("CREATE TABLE IF NOT EXISTS evaluation_archive (session_id TEXT NOT NULL, view_revision INTEGER NOT NULL, view_json TEXT NOT NULL, PRIMARY KEY(session_id, view_revision))"); }
+  replan(sessionId: string, expectedRevision: number, serialized: string) {
+    this.ensureArchive(); this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const prior = this.loadView(sessionId); const view = evaluationViewSchema.parse(JSON.parse(prior ?? "null"));
+      const next = evaluationViewSchema.parse(JSON.parse(serialized)); const budget = this.snapshot(sessionId);
+      const run = this.db.prepare("SELECT state, lease_until FROM evaluation_run WHERE session_id = ?").get(sessionId) as { state: string; lease_until: number } | undefined;
+      const refreshing = view.status === "discovered" && view.archivedViewRevision != null && view.carriedBudget != null && view.startedAt == null && !view.completedCalls && !view.scores.length && !view.taskResults.length;
+      if ((!refreshing && (!["blocked", "failed", "cancelled"].includes(view.status) || view.taskVersion === MODEL_EVALUATION_TASK_VERSION)) || view.viewRevision !== expectedRevision || budget.reservedFen !== 0 || (run?.state === "running" && run.lease_until > Date.now())) throw new LocalApiError(409, "测评状态已变化或仍有在途请求，未重新规划。");
+      if (next.status !== "discovered" || next.taskVersion !== MODEL_EVALUATION_TASK_VERSION || next.archivedViewRevision !== (refreshing ? view.archivedViewRevision : expectedRevision) || next.viewRevision !== expectedRevision + 1 || next.scores.length || next.taskResults.length || next.completedCalls || next.spentFen !== budget.spentFen || next.uncertainFen !== budget.uncertainFen || next.carriedBudget?.spentFen !== budget.spentFen || next.carriedBudget?.uncertainFen !== budget.uncertainFen) throw new LocalApiError(409, "新计划与费用账本不一致，未重新规划。");
+      if (!refreshing) this.db.prepare("INSERT INTO evaluation_archive(session_id, view_revision, view_json) VALUES (?, ?, ?)").run(sessionId, expectedRevision, prior!);
+      this.saveView(sessionId, serialized); this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+  claimStart(sessionId: string, ownerId: string, leaseMs: number, expectedRevision: number) {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const view = evaluationViewSchema.parse(JSON.parse(this.loadView(sessionId) ?? "null")); const budget = this.snapshot(sessionId);
+      const run = this.db.prepare("SELECT state, lease_until FROM evaluation_run WHERE session_id = ?").get(sessionId) as { state: string; lease_until: number } | undefined;
+      if (run?.state === "running" && run.lease_until > Date.now()) throw new LocalApiError(409, "另一工作台进程正在执行这轮测评，未重复发起调用。");
+      if (view.status !== "discovered" || view.viewRevision !== expectedRevision || budget.reservedFen !== 0) throw new LocalApiError(409, "测评计划已经变化，未重复发起调用。");
+      const carry = view.carriedBudget;
+      if (carry ? carry.spentFen !== budget.spentFen || carry.uncertainFen !== budget.uncertainFen || view.archivedViewRevision == null : budget.spentFen !== 0 || budget.uncertainFen !== 0) throw new LocalApiError(409, "费用账本已变化，请先核对计划，未发起付费调用。");
+      this.db.prepare("INSERT OR IGNORE INTO evaluation_budget(session_id, cap_fen) VALUES (?, ?)").run(sessionId, CAP_FEN);
+      this.db.prepare("INSERT INTO evaluation_run(session_id, owner_id, state, lease_until) VALUES (?, ?, 'running', ?) ON CONFLICT(session_id) DO UPDATE SET owner_id = excluded.owner_id, state = 'running', lease_until = excluded.lease_until").run(sessionId, ownerId, Date.now() + leaseMs);
+      this.db.exec("COMMIT"); return budget;
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
   saveView(sessionId: string, serialized: string) {
     if (Buffer.byteLength(serialized, "utf8") > 200_000) throw new LocalApiError(413, "模型测评记录过大，未能安全保存。");
     this.db.prepare("INSERT INTO evaluation_result(session_id, view_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET view_json = excluded.view_json, updated_at = excluded.updated_at").run(sessionId, serialized, Date.now());

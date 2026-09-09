@@ -1,14 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { evaluationViewSchema, MODEL_RESPONSE_POLICY_VERSION, modelScoreSchema, taskEvaluationResultSchema, type EvaluationView, type ModelAllocation, type ModelCandidate, type ModelScore, type TaskEvaluationResult } from "@/domain/model-evaluation";
+import { evaluationViewSchema, MODEL_RESPONSE_POLICY_VERSION, MODEL_EVALUATION_TASK_VERSION, responseDiagnosticSchema, modelScoreSchema, taskEvaluationResultSchema, type EvaluationView, type ModelAllocation, type ModelCandidate, type ModelScore, type TaskEvaluationResult } from "@/domain/model-evaluation";
 import { discoverAntModels } from "./model-discovery";
 import { EvaluationBudgetLedger, type BudgetSnapshot } from "./evaluation-budget";
 import { LocalApiError } from "./local-security";
 import { studioSettingsStore, type ProviderConnection, type StudioSettingsStore } from "./studio-settings";
 import { writeLiteLLMConfig } from "./litellm-config";
+import { evaluationTasks as tasks, safeParseEvaluationJson as safeParseJson } from "./evaluation-tasks";
 
 const SESSION_ID = "ant-model-selection-v1";
-const TASK_VERSION = "juben-model-eval/1.0";
+const TASK_VERSION = MODEL_EVALUATION_TASK_VERSION;
 const MAX_OUTPUT_TOKENS = 4_096;
 const MAX_PROMPT_TOKENS = 8_000;
 const REQUEST_TIMEOUT_MS = 90_000;
@@ -21,63 +22,11 @@ const DEFERRED_LENGTH_REASON = "旧版length截断，保留为本轮自动替补
 const CAPPED_LENGTH_REASON = "旧版length截断；本轮最多比较4个模型，未进入新版重测";
 const SATISFIED_LENGTH_REASON = "旧版length截断；本轮已取得三个合格模型，无需再次测评";
 
-type UsageResult = { content: string; promptTokens: number; completionTokens: number; latencyMs: number; usageEstimated?: boolean; responseNotes?: string[]; incompatibleReason?: string; identityUnverifiable?: string };
+type UsageResult = { content: string; promptTokens: number; completionTokens: number; latencyMs: number; usageEstimated?: boolean; responseNotes?: string[]; incompatibleReason?: string; identityUnverifiable?: string; responseDiagnostic?: z.infer<typeof responseDiagnosticSchema> };
 export type EvaluationTransport = (connection: ProviderConnection, model: string, system: string, prompt: string, signal: AbortSignal) => Promise<UsageResult>;
-type Grade = Pick<ModelScore, "structure" | "evidence" | "originality" | "format"> & { notes: string[] };
-type EvaluationTask = { name: string; prompt: string; grade: (value: unknown, raw: string) => Grade };
 class UsageAccountingError extends LocalApiError {
   constructor(message: string, readonly knownPromptTokens?: number, readonly knownCompletionTokens?: number) { super(502, message); }
 }
-
-const meaningful = (minimum: number, maximum = 500) => z.string().trim().min(minimum).max(maximum);
-const unique = <T>(values: T[]) => new Set(values.map(value => JSON.stringify(value))).size === values.length;
-const structureSchema = z.object({
-  facts: z.array(z.object({ statement: meaningful(4), sourceQuote: meaningful(8), kind: z.literal("明确事实") }).strict()).length(3).refine(unique),
-  inferences: z.array(z.object({ statement: meaningful(6), supportQuotes: z.array(meaningful(8)).min(2).max(3).refine(unique) }).strict()).min(1).max(3),
-  causalChain: z.array(meaningful(4)).min(3).max(8).refine(unique), unknowns: z.array(meaningful(4)).min(1).max(5).refine(unique),
-}).strict();
-const directionSchema = z.object({ title: meaningful(2, 30), premise: meaningful(25, 500), playerBehaviors: z.array(meaningful(6)).min(2).max(6).refine(unique), originalChanges: z.array(meaningful(6)).min(4).max(8).refine(unique), risks: z.array(meaningful(6)).min(2).max(6).refine(unique) }).strict();
-const auditSchema = z.object({ findings: z.array(z.object({ category: z.enum(["时间线矛盾", "线索缺口", "信息泄漏", "角色贡献"]), evidence: meaningful(8), proposal: meaningful(10) }).strict()).min(2).max(6).refine(items => unique(items.map(item => item.category))), verdict: z.enum(["阻断", "可继续"]) }).strict();
-const sourceQuotes = ["21:40，顾遥把钥匙交给林川", "22:10，监控记录林川仍在北厅", "22:05，北厅门锁已从内部反锁"];
-const safeParseJson = (raw: string) => { try { return JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g, "")); } catch { return null; } };
-const invalidGrade = (): Grade => ({ structure: 0, evidence: 0, originality: 0, format: 0, notes: ["没有返回可验证的规定JSON结构"] });
-
-const tasks: EvaluationTask[] = [
-  {
-    name: "结构与证据拆解",
-    prompt: `以下是测试片段，不是真实用户剧本：\nA：${sourceQuotes[0]}。\nB：${sourceQuotes[1]}。\nC：${sourceQuotes[2]}。\n请分别整理三条明确事实及其完整逐字原句、至少一条由多个事实支持的分析推断、因果链和待确认问题。只返回JSON：{"facts":[{"statement":"…","sourceQuote":"完整逐字原句","kind":"明确事实"}],"inferences":[{"statement":"…","supportQuotes":["完整逐字原句"]}],"causalChain":["…"],"unknowns":["…"]}`,
-    grade: (_value, raw) => {
-      const parsed = structureSchema.safeParse(safeParseJson(raw)); if (!parsed.success) return invalidGrade();
-      const factQuotes = new Set(parsed.data.facts.map(item => item.sourceQuote)); const exactFacts = sourceQuotes.filter(source => factQuotes.has(source)).length;
-      const supportedInference = parsed.data.inferences.some(item => new Set(item.supportQuotes.filter(quote => sourceQuotes.includes(quote))).size >= 2);
-      const chainText = parsed.data.causalChain.join(""); const chainHits = [/(21:40|交|钥匙)/, /(22:05|反锁)/, /(22:10|监控)/].filter(pattern => pattern.test(chainText)).length;
-      return { structure: Math.round(chainHits / 3 * 70) + (supportedInference ? 30 : 0), evidence: Math.round(exactFacts / 3 * 80) + (supportedInference ? 20 : 0), originality: 50, format: 100, notes: exactFacts === 3 && supportedInference ? ["三条事实逐字可回查，推断引用多个依据"] : ["事实引用、推断依据或因果顺序未达到金标"] };
-    },
-  },
-  {
-    name: "原创方向设计",
-    prompt: "参考机制：玩家分别掌握同一事故的局部记录，公开顺序会改变彼此信任。请设计一个全新的中文剧本杀方向。不得使用‘林川’‘顾遥’‘北厅’‘钥匙’或原事故；必须重建人物、动机、因果与承载机制的情境。只返回JSON：{\"title\":\"…\",\"premise\":\"…\",\"playerBehaviors\":[\"…\"],\"originalChanges\":[\"…\"],\"risks\":[\"…\"]}",
-    grade: (_value, raw) => {
-      const parsed = directionSchema.safeParse(safeParseJson(raw)); if (!parsed.success) return invalidGrade();
-      const combined = JSON.stringify(parsed.data); const copied = ["林川", "顾遥", "北厅", "钥匙", "事故"].filter(word => combined.includes(word));
-      const behavior = parsed.data.playerBehaviors.join(""); const mechanismHits = Number(/公开|披露|展示/.test(behavior)) + Number(/顺序|先后|时机/.test(behavior)) + Number(/信任|关系|判断/.test(behavior));
-      const changeText = parsed.data.originalChanges.join(""); const changeHits = [/(人物|角色)/, /动机/, /(因果|事件)/, /(线索|信息)/].filter(pattern => pattern.test(changeText)).length;
-      const original = Math.max(0, 100 - copied.length * 20 - (4 - changeHits) * 10);
-      return { structure: Math.round(mechanismHits / 3 * 100), evidence: 60, originality: original, format: 100, notes: copied.length || mechanismHits < 3 || changeHits < 4 ? ["原创变化或机制承载未完整达到金标"] : ["具体元素重建且保留了抽象玩家行为"] };
-    },
-  },
-  {
-    name: "一致性审查",
-    prompt: "审查这个测试蓝图：真相称停电发生在20:00；角色甲在20:10借助走廊摄像头确认乙离开；结论‘乙进入密室’是终局必须推出的结论，但线索表没有任何门禁、目击或痕迹线索。请指出阻断问题并给可执行修改方案。只返回JSON：{\"findings\":[{\"category\":\"时间线矛盾/线索缺口/信息泄漏/角色贡献之一\",\"evidence\":\"…\",\"proposal\":\"…\"}],\"verdict\":\"阻断或可继续\"}",
-    grade: (_value, raw) => {
-      const parsed = auditSchema.safeParse(safeParseJson(raw)); if (!parsed.success) return invalidGrade();
-      const categories = new Set(parsed.data.findings.map(item => item.category)); const falsePositives = [...categories].filter(category => !["时间线矛盾", "线索缺口"].includes(category)).length;
-      const found = Number(categories.has("时间线矛盾")) + Number(categories.has("线索缺口"));
-      const executable = parsed.data.findings.filter(item => /(补充|增加|改为|调整|删除|建立|改写)/.test(item.proposal)).length;
-      return { structure: Math.max(0, 100 - falsePositives * 25), evidence: Math.max(0, found * 40 + (parsed.data.verdict === "阻断" ? 10 : 0) + Math.min(10, executable * 5) - falsePositives * 15), originality: 60, format: 100, notes: found === 2 && !falsePositives && executable >= 2 ? ["两处金标问题均有可执行修订方案"] : ["存在漏报、误报或修改方案不可执行"] };
-    },
-  },
-];
 
 async function limitedText(response: Response, maximum: number) {
   if (!response.body) throw new LocalApiError(502, "模型服务没有返回可读取的响应。");
@@ -134,14 +83,23 @@ export const antEvaluationTransport: EvaluationTransport = async (connection, mo
   const choice = choices.success ? choices.data[0]! : null; const rawContent = choice?.message?.content ?? choice?.text;
   const content = typeof rawContent === "string" ? rawContent : Array.isArray(rawContent) ? rawContent.map(item => typeof item === "string" ? item : item && typeof item === "object" && "type" in item && item.type === "text" && "text" in item && typeof item.text === "string" ? item.text : "").join("") : "";
   const identityUnverifiable = !envelope.data.model ? "服务未回传实际模型编号，无法确认计费模型" : envelope.data.model !== model ? "服务回传的实际模型编号与候选不一致，无法确认计费模型" : undefined;
-  const incompatibleReason = identityUnverifiable ? undefined : !choice ? "服务没有返回兼容的正文选项" : choice.finish_reason !== "stop" ? `服务以${choice.finish_reason ?? "未知原因"}结束，正文可能不完整` : !content.trim() ? "服务没有返回可评分的最终正文" : undefined;
+  const incompatibleReason = identityUnverifiable ? undefined : !choice ? "服务没有返回兼容的正文选项" : choice.finish_reason !== "stop" ? choice.finish_reason === "length" ? "服务以length结束，正文可能不完整" : "服务没有以正常完成标志结束，正文可能不完整" : !content.trim() ? "服务没有返回可评分的最终正文" : undefined;
+  const reasoning = choice?.message && "reasoning_content" in choice.message ? choice.message.reasoning_content : null;
+  const details = exactUsage && "completion_tokens_details" in exactUsage ? exactUsage.completion_tokens_details : null;
+  const reasoningCount = details && typeof details === "object" && "reasoning_tokens" in details ? details.reasoning_tokens : null;
+  const responseDiagnostic = responseDiagnosticSchema.parse({
+    finishReason: choice?.finish_reason === "stop" || choice?.finish_reason === "length" ? choice.finish_reason : choice?.finish_reason ? "other" : "missing",
+    contentCharacters: content.length, reasoningCharacters: typeof reasoning === "string" ? reasoning.length : 0,
+    reasoningTokens: typeof reasoningCount === "number" && Number.isSafeInteger(reasoningCount) && reasoningCount >= 0 ? reasoningCount : null,
+    requestedOutputTokens: MAX_OUTPUT_TOKENS,
+  });
   const responseNotes = identityUnverifiable ? [identityUnverifiable] : incompatibleReason ? [incompatibleReason] : Array.isArray(rawContent) ? ["服务以文本分片返回正文，已按顺序合并评分"] : [];
-  if (exactUsage == null) return { content, promptTokens: Math.max(MAX_PROMPT_TOKENS, Buffer.byteLength(system + prompt, "utf8")), completionTokens: Math.max(MAX_OUTPUT_TOKENS, Buffer.byteLength(content, "utf8")), latencyMs: Date.now() - started, usageEstimated: true, responseNotes, incompatibleReason, identityUnverifiable };
-  return { content, promptTokens: exactUsage.prompt_tokens, completionTokens: exactUsage.completion_tokens, latencyMs: Date.now() - started, usageEstimated: false, responseNotes, incompatibleReason, identityUnverifiable };
+  if (exactUsage == null) return { content, promptTokens: Math.max(MAX_PROMPT_TOKENS, Buffer.byteLength(system + prompt, "utf8")), completionTokens: Math.max(MAX_OUTPUT_TOKENS, Buffer.byteLength(content, "utf8")), latencyMs: Date.now() - started, responseDiagnostic, usageEstimated: true, responseNotes, incompatibleReason, identityUnverifiable };
+  return { content, promptTokens: exactUsage.prompt_tokens, completionTokens: exactUsage.completion_tokens, latencyMs: Date.now() - started, responseDiagnostic, usageEstimated: false, responseNotes, incompatibleReason, identityUnverifiable };
 };
 
 export class ModelEvaluationEngine {
-  private view: EvaluationView = { status: "idle", phase: "尚未读取候选模型", connectionRevision: 0, priceCheckedAt: null, updatedAt: Date.now(), budgetCapFen: 1000, spentFen: 0, reservedFen: 0, uncertainFen: 0, candidates: [], scores: [], taskResults: [], excludedModels: [], allocation: null, completedCalls: 0, maximumCalls: 0, plannedMaximumFen: 0, resumeCount: 0, resumeAllowed: true, viewRevision: 0, taskVersion: null, responsePolicyVersion: null, startedAt: null, finishedAt: null, lastFailure: null, error: null };
+  private view: EvaluationView = { status: "idle", phase: "尚未读取候选模型", connectionRevision: 0, priceCheckedAt: null, updatedAt: Date.now(), budgetCapFen: 1000, spentFen: 0, reservedFen: 0, uncertainFen: 0, candidates: [], scores: [], taskResults: [], excludedModels: [], allocation: null, completedCalls: 0, maximumCalls: 0, plannedMaximumFen: 0, resumeCount: 0, resumeAllowed: true, viewRevision: 0, taskVersion: null, responsePolicyVersion: null, archivedViewRevision: null, carriedBudget: null, startedAt: null, finishedAt: null, lastFailure: null, error: null };
   private revision = 0;
   private readonly ownerId = randomUUID();
   private restored = false;
@@ -174,6 +132,32 @@ export class ModelEvaluationEngine {
   }
   private applyBudget(value: BudgetSnapshot) { this.view = { ...this.view, spentFen: value.spentFen, reservedFen: value.reservedFen, uncertainFen: value.uncertainFen }; }
   get() { this.restore(); if (!this.controller) this.reloadLatest(); this.recoverStale(); return evaluationViewSchema.parse(structuredClone(this.view)); }
+  archived(revision: number) {
+    const serialized = this.budget().loadArchive(SESSION_ID, revision);
+    if (!serialized) throw new LocalApiError(404, "没有找到这份历史测评记录。");
+    return evaluationViewSchema.parse(JSON.parse(serialized));
+  }
+  async prepareRevised(fetcher: typeof fetch = fetch) {
+    if (this.resuming || this.controller) throw new LocalApiError(409, "测评正在运行或规划，请稍后再试。");
+    this.resuming = true;
+    try {
+      this.get(); const prior = structuredClone(this.view);
+      const refreshing = prior.status === "discovered" && prior.archivedViewRevision != null && prior.carriedBudget != null && prior.startedAt == null && prior.completedCalls === 0 && prior.scores.length === 0 && prior.taskResults.length === 0;
+      if (!refreshing && (!["blocked", "failed", "cancelled"].includes(prior.status) || prior.taskVersion === TASK_VERSION)) throw new LocalApiError(409, "当前记录不需要重新规划修订版测评。");
+      const connection = this.settings.connection(); const safe = this.settings.safe();
+      if (!connection || !safe.providerConfigured || safe.environmentLocked || safe.revision !== prior.connectionRevision) throw new LocalApiError(409, "平台连接已变化，请先核对连接配置。");
+      const candidates = await discoverAntModels(connection, fetcher);
+      const budget = this.budget().snapshot(SESSION_ID);
+      const plannedMaximumFen = candidates.reduce((sum, item) => sum + maximumCallFen(item) * tasks.length, 0);
+      if (budget.reservedFen || budget.spentFen + budget.uncertainFen + plannedMaximumFen > Math.min(INTERNAL_PLANNING_CAP_FEN, budget.capFen)) throw new LocalApiError(409, "新计划与历史费用合计超过计划额度或仍有在途请求，未发起付费调用。");
+      if (this.settings.safe().revision !== safe.revision) throw new LocalApiError(409, "规划期间连接发生变化，未启动测评。");
+      const next = evaluationViewSchema.parse({ ...prior, status: "discovered", phase: "修订版测评计划已准备，等待你开始；旧报告和费用已保留", candidates, scores: [], taskResults: [], excludedModels: [], allocation: null, completedCalls: 0, maximumCalls: candidates.length * tasks.length, plannedMaximumFen, resumeCount: 0, resumeAllowed: true, taskVersion: TASK_VERSION, responsePolicyVersion: MODEL_RESPONSE_POLICY_VERSION, archivedViewRevision: prior.viewRevision, carriedBudget: { spentFen: budget.spentFen, uncertainFen: budget.uncertainFen }, spentFen: budget.spentFen, uncertainFen: budget.uncertainFen, reservedFen: 0, priceCheckedAt: Date.now(), updatedAt: Date.now(), viewRevision: prior.viewRevision + 1, startedAt: null, finishedAt: null, lastFailure: null, error: null });
+      if (refreshing) next.archivedViewRevision = prior.archivedViewRevision;
+      this.budget().replan(SESSION_ID, prior.viewRevision, JSON.stringify(next));
+      this.view = next; this.discoveryFetcher = fetcher;
+      return this.get();
+    } finally { this.resuming = false; }
+  }
   async discover(fetcher: typeof fetch = fetch) {
     this.discoveryFetcher = fetcher;
     this.restore();
@@ -201,13 +185,11 @@ export class ModelEvaluationEngine {
   start() {
     this.restore();
     if (this.view.status !== "discovered" || this.view.candidates.length < 3) throw new LocalApiError(409, "请先读取至少三个候选模型。");
-    if (this.view.responsePolicyVersion !== MODEL_RESPONSE_POLICY_VERSION) throw new LocalApiError(409, "测评答题长度已经更新，请先免费重新读取候选模型和费用计划。");
+    if (this.view.responsePolicyVersion !== MODEL_RESPONSE_POLICY_VERSION || this.view.taskVersion !== TASK_VERSION) throw new LocalApiError(409, "测评答题长度已经更新，请先免费重新读取候选模型和费用计划。");
     if (!this.view.priceCheckedAt || Date.now() - this.view.priceCheckedAt > PRICE_VALID_MS) throw new LocalApiError(409, "公开价格读取已超过10分钟，请重新读取候选模型后再开始，未产生付费调用。");
     const safe = this.settings.safe(); const connection = this.settings.connection();
     if (!connection || safe.revision !== this.revision) throw new LocalApiError(409, "平台连接在候选发现后发生变化。请重新读取候选模型，未产生付费调用。");
-    const recovered = this.budget().claimRun(SESSION_ID, this.ownerId, RUN_LEASE_MS);
-    const historical = recovered ? this.budget().recoverPending(SESSION_ID, this.ownerId) : this.budget().snapshot(SESSION_ID); this.applyBudget(historical);
-    if (historical.spentFen || historical.uncertainFen || historical.reservedFen) { this.budget().releaseRun(SESSION_ID, this.ownerId, "blocked"); throw new LocalApiError(409, "本机已有本轮测评费用记录。为避免重复扣费，不能自动重新开始；请先核对账单。"); }
+    const historical = this.budget().claimStart(SESSION_ID, this.ownerId, RUN_LEASE_MS, this.view.viewRevision); this.applyBudget(historical);
     this.controller = new AbortController(); this.view = { ...this.view, status: "running", phase: "正在开始受限测评", scores: [], taskResults: [], allocation: null, resumeAllowed: true, startedAt: Date.now(), finishedAt: null, lastFailure: null, error: null }; this.persist();
     void this.run(connection, this.controller.signal); return this.get();
   }
@@ -217,6 +199,7 @@ export class ModelEvaluationEngine {
     this.resuming = true;
     try {
       this.restore();
+      if (this.view.taskVersion !== TASK_VERSION) throw new LocalApiError(409, "评分规则已修订，旧成绩不能混入新规则。请先免费准备修订版测评计划。");
       const policyFailure = this.view.lastFailure;
       const failedLengthModel = policyFailure?.category === "response" && policyFailure.modelId
         ? this.view.excludedModels.find(item => item.modelId === policyFailure.modelId && isLengthTruncation(item.reason) && item.costFen != null)
@@ -333,11 +316,12 @@ export class ModelEvaluationEngine {
             throw new UsageAccountingError(`${result.identityUnverifiable}。已按本次最高预留列为待核对并停止，不能自动续测。`);
           }
           if (actualFen > maxFen) {
+            this.view = { ...this.view, lastFailure: { modelId: candidate.id, taskIndex, category: "usage", occurredAt: Date.now() } };
             this.applyBudget(this.budget().markUncertain(callId, actualFen));
             throw new UsageAccountingError("模型实际Token费用超过单次预留，需要先核对平台账单，本轮不可继续。", result.promptTokens, result.completionTokens);
           }
           if (result.incompatibleReason) {
-            const excluded = { modelId: candidate.id, displayName: candidate.displayName, reason: result.incompatibleReason, costFen: actualFen, usageEstimated: result.usageEstimated === true, occurredAt: Date.now() };
+            const excluded = { modelId: candidate.id, displayName: candidate.displayName, reason: result.incompatibleReason, responseDiagnostic: result.responseDiagnostic, costFen: actualFen, usageEstimated: result.usageEstimated === true, occurredAt: Date.now() };
             const excludedModels = [...this.view.excludedModels.filter(item => item.modelId !== candidate.id), excluded];
             let committed: ReturnType<EvaluationBudgetLedger["settleAndSaveView"]>;
             try { committed = this.budget().settleAndSaveView(SESSION_ID, callId, actualFen, budget => JSON.stringify({ ...this.view, spentFen: budget.spentFen, reservedFen: budget.reservedFen, uncertainFen: budget.uncertainFen, excludedModels, lastFailure: { modelId: candidate.id, taskIndex, category: "response", occurredAt: Date.now() }, updatedAt: Date.now(), viewRevision: this.view.viewRevision + 1 })); }
@@ -346,7 +330,7 @@ export class ModelEvaluationEngine {
             break;
           }
           const grade = task.grade(safeParseJson(result.content), result.content);
-          const taskResult = taskEvaluationResultSchema.parse({ modelId: candidate.id, taskIndex, ...grade, notes: [...new Set([...grade.notes, ...(result.responseNotes ?? [])])].slice(0, 20), latencyMs: result.latencyMs, promptTokens: result.promptTokens, completionTokens: result.completionTokens, costFen: actualFen, usageEstimated: result.usageEstimated === true });
+          const taskResult = taskEvaluationResultSchema.parse({ modelId: candidate.id, taskIndex, ...grade, responseDiagnostic: result.responseDiagnostic, notes: [...new Set([...grade.notes, ...(result.responseNotes ?? [])])].slice(0, 20), latencyMs: result.latencyMs, promptTokens: result.promptTokens, completionTokens: result.completionTokens, costFen: actualFen, usageEstimated: result.usageEstimated === true });
           const nextResults = [...taskResults, taskResult]; const nextCompletedCalls = this.view.completedCalls + 1;
           let committed: ReturnType<EvaluationBudgetLedger["settleAndSaveView"]>;
           try {
@@ -360,7 +344,7 @@ export class ModelEvaluationEngine {
         if (this.view.excludedModels.some(item => item.modelId === candidate.id)) continue;
         const completed = taskResults.filter(result => result.modelId === candidate.id).sort((a, b) => a.taskIndex - b.taskIndex);
         if (completed.length !== tasks.length) throw new UsageAccountingError("模型题目记录不完整，本轮不可自动续测。");
-        const grades: Grade[] = completed.map(result => ({ structure: result.structure, evidence: result.evidence, originality: result.originality, format: result.format, notes: result.notes }));
+        const grades = completed.map(result => ({ structure: result.structure, evidence: result.evidence, originality: result.originality, format: result.format, notes: result.notes }));
         const latencyMs = completed.reduce((sum, result) => sum + result.latencyMs, 0), promptTokens = completed.reduce((sum, result) => sum + result.promptTokens, 0), completionTokens = completed.reduce((sum, result) => sum + result.completionTokens, 0), candidateCost = completed.reduce((sum, result) => sum + result.costFen, 0), usageEstimated = completed.some(result => result.usageEstimated);
         const structure = mean(grades.map(grade => grade.structure)), evidence = mean(grades.map(grade => grade.evidence)), originality = mean(grades.map(grade => grade.originality)), format = mean(grades.map(grade => grade.format));
         const total = Math.round(structure * .3 + evidence * .3 + originality * .25 + format * .15);

@@ -1,4 +1,4 @@
-import type { EvaluationView } from "@/domain/model-evaluation";
+import { MODEL_EVALUATION_TASK_VERSION, evaluationSummary, exclusionExplanation, type EvaluationView } from "@/domain/model-evaluation";
 import { LocalApiError } from "./local-security";
 
 const TASK_NAMES = ["结构与证据拆解", "原创方向设计", "一致性审查"];
@@ -6,10 +6,12 @@ const money = (fen: number) => `¥${(fen / 100).toFixed(2)}`;
 const time = (value: number | null) => value == null ? "旧记录未保存" : new Date(value).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false });
 const cell = (value: unknown) => String(value ?? "—").replaceAll("\\", "\\\\").replaceAll("|", "\\|").replaceAll(/\r?\n/g, " ");
 const displayName = (view: EvaluationView, id: string) => view.candidates.find(item => item.id === id)?.displayName ?? view.excludedModels.find(item => item.modelId === id)?.displayName ?? id;
+const diagnosticLine = (d: NonNullable<EvaluationView["taskResults"][number]["responseDiagnostic"]>) => `响应诊断：结束标志 ${d.finishReason}，最终正文 ${d.contentCharacters} 字符，推理文本 ${d.reasoningCharacters} 字符，平台推理用量 ${d.reasoningTokens ?? "未提供"}，请求输出上限 ${d.requestedOutputTokens} Token。`;
 
 function resultLabel(view: EvaluationView) {
   if (view.status === "completed" && view.allocation) return "测评完成，已分配三个模型";
   if (view.completedCalls >= view.maximumCalls && view.maximumCalls > 0) return "测评完成，但没有三个模型同时达到质量线";
+  if (view.status === "blocked" && !view.resumeAllowed) return evaluationSummary(view);
   if (view.status === "cancelled") return "测评由用户停止，结果不完整";
   return "测评尚未完整结束";
 }
@@ -17,6 +19,7 @@ function resultLabel(view: EvaluationView) {
 export function buildEvaluationReport(view: EvaluationView, generatedAt = Date.now()) {
   const hasRunRecord = view.completedCalls > 0 || view.scores.length > 0 || view.taskResults.length > 0 || view.excludedModels.length > 0 || view.spentFen > 0 || view.reservedFen > 0 || view.uncertainFen > 0 || view.lastFailure != null || view.startedAt != null;
   if (!hasRunRecord) throw new LocalApiError(409, "尚未开始模型测评，没有可写入报告的运行记录。");
+  const legacyRules = view.taskVersion !== MODEL_EVALUATION_TASK_VERSION;
   const lines = [
     "# 剧本工作台模型测评报告",
     "",
@@ -25,7 +28,7 @@ export function buildEvaluationReport(view: EvaluationView, generatedAt = Date.n
     "## 本次结论",
     "",
     `- 结果：${resultLabel(view)}`,
-    `- 进度：${view.completedCalls}/${view.maximumCalls} 道可评分题目`,
+    `- 进度：${view.completedCalls}/${view.maximumCalls} 道已记录题目（包含格式校验失败记录，不等于全部有效评分）`,
     `- 测评规则：${view.taskVersion ?? "旧记录未保存版本号"}`,
     `- 测评开始：${time(view.startedAt)}`,
     `- 记录更新：${time(view.updatedAt)}`,
@@ -37,6 +40,7 @@ export function buildEvaluationReport(view: EvaluationView, generatedAt = Date.n
   ];
   if (view.allocation) lines.push(`- 主创作模型：${displayName(view, view.allocation.mainModel)}`, `- 审查模型 A：${displayName(view, view.allocation.reviewA)}`, `- 审查模型 B：${displayName(view, view.allocation.reviewB)}`);
   else lines.push("尚未形成三个模型的可靠分配。未完整测评或未达到质量线时，不给出“最佳模型”结论。");
+  if (legacyRules) lines.push("", "## 旧评分规则的限制", "", "- 旧题目未明示部分条数和字数限制；逐字引用的句末句号也可能被判错。旧分数仅作历史记录，不能直接判断模型能力。", "- 旧版没有保留原始答案和字段级诊断，无法确认每道题的具体错误，也不能重算分数。", "- 修订版规则需单独测评，不与历史分数混合分配。历史费用继续计入累计预算。");
   const legacyInterrupted = view.resumeCount > 0 && view.excludedModels.length === 0 && view.lastFailure == null && view.error === "模型服务返回的正文结构不完整，已停止后续付费调用。"
     ? view.candidates.find(candidate => !view.scores.some(score => score.modelId === candidate.id) && !view.taskResults.some(result => result.modelId === candidate.id))
     : undefined;
@@ -59,19 +63,27 @@ export function buildEvaluationReport(view: EvaluationView, generatedAt = Date.n
     if (score) lines.push(`- 汇总：${score.total} 分；结构 ${score.structure}、证据 ${score.evidence}、原创 ${score.originality}、格式 ${score.format}`, `- 用量：${score.promptTokens + score.completionTokens} Token${score.usageEstimated ? "（按安全上限估算）" : ""}`, `- 备注：${score.notes.join("；") || "无"}`);
     else lines.push(`- 状态：已完成 ${details.length}/3 道，仅保留逐题记录，不合成总分或参与排名。`);
     if (score && !details.length) lines.push("- 逐题明细：这是升级前保存的历史汇总成绩，逐题明细未保存，不能补造。");
-    else for (const detail of details) lines.push(`- ${TASK_NAMES[detail.taskIndex]}：结构 ${detail.structure}、证据 ${detail.evidence}、原创 ${detail.originality}、格式 ${detail.format}；${detail.notes.join("；")}`);
+    else for (const detail of details) {
+      lines.push(`- ${TASK_NAMES[detail.taskIndex]}：结构 ${detail.structure}、证据 ${detail.evidence}、原创 ${detail.originality}、格式 ${detail.format}；${detail.notes.join("；")}`);
+      if (detail.responseDiagnostic) {
+        const d = detail.responseDiagnostic;
+        lines.push(`  - ${diagnosticLine(d)}`);
+      }
+    }
     lines.push("");
   }
   if (view.excludedModels.length) {
     lines.push("## 已排除候选", "");
     for (const item of view.excludedModels) {
       const completed = view.taskResults.filter(result => result.modelId === item.modelId).length;
-      lines.push(`- ${displayName(view, item.modelId)}：${item.reason}；${item.costFen == null ? "旧版未保存单项费用，相关金额已包含在总待核对费用中" : `本条记录费用 ${money(item.costFen)}${item.usageEstimated ? "（上限估算）" : ""}`}${completed ? `；此前已有 ${completed}/3 道逐题结果已保留，但不合成总分` : ""}`);
+      lines.push(`- ${displayName(view, item.modelId)}：${exclusionExplanation(item, view)}；${item.costFen == null ? "旧版未保存单项费用，相关金额已包含在总待核对费用中" : `本条记录费用 ${money(item.costFen)}${item.usageEstimated ? "（上限估算）" : ""}`}${completed ? `；此前已有 ${completed}/3 道逐题结果已保留，但不合成总分` : ""}`);
+      lines.push(item.responseDiagnostic ? `  - ${diagnosticLine(item.responseDiagnostic)}` : "  - 旧记录缺少响应诊断元信息，不能补推本次请求长度或隐藏推理用量。");
     }
     lines.push("");
   }
   lines.push("## 费用", "", `- 已核算：${money(view.spentFen)}`, `- 在途预留：${money(view.reservedFen)}`, `- 待平台核对：${money(view.uncertainFen)}`, `- 工作台估算硬上限：${money(view.budgetCapFen)}`, "- “待平台核对”不是确认扣款；最终金额以蚂蚁平台账单为准。完整费用以本节账本合计为准，可能包含未形成成绩的异常调用。", "");
   if (view.error) lines.push("## 当前未解决事项", "", `- ${view.error}`, ...(view.lastFailure ? [`- 最近一次定位：${displayName(view, view.lastFailure.modelId ?? "未知模型")}，${view.lastFailure.taskIndex == null ? "题目未知" : TASK_NAMES[view.lastFailure.taskIndex]}，类型 ${view.lastFailure.category}`] : legacyInterrupted ? ["- 中断候选可按执行顺序定位，但响应具体字段未保存，不能事后补造。"] : ["- 旧记录没有保存失败调用的模型归属和响应形态，不能事后补造。"]), "");
+  lines.push("## 评分方法", "", "- 评分由工作台三道固定合成题的程序规则计算；LiteLLM不提供这些剧本质量分数。", "- 总分：结构30%、证据30%、原创25%、格式15%。进入分配还要求总分≥70、结构≥60、证据≥70、原创≥60、格式≥95。", "- 这是字段、引用和关键词规则的小样筛选，不能当作全面的创作能力排行榜。", "");
   lines.push("## 适用边界", "", "- 测评只使用三类固定合成小样，没有发送用户剧本。", "- 得分用于当前工作台的模型角色分配，不证明长篇创作、完整 Skill 执行或真人试玩效果。", "- 未完成模型不能与完整模型直接排名；没有三个模型达到质量线时不会自动分配。", "");
   const date = new Date(view.updatedAt); const dateStamp = Number.isNaN(date.getTime()) ? "未知日期" : date.toISOString().slice(0, 10);
   return { filename: `模型测评报告-${dateStamp}.md`, markdown: lines.join("\n"), viewRevision: view.viewRevision };

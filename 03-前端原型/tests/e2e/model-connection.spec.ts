@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { seedProject } from "./project-fixture";
 
 const candidate = (id: string, provider: string, price: number) => ({ id, displayName: id.toUpperCase(), provider, contextLength: 128000, inputPriceMicroCnyPerMillion: price * 1_000_000, outputPriceMicroCnyPerMillion: price * 2_000_000 });
-const idle = { status: "idle", phase: "尚未读取候选模型", connectionRevision: 0, priceCheckedAt: null, updatedAt: Date.now(), budgetCapFen: 1000, spentFen: 0, reservedFen: 0, uncertainFen: 0, candidates: [], scores: [], allocation: null, completedCalls: 0, maximumCalls: 0, plannedMaximumFen: 0, error: null };
+const idle = { status: "idle", phase: "尚未读取候选模型", connectionRevision: 0, priceCheckedAt: null, updatedAt: Date.now(), budgetCapFen: 1000, spentFen: 0, reservedFen: 0, uncertainFen: 0, candidates: [], scores: [], allocation: null, completedCalls: 0, maximumCalls: 0, plannedMaximumFen: 0, error: null, taskVersion: "juben-model-eval/1.1" };
 
 test("先安全保存蚂蚁连接，再免费读取候选模型；不会自动发起付费调用", async ({ page }) => {
   let providerConfigured = false, contentCalls = 0, discoveryCalls = 0;
@@ -61,4 +61,24 @@ test("旧版length截断会解释为答题空间不足，并提供新版长度�
   await page.goto("/"); await page.getByRole("button", { name: "配置模型", exact: true }).click(); const dialog = page.getByRole("dialog");
   await expect(dialog.getByText(/回答达到旧版长度上限，正文被截断；不是模型损坏/)).toBeVisible();
   await dialog.getByRole("button", { name: "使用新版长度继续测评" }).click(); await expect(dialog.getByText(/已加长答题空间/)).toBeVisible();
+});
+
+
+test("旧轮停下后显示历史评分限制，免费规划不开始调用且保留历史报告入口", async ({ page }) => {
+  const models = [candidate("model-a", "A", 1), candidate("model-b", "B", 2), candidate("model-c", "C", 3)];
+  const blocked = { ...idle, taskVersion: null, status: "blocked", phase: "旧版笼统错误", candidates: models, spentFen: 62, uncertainFen: 24, maximumCalls: 13, completedCalls: 1, resumeAllowed: false, excludedModels: [{ modelId: "model-c", displayName: "MODEL-C", reason: "旧版length截断，保留为本轮自动替补候选", costFen: 1, usageEstimated: false, occurredAt: Date.now() }], taskResults: [{ modelId: "model-b", taskIndex: 0, structure: 0, evidence: 0, originality: 0, format: 0, latencyMs: 1, promptTokens: 1, completionTokens: 1, costFen: 1, usageEstimated: false, notes: ["旧记录"] }] };
+  let prepares = 0;
+  await page.route("**/api/studio/settings", route => route.fulfill({ json: { baseUrl: "https://maas-api.antdigital.com/v1", mainModel: "", reviewA: "", reviewB: "", hasApiKey: true, providerConfigured: true, configured: false, source: "local", revision: 1, environmentLocked: false } }));
+  await page.route("**/api/studio/evaluation", async route => {
+    if (route.request().method() === "GET") return route.fulfill({ json: blocked });
+    expect(route.request().postDataJSON()).toEqual({ action: "prepare" }); prepares++;
+    return route.fulfill({ json: { ...blocked, status: "discovered", taskVersion: "juben-model-eval/1.1", responsePolicyVersion: "openai-json/2-4096", archivedViewRevision: 27, taskResults: [], excludedModels: [], completedCalls: 0, maximumCalls: 9, priceCheckedAt: Date.now(), phase: "修订版测评计划已准备" } });
+  });
+  await page.goto("/"); await page.getByRole("button", { name: "配置模型", exact: true }).click(); const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText(/本轮已停止/)).toBeVisible(); await expect(dialog.getByText(/部分完成 1\/3/)).toBeVisible();
+  await expect(dialog.getByText(/本轮已经停止，不会自动再测/)).toBeVisible();
+  await expect(dialog.getByText(/旧版评分记录需要复核/)).toBeVisible();
+  await dialog.getByRole("button", { name: "准备修订版测评计划（免费）" }).click();
+  await expect(dialog.getByRole("button", { name: "开始受限测评" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "下载上一轮报告" })).toBeVisible(); expect(prepares).toBe(1);
 });

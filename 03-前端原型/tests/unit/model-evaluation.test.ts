@@ -240,6 +240,48 @@ describe("剧本领域小样测评", () => {
     expect(stopped.status).toBe("blocked"); expect(stopped.allocation).toBeNull(); expect(stopped.scores.map(item => item.modelId)).toContain(scoredId); expect(calls).toBe(10);
     expect(stopped.error).toContain("已有得分或题目记录的模型已不在当前可用价格表中");
   });
+  it("修订版只免费规划，原子归档旧报告，累计费用保留并在用户开始后测试", async () => {
+    let calls = 0;
+    const tracked: EvaluationTransport = async (...args) => { calls++; return transport(...args); };
+    const { root, settings, engine } = setup(tracked); const discovered = await engine.discover(fetcher as typeof fetch);
+    const file = join(root, "budget.sqlite"); const ledger = new EvaluationBudgetLedger(file); const session = "ant-model-selection-v1";
+    ledger.reserve(session, "old-paid", 62); ledger.settle("old-paid", 62); ledger.reserve(session, "old-unknown", 24); ledger.markUncertain("old-unknown");
+    const old = { ...discovered, taskVersion: null, status: "blocked", completedCalls: 0, resumeAllowed: false, viewRevision: 27, spentFen: 62, uncertainFen: 24, error: "旧规则失败" };
+    ledger.saveView(session, JSON.stringify(old)); ledger.close();
+    const restored = new ModelEvaluationEngine(settings, tracked, () => new EvaluationBudgetLedger(file), () => {});
+    await expect(restored.resume(fetcher as typeof fetch)).rejects.toThrow("旧成绩不能混入新规则");
+    const plan = await restored.prepareRevised(fetcher as typeof fetch);
+    expect(calls).toBe(0); expect(plan).toMatchObject({ status: "discovered", spentFen: 62, uncertainFen: 24, archivedViewRevision: 27, taskVersion: "juben-model-eval/1.1", completedCalls: 0 });
+    expect(restored.archived(27)).toMatchObject({ error: "旧规则失败", spentFen: 62, uncertainFen: 24 });
+    expect(plan.scores).toEqual([]); expect(plan.taskResults).toEqual([]);
+    const rival = new ModelEvaluationEngine(settings, tracked, () => new EvaluationBudgetLedger(file), () => {}); rival.get();
+    restored.start(); expect(() => rival.start()).toThrow("另一工作台进程"); const done = await finished(restored);
+    expect(done.status).toBe("completed"); expect(calls).toBe(12); expect(done.spentFen).toBeGreaterThan(62); expect(done.uncertainFen).toBe(24);
+  });
+  it("新计划开始前账本若变化则拒绝调用，旧报告不能被反复归档清空", async () => {
+    let calls = 0; const tracked: EvaluationTransport = async (...args) => { calls++; return transport(...args); };
+    const { root, settings, engine } = setup(tracked); const discovered = await engine.discover(fetcher as typeof fetch); const file = join(root, "budget.sqlite"); const session = "ant-model-selection-v1";
+    const ledger = new EvaluationBudgetLedger(file); ledger.saveView(session, JSON.stringify({ ...discovered, status: "blocked", taskVersion: null, viewRevision: 20, resumeAllowed: false }));
+    const restored = new ModelEvaluationEngine(settings, tracked, () => new EvaluationBudgetLedger(file), () => {});
+    await restored.prepareRevised(fetcher as typeof fetch);
+    const beforeRefresh = restored.get();
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 11 * 60 * 1000);
+    expect(() => restored.start()).toThrow("超过10分钟");
+    const refreshed = await restored.prepareRevised(fetcher as typeof fetch);
+    expect(refreshed.archivedViewRevision).toBe(beforeRefresh.archivedViewRevision);
+    expect(refreshed.viewRevision).toBeGreaterThan(beforeRefresh.viewRevision); expect(calls).toBe(0);
+    ledger.reserve(session, "outside-change", 10); ledger.markUncertain("outside-change");
+    expect(() => restored.start()).toThrow("费用账本已变化"); expect(calls).toBe(0); expect(restored.archived(20).taskVersion).toBeNull(); ledger.close();
+  });
+  it("响应诊断仅保存计数和固定枚举，不保存正文或隐藏推理", async () => {
+    const original = globalThis.fetch;
+    try {
+      globalThis.fetch = async () => Response.json({ model: "a", choices: [{ finish_reason: "length", message: { content: "{partial", reasoning_content: "private-thinking" } }], usage: { prompt_tokens: 30, completion_tokens: 4096, completion_tokens_details: { reasoning_tokens: 4000 } } });
+      const result = await antEvaluationTransport({ baseUrl: "https://maas-api.antdigital.com/v1", apiKey: "test-only" }, "a", "system", "prompt", new AbortController().signal);
+      expect(result.responseDiagnostic).toEqual({ finishReason: "length", contentCharacters: 8, reasoningCharacters: 16, reasoningTokens: 4000, requestedOutputTokens: 4096 });
+      expect(JSON.stringify(result.responseDiagnostic)).not.toContain("private-thinking");
+    } finally { globalThis.fetch = original; }
+  });
   it("真实旧记录第二次停在同一候选时，下一次只跳过该候选并换入其他模型", async () => {
     const { root, settings, engine } = setup(); const discovered = await engine.discover(fetcher as typeof fetch); const selected = discovered.candidates[0]!; const incompatible = discovered.candidates[1]!;
     const score = { modelId: selected.id, total: 64, structure: 71, evidence: 48, originality: 53, format: 100, latencyMs: 1000, promptTokens: 614, completionTokens: 5461, costFen: 20, usageEstimated: false, notes: ["旧汇总"] };

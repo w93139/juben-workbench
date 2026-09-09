@@ -6,6 +6,11 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  try { assertLocalRequest(request); return localJson(buildEvaluationReport(modelEvaluationEngine.get())); }
+  try {
+    assertLocalRequest(request);
+    const archive = new URL(request.url).searchParams.get("archive");
+    if (archive != null && !/^\d{1,9}$/.test(archive)) return localJson({ error: "历史报告编号无效。" }, 400);
+    return localJson(buildEvaluationReport(archive == null ? modelEvaluationEngine.get() : modelEvaluationEngine.archived(Number(archive))));
+  }
   catch (error) { return localErrorResponse(error); }
 }

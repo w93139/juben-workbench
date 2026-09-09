@@ -18,6 +18,14 @@ describe("模型测评报告", () => {
     expect(report.markdown).toContain("没有发送用户剧本"); expect(report.markdown).not.toContain("最佳模型：Qwen"); expect(report.markdown).toContain("Qwen \\| Max");
     expect(report.markdown).toContain("分析推断：按旧版固定候选顺序"); expect(report.markdown).toContain("响应具体字段未保存");
   });
+  it("新截断和空正文按实际诊断解释，终态不继续承诺自动替补", () => {
+    const diagnostic = { finishReason: "length", contentCharacters: 0, reasoningCharacters: 100, reasoningTokens: 4096, requestedOutputTokens: 4096 };
+    const view = evaluationViewSchema.parse({ ...base, resumeAllowed: false, responsePolicyVersion: "openai-json/2-4096", taskVersion: "juben-model-eval/1.1", excludedModels: [{ modelId: "b", displayName: "B", reason: "服务以length结束，正文可能不完整", costFen: 2, usageEstimated: false, occurredAt: 1, responseDiagnostic: diagnostic }, { modelId: "c", displayName: "C", reason: "旧版length截断，保留为本轮自动替补候选", costFen: 1, usageEstimated: false, occurredAt: 1 }] });
+    const report = buildEvaluationReport(view);
+    expect(report.markdown).toContain("本轮已停止"); expect(report.markdown).toContain("本次上限4096 Token");
+    expect(report.markdown).toContain("最终正文 0 字符"); expect(report.markdown).toContain("推理用量 4096"); expect(report.markdown).toContain("本轮已经停止，不会自动再测");
+    expect(report.markdown).not.toContain("达到旧版长度上限");
+  });
   it("完成状态只展示数据库已有的三个角色分配", () => {
     const candidates = ["a", "b", "c"].map(id => ({ id, displayName: id.toUpperCase(), provider: id, contextLength: 128000, inputPriceMicroCnyPerMillion: 1, outputPriceMicroCnyPerMillion: 2 }));
     const scores = candidates.map((item, index) => ({ modelId: item.id, total: 80 + index, structure: 80, evidence: 80, originality: 80, format: 100, latencyMs: 1000, promptTokens: 10, completionTokens: 20, costFen: 1, usageEstimated: false, notes: ["完成"] }));
