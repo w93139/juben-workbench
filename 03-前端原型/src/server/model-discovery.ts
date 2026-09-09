@@ -2,6 +2,7 @@ import { z } from "zod";
 import { modelCandidateSchema, type ModelCandidate } from "@/domain/model-evaluation";
 import type { ProviderConnection } from "./studio-settings";
 import { LocalApiError } from "./local-security";
+import { RESEARCH_SELECTION_POLICY, type CandidateSelectionPolicy } from "@/domain/model-shortlist";
 
 const MAX_RESPONSE_BYTES = 2_000_000;
 const modelId = z.string().trim().min(1).max(200).refine(value => !/[\x00-\x20\x7f]/.test(value));
@@ -38,17 +39,15 @@ function parsePrice(value: string) {
 }
 function context(value: string | number | null | undefined) { const parsed = Number(value); return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : null; }
 function available(item: z.infer<typeof priceItemSchema>) {
-  const off = item.offShelfFlag; return item.status === "RELEASED" && item.type === "TEXT_GENERATE" && !(off === true || off === 1 || off === "1" || off === "true");
+  const off = item.offShelfFlag; return item.status === "RELEASED" && ["TEXT_GENERATE", "VISUAL_UNDERSTANDING"].includes(item.type ?? "") && !(off === true || off === 1 || off === "1" || off === "true");
 }
 function supportsRequiredFormat(item: z.infer<typeof priceItemSchema>) {
   const parameters = item.protocolParameters?.find(protocol => protocol.protocolName === "openai_chat_completions")?.parameters;
   return item.modelProtocolCompatibility?.openai_chat_completions === true && parameters?.response_format === true;
 }
 const excluded = /(embedding|rerank|ocr|vision|image|audio|speech|tts|moderation|code|coder|medical|sante|fin(?:ance)?)/i;
-function family(candidate: ModelCandidate) { return candidate.provider.toLowerCase() || candidate.id.split(/[-_.]/)[0]!.toLowerCase(); }
-function totalPrice(candidate: ModelCandidate) { return candidate.inputPriceMicroCnyPerMillion + candidate.outputPriceMicroCnyPerMillion; }
 
-export async function discoverAntModels(connection: ProviderConnection, fetcher: typeof fetch = fetch, signal?: AbortSignal, preferredIds: string[] = [], excludedIds: string[] = []): Promise<ModelCandidate[]> {
+export async function discoverAntModels(connection: ProviderConnection, fetcher: typeof fetch = fetch, signal?: AbortSignal, preferredIds: string[] = [], excludedIds: string[] = [], policy: CandidateSelectionPolicy = RESEARCH_SELECTION_POLICY): Promise<ModelCandidate[]> {
   const modelsUrl = new URL(connection.baseUrl.replace(/\/+$/, "") + "/models");
   if (modelsUrl.origin !== "https://maas-api.antdigital.com" || modelsUrl.pathname !== "/v1/models") throw new LocalApiError(400, "自动选型当前只支持蚂蚁数科官方模型地址。");
   const timeout = AbortSignal.timeout(20_000); const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
@@ -68,17 +67,15 @@ export async function discoverAntModels(connection: ProviderConnection, fetcher:
     return candidate.success ? [candidate.data] : [];
   });
   const excludedSet = new Set(excludedIds); const usable = priced.filter(candidate => (candidate.contextLength ?? 0) >= 64_000 && !excludedSet.has(candidate.id));
-  const byFamily = new Map<string, ModelCandidate[]>();
-  for (const candidate of usable) byFamily.set(family(candidate), [...(byFamily.get(family(candidate)) ?? []), candidate]);
-  // One higher-price tier keeps the comparison broad; the remaining seats favor
-  // inexpensive models from other providers. Price is never treated as quality.
-  const higherTier = [...usable].sort((a, b) => totalPrice(b) - totalPrice(a) || (b.contextLength ?? 0) - (a.contextLength ?? 0))[0];
-  const economical = [...byFamily.values()].map(items => items.sort((a, b) => totalPrice(a) - totalPrice(b) || (b.contextLength ?? 0) - (a.contextLength ?? 0))[0]!)
-    .sort((a, b) => totalPrice(a) - totalPrice(b));
+  // Existing results may predate the shortlist. Preserve them, but only introduce
+  // researched IDs. Never expand to unrelated cheap/high-price models.
   const selected: ModelCandidate[] = preferredIds.flatMap(id => usable.find(candidate => candidate.id === id) ?? []).slice(0, 4);
-  if (higherTier && selected.length < 4 && !selected.some(item => item.id === higherTier.id)) selected.push(higherTier);
-  for (const candidate of economical) { if (selected.length >= 4) break; if (!selected.some(item => item.id === candidate.id) && !selected.some(item => family(item) === family(candidate))) selected.push(candidate); }
-  if (selected.length < 3) for (const candidate of usable.sort((a, b) => totalPrice(a) - totalPrice(b))) { if (selected.length >= 4) break; if (!selected.some(item => item.id === candidate.id)) selected.push(candidate); }
-  if (selected.length < 3) throw new LocalApiError(409, "当前账号缺少三个有明确人民币价格的不同文本模型，无法进行三模型选型。");
+  const targetCount = Math.min(4, Math.max(policy.initialCount, selected.length));
+  for (const id of policy.ids) {
+    if (selected.length >= targetCount) break;
+    const candidate = usable.find(item => item.id === id);
+    if (candidate && !selected.some(item => item.id === id)) selected.push(candidate);
+  }
+  if (selected.length < 3) throw new LocalApiError(409, "研究清单中缺少三个当前账号可用、格式受支持且价格明确的候选。不会扩大到其他模型或继续付费测评。");
   return selected;
 }

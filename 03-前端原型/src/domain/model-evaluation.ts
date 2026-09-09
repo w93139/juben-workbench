@@ -49,6 +49,7 @@ export const evaluationViewSchema = z.object({
   candidates: z.array(modelCandidateSchema).max(4), scores: z.array(modelScoreSchema).max(4), taskResults: z.array(taskEvaluationResultSchema).max(48).default([]).refine(items => new Set(items.map(item => `${item.modelId}:${item.taskIndex}`)).size === items.length, "测评题目结果不能重复"), excludedModels: z.array(excludedModelSchema).max(16).default([]).refine(items => new Set(items.map(item => item.modelId)).size === items.length, "排除模型不能重复"), allocation: modelAllocationSchema.nullable(),
   completedCalls: z.number().int().nonnegative(), maximumCalls: z.number().int().nonnegative(), plannedMaximumFen: z.number().int().nonnegative(), resumeCount: z.number().int().nonnegative().default(0), resumeAllowed: z.boolean().default(true), viewRevision: z.number().int().nonnegative().default(0),
   taskVersion: z.string().trim().min(1).max(100).nullable().default(null), startedAt: z.number().int().nonnegative().nullable().default(null), finishedAt: z.number().int().nonnegative().nullable().default(null),
+  candidatePolicyVersion: z.string().trim().min(1).max(100).nullable().default(null),
   responsePolicyVersion: z.string().trim().min(1).max(100).nullable().default(null),
   archivedViewRevision: z.number().int().nonnegative().nullable().default(null),
   carriedBudget: z.object({ spentFen: z.number().int().nonnegative(), uncertainFen: z.number().int().nonnegative() }).strict().nullable().default(null),

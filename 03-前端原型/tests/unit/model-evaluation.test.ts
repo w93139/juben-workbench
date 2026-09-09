@@ -5,9 +5,13 @@ import { join } from "node:path";
 import { evaluationViewSchema } from "@/domain/model-evaluation";
 import { EvaluationBudgetLedger } from "@/server/evaluation-budget";
 import { antEvaluationTransport, ModelEvaluationEngine, type EvaluationTransport } from "@/server/model-evaluation";
+import { RESEARCH_SELECTION_POLICY } from "@/domain/model-shortlist";
+import { discoverAntModels } from "@/server/model-discovery";
 import { StudioSettingsStore } from "@/server/studio-settings";
 
 const roots: string[] = [];
+// Engine regression fixtures retain their synthetic candidate pool. Production discovery is tested separately.
+const fixtureDiscovery: typeof discoverAntModels = (connection, call, signal, preferred, excluded) => discoverAntModels(connection, call, signal, preferred, excluded, { ids: ["cheap-c", "premium", "cheap-a", "cheap-b", "cheap-d", "cheap-e", "legacy-bad"], initialCount: 4 });
 const modelIds = ["premium", "cheap-a", "cheap-b", "cheap-c"];
 const catalogItem = (name: string, index: number) => ({ name, displayName: name, provider: `P${index}`, status: "RELEASED", contextLength: 128000, inPrice: `¥${index + 1}/M`, outPrice: `¥${index + 2}/M`, type: "TEXT_GENERATE", offShelfFlag: 0, modelProtocolCompatibility: { openai_chat_completions: true }, protocolParameters: [{ protocolName: "openai_chat_completions", parameters: { response_format: true } }] });
 const fetcher = async (input: string | URL | Request) => String(input).endsWith("/models") ? Response.json({ data: modelIds.map(id => ({ id })) }) : Response.json({ success: true, data: { items: modelIds.map(catalogItem) } });
@@ -22,7 +26,7 @@ const transport: EvaluationTransport = async (_connection, _model, _system, prom
 function setup(customTransport = transport) {
   const root = mkdtempSync(join(tmpdir(), "model-evaluation-")); roots.push(root);
   const settings = new StudioSettingsStore(join(root, "settings")); settings.save({ revision: 0, baseUrl: "https://maas-api.antdigital.com/v1", apiKey: "test-only", mainModel: "", reviewA: "", reviewB: "" }, {});
-  return { root, settings, engine: new ModelEvaluationEngine(settings, customTransport, () => new EvaluationBudgetLedger(join(root, "budget.sqlite")), () => {}) };
+  return { root, settings, engine: new ModelEvaluationEngine(settings, customTransport, () => new EvaluationBudgetLedger(join(root, "budget.sqlite")), () => {}, fixtureDiscovery) };
 }
 async function finished(engine: ModelEvaluationEngine) { for (let attempt = 0; attempt < 100; attempt++) { const view = engine.get(); if (!["running", "cancelling"].includes(view.status)) return view; await new Promise(resolve => setTimeout(resolve, 2)); } throw new Error("evaluation did not finish"); }
 afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -53,7 +57,7 @@ describe("剧本领域小样测评", () => {
   it("旧候选计划不能用900 Token预留直接启动4096 Token测评", async () => {
     const { root, settings, engine } = setup(); const discovered = await engine.discover(fetcher as typeof fetch); const file = join(root, "budget.sqlite"); const value = new EvaluationBudgetLedger(file);
     value.saveView("ant-model-selection-v1", JSON.stringify({ ...discovered, responsePolicyVersion: null, viewRevision: discovered.viewRevision + 1 })); value.close();
-    const restored = new ModelEvaluationEngine(settings, transport, () => new EvaluationBudgetLedger(file), () => {}); expect(() => restored.start()).toThrow("免费重新读取候选模型");
+    const restored = new ModelEvaluationEngine(settings, transport, () => new EvaluationBudgetLedger(file), () => {}, fixtureDiscovery); expect(() => restored.start()).toThrow("免费重新读取候选模型");
   });
   it("调用失败后将最高费用列为待核对并停止后续调用", async () => {
     const { engine } = setup(async () => { throw new DOMException("timeout", "AbortError"); }); await engine.discover(fetcher as typeof fetch); engine.start(); const done = await finished(engine);
@@ -82,7 +86,7 @@ describe("剧本领域小样测评", () => {
     let calls = 0;
     const twiceInterrupted: EvaluationTransport = async (...args) => { calls++; if (calls === 4 || calls === 5) throw new DOMException("upstream ended", "AbortError"); return transport(...args); };
     const { root, settings, engine } = setup(twiceInterrupted); await engine.discover(fetcher as typeof fetch); engine.start(); await finished(engine);
-    const stale = new ModelEvaluationEngine(settings, twiceInterrupted, () => new EvaluationBudgetLedger(join(root, "budget.sqlite")), () => {}); expect(stale.get().resumeCount).toBe(0);
+    const stale = new ModelEvaluationEngine(settings, twiceInterrupted, () => new EvaluationBudgetLedger(join(root, "budget.sqlite")), () => {}, fixtureDiscovery); expect(stale.get().resumeCount).toBe(0);
     await engine.resume(fetcher as typeof fetch); const stoppedAgain = await finished(engine); expect(stoppedAgain.resumeCount).toBe(1);
     await expect(stale.resume(fetcher as typeof fetch)).rejects.toThrow("其他进程更新"); expect(calls).toBe(5);
   });
@@ -90,9 +94,9 @@ describe("剧本领域小样测评", () => {
     let rejectCall!: (reason: Error) => void; let calls = 0;
     const pending: EvaluationTransport = async () => { calls++; return await new Promise((_, reject) => { rejectCall = reject; }); };
     const { root, settings, engine } = setup(pending); await engine.discover(fetcher as typeof fetch); engine.start();
-    const observer = new ModelEvaluationEngine(settings, pending, () => new EvaluationBudgetLedger(join(root, "budget.sqlite")), () => {}); expect(observer.get().status).toBe("running");
-    const staleCancel = new ModelEvaluationEngine(settings, pending, () => new EvaluationBudgetLedger(join(root, "budget.sqlite")), () => {}); expect(staleCancel.get().status).toBe("running");
-    const staleConnection = new ModelEvaluationEngine(settings, pending, () => new EvaluationBudgetLedger(join(root, "budget.sqlite")), () => {}); expect(staleConnection.get().status).toBe("running");
+    const observer = new ModelEvaluationEngine(settings, pending, () => new EvaluationBudgetLedger(join(root, "budget.sqlite")), () => {}, fixtureDiscovery); expect(observer.get().status).toBe("running");
+    const staleCancel = new ModelEvaluationEngine(settings, pending, () => new EvaluationBudgetLedger(join(root, "budget.sqlite")), () => {}, fixtureDiscovery); expect(staleCancel.get().status).toBe("running");
+    const staleConnection = new ModelEvaluationEngine(settings, pending, () => new EvaluationBudgetLedger(join(root, "budget.sqlite")), () => {}, fixtureDiscovery); expect(staleConnection.get().status).toBe("running");
     rejectCall(new DOMException("first stopped", "AbortError")); await finished(engine);
     await engine.resume(fetcher as typeof fetch); rejectCall(new DOMException("second stopped", "AbortError")); const latest = await finished(engine); expect(latest.resumeCount).toBe(1);
     expect(() => staleCancel.cancel()).toThrow("没有可停止的在途调用"); expect(staleCancel.get()).toMatchObject({ status: "blocked", resumeCount: 1 });
@@ -118,14 +122,14 @@ describe("剧本领域小样测评", () => {
   });
   it("候选、得分和费用状态可从SQLite恢复，不会在刷新后伪装成零消费", async () => {
     const { root, settings, engine } = setup(); await engine.discover(fetcher as typeof fetch);
-    const restored = new ModelEvaluationEngine(settings, transport, () => new EvaluationBudgetLedger(join(root, "budget.sqlite")), () => {});
+    const restored = new ModelEvaluationEngine(settings, transport, () => new EvaluationBudgetLedger(join(root, "budget.sqlite")), () => {}, fixtureDiscovery);
     expect(restored.get()).toMatchObject({ status: "discovered", maximumCalls: 12, connectionRevision: 1 });
   });
   it("两个服务实例不能重复启动同一轮；取消只产生一个在途待核对", async () => {
     let calls = 0;
     const pending: EvaluationTransport = async (_connection, _model, _system, _prompt, signal) => { calls++; return await new Promise((_, reject) => signal.addEventListener("abort", () => reject(new DOMException("cancelled", "AbortError")), { once: true })); };
     const { root, settings, engine } = setup(pending); await engine.discover(fetcher as typeof fetch);
-    const second = new ModelEvaluationEngine(settings, pending, () => new EvaluationBudgetLedger(join(root, "budget.sqlite")), () => {}); expect(second.get().status).toBe("discovered");
+    const second = new ModelEvaluationEngine(settings, pending, () => new EvaluationBudgetLedger(join(root, "budget.sqlite")), () => {}, fixtureDiscovery); expect(second.get().status).toBe("discovered");
     engine.start(); expect(() => second.start()).toThrow("另一工作台进程"); engine.cancel(); const done = await finished(engine);
     expect(done.status).toBe("cancelled"); expect(done.uncertainFen).toBeGreaterThan(0); expect(calls).toBe(1);
   });
@@ -201,7 +205,7 @@ describe("剧本领域小样测评", () => {
     const legacyDiscovered = { ...discovered, responsePolicyVersion: undefined };
     value.saveView("ant-model-selection-v1", JSON.stringify({ ...legacyDiscovered, status: "blocked", spentFen: 24, uncertainFen: 4, scores: [score], taskResults: [], excludedModels, completedCalls: 3, maximumCalls: 9, resumeCount: 3, resumeAllowed: false, lastFailure: { modelId: lengthIds.at(-1), taskIndex: 0, category: "response", occurredAt: Date.now() }, viewRevision: 12, error: "旧版长度不足" })); value.close();
     const called: string[] = []; const resumedTransport: EvaluationTransport = async (...args) => { called.push(args[1]); return transport(...args); };
-    const restored = new ModelEvaluationEngine(settings, resumedTransport, () => new EvaluationBudgetLedger(file), () => {}); await restored.resume(sixFetcher as typeof fetch); const done = await finished(restored);
+    const restored = new ModelEvaluationEngine(settings, resumedTransport, () => new EvaluationBudgetLedger(file), () => {}, fixtureDiscovery); await restored.resume(sixFetcher as typeof fetch); const done = await finished(restored);
     expect(done.status).toBe("completed"); expect(done.responsePolicyVersion).toBe("openai-json/2-4096"); expect(done.resumeCount).toBe(0); expect(done.scores).toHaveLength(4);
     expect(done.spentFen).toBeGreaterThan(24); expect(done.uncertainFen).toBe(4); expect(called).not.toContain(selected.id);
     expect(done.excludedModels).toEqual(expect.arrayContaining([expect.objectContaining({ modelId: "legacy-bad" }), expect.objectContaining({ reason: expect.stringContaining("已取得三个合格模型") })]));
@@ -219,7 +223,7 @@ describe("剧本领域小样测评", () => {
     const legacyDiscovered = { ...discovered, responsePolicyVersion: undefined };
     value.saveView("ant-model-selection-v1", JSON.stringify({ ...legacyDiscovered, status: "blocked", spentFen: 24, scores: [score], taskResults: [], excludedModels: exclusions, completedCalls: 3, maximumCalls: 9, resumeCount: 3, resumeAllowed: false, lastFailure: { modelId: lengthIds.at(-1), taskIndex: 0, category: "response", occurredAt: Date.now() }, viewRevision: 15, error: "旧版长度不足" })); value.close();
     let calls = 0; const shallow: EvaluationTransport = async () => { calls++; return { content: "{}", promptTokens: 20, completionTokens: 10, latencyMs: 10 }; };
-    const restored = new ModelEvaluationEngine(settings, shallow, () => new EvaluationBudgetLedger(file), () => {}); await restored.resume(sixFetcher as typeof fetch); const done = await finished(restored);
+    const restored = new ModelEvaluationEngine(settings, shallow, () => new EvaluationBudgetLedger(file), () => {}, fixtureDiscovery); await restored.resume(sixFetcher as typeof fetch); const done = await finished(restored);
     expect(done).toMatchObject({ status: "blocked", responsePolicyVersion: "openai-json/2-4096", resumeAllowed: false }); expect(done.scores).toHaveLength(4); expect(calls).toBe(9);
     expect(done.excludedModels).toEqual(expect.arrayContaining([expect.objectContaining({ reason: expect.stringContaining("最多比较4个模型") })]));
   });
@@ -248,13 +252,13 @@ describe("剧本领域小样测评", () => {
     ledger.reserve(session, "old-paid", 62); ledger.settle("old-paid", 62); ledger.reserve(session, "old-unknown", 24); ledger.markUncertain("old-unknown");
     const old = { ...discovered, taskVersion: null, status: "blocked", completedCalls: 0, resumeAllowed: false, viewRevision: 27, spentFen: 62, uncertainFen: 24, error: "旧规则失败" };
     ledger.saveView(session, JSON.stringify(old)); ledger.close();
-    const restored = new ModelEvaluationEngine(settings, tracked, () => new EvaluationBudgetLedger(file), () => {});
+    const restored = new ModelEvaluationEngine(settings, tracked, () => new EvaluationBudgetLedger(file), () => {}, fixtureDiscovery);
     await expect(restored.resume(fetcher as typeof fetch)).rejects.toThrow("旧成绩不能混入新规则");
     const plan = await restored.prepareRevised(fetcher as typeof fetch);
     expect(calls).toBe(0); expect(plan).toMatchObject({ status: "discovered", spentFen: 62, uncertainFen: 24, archivedViewRevision: 27, taskVersion: "juben-model-eval/1.1", completedCalls: 0 });
     expect(restored.archived(27)).toMatchObject({ error: "旧规则失败", spentFen: 62, uncertainFen: 24 });
     expect(plan.scores).toEqual([]); expect(plan.taskResults).toEqual([]);
-    const rival = new ModelEvaluationEngine(settings, tracked, () => new EvaluationBudgetLedger(file), () => {}); rival.get();
+    const rival = new ModelEvaluationEngine(settings, tracked, () => new EvaluationBudgetLedger(file), () => {}, fixtureDiscovery); rival.get();
     restored.start(); expect(() => rival.start()).toThrow("另一工作台进程"); const done = await finished(restored);
     expect(done.status).toBe("completed"); expect(calls).toBe(12); expect(done.spentFen).toBeGreaterThan(62); expect(done.uncertainFen).toBe(24);
   });
@@ -262,7 +266,7 @@ describe("剧本领域小样测评", () => {
     let calls = 0; const tracked: EvaluationTransport = async (...args) => { calls++; return transport(...args); };
     const { root, settings, engine } = setup(tracked); const discovered = await engine.discover(fetcher as typeof fetch); const file = join(root, "budget.sqlite"); const session = "ant-model-selection-v1";
     const ledger = new EvaluationBudgetLedger(file); ledger.saveView(session, JSON.stringify({ ...discovered, status: "blocked", taskVersion: null, viewRevision: 20, resumeAllowed: false }));
-    const restored = new ModelEvaluationEngine(settings, tracked, () => new EvaluationBudgetLedger(file), () => {});
+    const restored = new ModelEvaluationEngine(settings, tracked, () => new EvaluationBudgetLedger(file), () => {}, fixtureDiscovery);
     await restored.prepareRevised(fetcher as typeof fetch);
     const beforeRefresh = restored.get();
     vi.spyOn(Date, "now").mockReturnValue(Date.now() + 11 * 60 * 1000);
@@ -272,6 +276,53 @@ describe("剧本领域小样测评", () => {
     expect(refreshed.viewRevision).toBeGreaterThan(beforeRefresh.viewRevision); expect(calls).toBe(0);
     ledger.reserve(session, "outside-change", 10); ledger.markUncertain("outside-change");
     expect(() => restored.start()).toThrow("费用账本已变化"); expect(calls).toBe(0); expect(restored.archived(20).taskVersion).toBeNull(); ledger.close();
+  });
+  it("研究计划保留同规则三题成绩和旧费用，只对新候选执行六题；失败候选不再调用", async () => {
+    const { root, settings } = setup(); const file = join(root, "budget.sqlite");
+    const ids = [...RESEARCH_SELECTION_POLICY.ids]; const calls: string[] = [];
+    const publicFetch = async (input: string | URL | Request) => String(input).endsWith("/models") ? Response.json({ data: [...ids, "unresearched"].map(id => ({ id })) }) : Response.json({ success: true, data: { items: [...ids, "unresearched"].map(catalogItem) } });
+    const tracked: EvaluationTransport = async (...args) => { calls.push(args[1]); return transport(...args); };
+    const engine = new ModelEvaluationEngine(settings, tracked, () => new EvaluationBudgetLedger(file), () => {});
+    const discovered = await engine.discover(publicFetch as typeof fetch);
+    expect(discovered.candidates.map(item => item.id)).toEqual(ids.slice(0, 3));
+    const qwen = ids[0]!;
+    const score = { modelId: qwen, total: 83, structure: 92, evidence: 82, originality: 63, format: 100, latencyMs: 100, promptTokens: 900, completionTokens: 1200, costFen: 28, usageEstimated: false, notes: ["同规则已完成"] };
+    const taskResults = [0, 1, 2].map(taskIndex => ({ modelId: qwen, taskIndex, structure: 92, evidence: 82, originality: 63, format: 100, latencyMs: 30, promptTokens: 300, completionTokens: 400, costFen: 9, usageEstimated: false, notes: ["完成"] }));
+    const ledger = new EvaluationBudgetLedger(file); const session = "ant-model-selection-v1";
+    ledger.reserve(session, "prior-cost", 91); ledger.settle("prior-cost", 91); ledger.reserve(session, "prior-uncertain", 63); ledger.markUncertain("prior-uncertain");
+    ledger.saveView(session, JSON.stringify({ ...discovered, candidatePolicyVersion: null, status: "blocked", scores: [score, { ...score, modelId: "unresearched" }], taskResults: [...taskResults, ...taskResults.map(item => ({ ...item, modelId: "unresearched" }))], completedCalls: 6, spentFen: 91, uncertainFen: 63, resumeCount: 3, lastFailure: { modelId: ids[3], taskIndex: 0, category: "service", occurredAt: Date.now() }, viewRevision: 55 }));
+    const prepared = await engine.prepareRevised(publicFetch as typeof fetch);
+    expect(prepared).toMatchObject({ status: "discovered", spentFen: 91, uncertainFen: 63, completedCalls: 3, maximumCalls: 9, archivedViewRevision: 55 });
+    expect(prepared.scores).toEqual([score]); expect(calls).toEqual([]); expect(prepared.excludedModels.map(item => item.modelId)).toContain(ids[3]);
+    expect(engine.archived(55).candidatePolicyVersion).toBeNull(); expect(engine.archived(55).scores).toHaveLength(2);
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 11 * 60 * 1000);
+    const refreshed = await engine.prepareRevised(publicFetch as typeof fetch); expect(refreshed.scores).toEqual([score]); expect(refreshed.archivedViewRevision).toBe(55);
+    engine.start(); const done = await finished(engine);
+    expect(done.status).toBe("completed"); expect(done.completedCalls).toBe(9); expect(calls).toHaveLength(6); expect(calls).not.toContain(qwen); expect(calls).not.toContain(ids[3]); expect(calls).not.toContain("unresearched"); expect(done.uncertainFen).toBe(63); ledger.close();
+  });
+  it.each([false, true])("服务恢复费用已落盘=%s时，研究计划不能绕过费用阻断再调用", async (alreadyUncertain) => {
+    const { root, settings, engine } = setup(); const discovered = await engine.discover(fetcher as typeof fetch);
+    const file = join(root, "budget.sqlite"); const ledger = new EvaluationBudgetLedger(file); const session = "ant-model-selection-v1";
+    ledger.reserve(session, "pending-old-request", 30);
+    if (alreadyUncertain) ledger.markUncertain("pending-old-request");
+    ledger.saveView(session, JSON.stringify({ ...discovered, candidatePolicyVersion: null, status: "running", reservedFen: 30, updatedAt: Date.now() - 130_000, lastFailure: null }));
+    const stopped = new ModelEvaluationEngine(settings, transport, () => new EvaluationBudgetLedger(file), () => {}, fixtureDiscovery);
+    expect(stopped.get()).toMatchObject({ status: "blocked", reservedFen: 0, uncertainFen: 30, resumeAllowed: false, lastFailure: { category: "usage" } });
+    await expect(stopped.prepareRevised(fetcher as typeof fetch)).rejects.toThrow("不需要重新规划");
+    await expect(stopped.resume(fetcher as typeof fetch)).rejects.toThrow("不允许自动续测"); ledger.close();
+  });
+  it("针对性候选不发送平台明确不支持的temperature参数", async () => {
+    const captured: Record<string, unknown>[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url, options) => {
+      const body = JSON.parse(options.body); captured.push(body);
+      return Response.json({ model: body.model, choices: [{ finish_reason: "stop", message: { content: "{}" } }], usage: { prompt_tokens: 10, completion_tokens: 5 } });
+    }));
+    try {
+      for (const model of RESEARCH_SELECTION_POLICY.ids) await antEvaluationTransport({ baseUrl: "https://maas-api.antdigital.com/v1", apiKey: "test-only" }, model, "system", "prompt", new AbortController().signal);
+      for (const body of captured.slice(0, 3)) expect(body).not.toHaveProperty("temperature");
+      expect(captured[3]?.temperature).toBe(0);
+      expect(captured.every(body => body.max_tokens === 4096 && (body.response_format as { type: string }).type === "json_object")).toBe(true);
+    } finally { vi.unstubAllGlobals(); }
   });
   it("响应诊断仅保存计数和固定枚举，不保存正文或隐藏推理", async () => {
     const original = globalThis.fetch;
@@ -288,7 +339,7 @@ describe("剧本领域小样测评", () => {
     const file = join(root, "budget.sqlite"); const value = new EvaluationBudgetLedger(file); value.reserve("ant-model-selection-v1", "old-a", 2); value.markUncertain("old-a"); value.reserve("ant-model-selection-v1", "old-b", 2); value.markUncertain("old-b");
     value.saveView("ant-model-selection-v1", JSON.stringify({ ...discovered, status: "blocked", scores: [score], taskResults: [], completedCalls: 3, resumeCount: 1, resumeAllowed: true, viewRevision: 8, error: "模型服务返回的正文结构不完整，已停止后续付费调用。" })); value.close();
     const called: string[] = []; const resumedTransport: EvaluationTransport = async (...args) => { called.push(args[1]); return transport(...args); };
-    const restored = new ModelEvaluationEngine(settings, resumedTransport, () => new EvaluationBudgetLedger(file), () => {}); await restored.resume(fetcher as typeof fetch); const done = await finished(restored);
+    const restored = new ModelEvaluationEngine(settings, resumedTransport, () => new EvaluationBudgetLedger(file), () => {}, fixtureDiscovery); await restored.resume(fetcher as typeof fetch); const done = await finished(restored);
     expect(called).not.toContain(incompatible.id); expect(done.excludedModels).toEqual([expect.objectContaining({ modelId: incompatible.id, reason: expect.stringContaining("旧版严格解析") })]); expect(done.scores).toHaveLength(3);
   });
 });

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { evaluationViewSchema, MODEL_RESPONSE_POLICY_VERSION, MODEL_EVALUATION_TASK_VERSION, responseDiagnosticSchema, modelScoreSchema, taskEvaluationResultSchema, type EvaluationView, type ModelAllocation, type ModelCandidate, type ModelScore, type TaskEvaluationResult } from "@/domain/model-evaluation";
+import { MODEL_SHORTLIST, MODEL_SHORTLIST_VERSION } from "@/domain/model-shortlist";
 import { discoverAntModels } from "./model-discovery";
 import { EvaluationBudgetLedger, type BudgetSnapshot } from "./evaluation-budget";
 import { LocalApiError } from "./local-security";
@@ -67,7 +68,7 @@ function allocate(scores: ModelScore[], candidates: ModelCandidate[]): ModelAllo
 
 export const antEvaluationTransport: EvaluationTransport = async (connection, model, system, prompt, signal) => {
   const started = Date.now();
-  const response = await fetch(`${connection.baseUrl}/chat/completions`, { method: "POST", redirect: "error", signal, headers: { authorization: `Bearer ${connection.apiKey}`, "content-type": "application/json", accept: "application/json" }, body: JSON.stringify({ model, messages: [{ role: "system", content: system }, { role: "user", content: prompt }], response_format: { type: "json_object" }, temperature: 0, max_tokens: MAX_OUTPUT_TOKENS }) });
+  const response = await fetch(`${connection.baseUrl}/chat/completions`, { method: "POST", redirect: "error", signal, headers: { authorization: `Bearer ${connection.apiKey}`, "content-type": "application/json", accept: "application/json" }, body: JSON.stringify({ model, messages: [{ role: "system", content: system }, { role: "user", content: prompt }], response_format: { type: "json_object" }, ...(MODEL_SHORTLIST.find(item => item.id === model)?.omitTemperature ? {} : { temperature: 0 }), max_tokens: MAX_OUTPUT_TOKENS }) });
   if (!response.ok) { await response.body?.cancel(); throw new LocalApiError(502, "模型服务拒绝了测评请求。"); }
   const raw = await limitedText(response, 500_000);
   let parsed: unknown; try { parsed = JSON.parse(raw); } catch { throw new LocalApiError(502, "模型服务响应格式无法识别。"); }
@@ -99,7 +100,7 @@ export const antEvaluationTransport: EvaluationTransport = async (connection, mo
 };
 
 export class ModelEvaluationEngine {
-  private view: EvaluationView = { status: "idle", phase: "尚未读取候选模型", connectionRevision: 0, priceCheckedAt: null, updatedAt: Date.now(), budgetCapFen: 1000, spentFen: 0, reservedFen: 0, uncertainFen: 0, candidates: [], scores: [], taskResults: [], excludedModels: [], allocation: null, completedCalls: 0, maximumCalls: 0, plannedMaximumFen: 0, resumeCount: 0, resumeAllowed: true, viewRevision: 0, taskVersion: null, responsePolicyVersion: null, archivedViewRevision: null, carriedBudget: null, startedAt: null, finishedAt: null, lastFailure: null, error: null };
+  private view: EvaluationView = { status: "idle", phase: "尚未读取候选模型", connectionRevision: 0, priceCheckedAt: null, updatedAt: Date.now(), budgetCapFen: 1000, spentFen: 0, reservedFen: 0, uncertainFen: 0, candidates: [], scores: [], taskResults: [], excludedModels: [], allocation: null, completedCalls: 0, maximumCalls: 0, plannedMaximumFen: 0, resumeCount: 0, resumeAllowed: true, viewRevision: 0, taskVersion: null, candidatePolicyVersion: null, responsePolicyVersion: null, archivedViewRevision: null, carriedBudget: null, startedAt: null, finishedAt: null, lastFailure: null, error: null };
   private revision = 0;
   private readonly ownerId = randomUUID();
   private restored = false;
@@ -107,7 +108,7 @@ export class ModelEvaluationEngine {
   private resuming = false;
   private discoveryFetcher: typeof fetch = fetch;
   private ledger: EvaluationBudgetLedger | null = null;
-  constructor(private settings: StudioSettingsStore = studioSettingsStore, private transport: EvaluationTransport = antEvaluationTransport, private ledgerFactory = () => new EvaluationBudgetLedger(), private writeGatewayConfig: (allocation: ModelAllocation) => unknown = writeLiteLLMConfig) {}
+  constructor(private settings: StudioSettingsStore = studioSettingsStore, private transport: EvaluationTransport = antEvaluationTransport, private ledgerFactory = () => new EvaluationBudgetLedger(), private writeGatewayConfig: (allocation: ModelAllocation) => unknown = writeLiteLLMConfig, private discoverModels: typeof discoverAntModels = discoverAntModels) {}
   private budget() { return this.ledger ??= this.ledgerFactory(); }
   private persist() { this.view = { ...this.view, updatedAt: Date.now(), viewRevision: this.view.viewRevision + 1 }; this.budget().saveView(SESSION_ID, JSON.stringify(this.view)); }
   private reloadLatest() {
@@ -118,8 +119,10 @@ export class ModelEvaluationEngine {
     if (this.controller || !["running", "cancelling"].includes(this.view.status) || Date.now() - this.view.updatedAt <= REQUEST_TIMEOUT_MS + 30_000) return;
     try {
       this.budget().claimRecovery(SESSION_ID, this.ownerId, RUN_LEASE_MS, this.view.viewRevision);
+      const beforeRecovery = this.budget().snapshot(SESSION_ID);
+      const hadPending = beforeRecovery.reservedFen > 0 || beforeRecovery.uncertainFen > this.view.uncertainFen;
       const budget = this.budget().recoverPending(SESSION_ID, this.ownerId); this.applyBudget(budget);
-      this.view = { ...this.view, status: "blocked", phase: "上次测评因服务重启而停止", error: "可能已经发出的费用已列为待核对，不会自动重复调用。" }; this.persist(); this.budget().releaseRun(SESSION_ID, this.ownerId, "blocked");
+      this.view = { ...this.view, status: "blocked", ...(hadPending ? { resumeAllowed: false, lastFailure: { modelId: null, taskIndex: null, category: "usage" as const, occurredAt: Date.now() } } : {}), phase: "上次测评因服务重启而停止", error: hadPending ? "重启前有未完成请求，费用已列待核对；无法确认是否已生成答案，本轮不能重新调用。" : "测评因服务重启而停止，已有结果保留。" }; this.persist(); this.budget().releaseRun(SESSION_ID, this.ownerId, "blocked");
     } catch { this.reloadLatest(); }
   }
   private restore() {
@@ -142,16 +145,31 @@ export class ModelEvaluationEngine {
     this.resuming = true;
     try {
       this.get(); const prior = structuredClone(this.view);
-      const refreshing = prior.status === "discovered" && prior.archivedViewRevision != null && prior.carriedBudget != null && prior.startedAt == null && prior.completedCalls === 0 && prior.scores.length === 0 && prior.taskResults.length === 0;
-      if (!refreshing && (!["blocked", "failed", "cancelled"].includes(prior.status) || prior.taskVersion === TASK_VERSION)) throw new LocalApiError(409, "当前记录不需要重新规划修订版测评。");
+      const refreshing = prior.status === "discovered" && prior.archivedViewRevision != null && prior.carriedBudget != null && prior.startedAt == null;
+      const researchChange = prior.candidatePolicyVersion !== MODEL_SHORTLIST_VERSION && !["usage", "budget"].includes(prior.lastFailure?.category ?? "");
+      if (!refreshing && (!["blocked", "failed", "cancelled"].includes(prior.status) || (prior.taskVersion === TASK_VERSION && !researchChange))) throw new LocalApiError(409, "当前记录不需要重新规划修订版测评。");
       const connection = this.settings.connection(); const safe = this.settings.safe();
       if (!connection || !safe.providerConfigured || safe.environmentLocked || safe.revision !== prior.connectionRevision) throw new LocalApiError(409, "平台连接已变化，请先核对连接配置。");
-      const candidates = await discoverAntModels(connection, fetcher);
+      const sameRules = prior.taskVersion === TASK_VERSION;
+      let scores = sameRules ? prior.scores : [];
+      let taskResults = sameRules ? prior.taskResults : [];
+      const exclusions = sameRules ? [...prior.excludedModels] : [];
+      const failedId = sameRules ? prior.lastFailure?.modelId : null;
+      if (failedId && !scores.some(score => score.modelId === failedId) && !exclusions.some(item => item.modelId === failedId)) exclusions.push({ modelId: failedId, displayName: prior.candidates.find(item => item.id === failedId)?.displayName ?? failedId, reason: "前轮请求未完整返回，保留费用；本次研究计划不重复调用", costFen: null, usageEstimated: true, occurredAt: Date.now() });
+      const excludedIds = exclusions.map(item => item.modelId);
+      const primaryIds: readonly string[] = MODEL_SHORTLIST.slice(0, 3).map(item => item.id);
+      const preferredIds = [...new Set([...scores.map(item => item.modelId), ...taskResults.map(item => item.modelId)])].filter(id => primaryIds.includes(id) && !excludedIds.includes(id));
+      const candidates = await this.discoverModels(connection, fetcher, undefined, preferredIds, excludedIds);
+      if (!preferredIds.every(id => candidates.some(item => item.id === id))) throw new LocalApiError(409, "已完成候选无法核对当前价格，未开始新的测评。");
+      // Out-of-shortlist results remain in the archived report, never occupy new slots.
+      scores = scores.filter(item => candidates.some(candidate => candidate.id === item.modelId));
+      taskResults = taskResults.filter(item => candidates.some(candidate => candidate.id === item.modelId));
+      const retainedCalls = scores.length * tasks.length + taskResults.filter(item => !scores.some(score => score.modelId === item.modelId)).length;
       const budget = this.budget().snapshot(SESSION_ID);
-      const plannedMaximumFen = candidates.reduce((sum, item) => sum + maximumCallFen(item) * tasks.length, 0);
+      const plannedMaximumFen = candidates.reduce((sum, item) => sum + maximumCallFen(item) * tasks.filter((_, index) => !scores.some(score => score.modelId === item.id) && !taskResults.some(result => result.modelId === item.id && result.taskIndex === index)).length, 0);
       if (budget.reservedFen || budget.spentFen + budget.uncertainFen + plannedMaximumFen > Math.min(INTERNAL_PLANNING_CAP_FEN, budget.capFen)) throw new LocalApiError(409, "新计划与历史费用合计超过计划额度或仍有在途请求，未发起付费调用。");
       if (this.settings.safe().revision !== safe.revision) throw new LocalApiError(409, "规划期间连接发生变化，未启动测评。");
-      const next = evaluationViewSchema.parse({ ...prior, status: "discovered", phase: "修订版测评计划已准备，等待你开始；旧报告和费用已保留", candidates, scores: [], taskResults: [], excludedModels: [], allocation: null, completedCalls: 0, maximumCalls: candidates.length * tasks.length, plannedMaximumFen, resumeCount: 0, resumeAllowed: true, taskVersion: TASK_VERSION, responsePolicyVersion: MODEL_RESPONSE_POLICY_VERSION, archivedViewRevision: prior.viewRevision, carriedBudget: { spentFen: budget.spentFen, uncertainFen: budget.uncertainFen }, spentFen: budget.spentFen, uncertainFen: budget.uncertainFen, reservedFen: 0, priceCheckedAt: Date.now(), updatedAt: Date.now(), viewRevision: prior.viewRevision + 1, startedAt: null, finishedAt: null, lastFailure: null, error: null });
+      const next = evaluationViewSchema.parse({ ...prior, status: "discovered", phase: sameRules ? "研究候选已准备，同规则成绩复用；清单外成绩保留在历史报告" : "修订版测评计划已准备，等待你开始；旧报告和费用已保留", candidates, scores, taskResults, excludedModels: exclusions, allocation: null, completedCalls: retainedCalls, maximumCalls: candidates.length * tasks.length, plannedMaximumFen, resumeCount: 0, resumeAllowed: true, taskVersion: TASK_VERSION, candidatePolicyVersion: MODEL_SHORTLIST_VERSION, responsePolicyVersion: MODEL_RESPONSE_POLICY_VERSION, archivedViewRevision: prior.viewRevision, carriedBudget: { spentFen: budget.spentFen, uncertainFen: budget.uncertainFen }, spentFen: budget.spentFen, uncertainFen: budget.uncertainFen, reservedFen: 0, priceCheckedAt: Date.now(), updatedAt: Date.now(), viewRevision: prior.viewRevision + 1, startedAt: null, finishedAt: null, lastFailure: null, error: null });
       if (refreshing) next.archivedViewRevision = prior.archivedViewRevision;
       this.budget().replan(SESSION_ID, prior.viewRevision, JSON.stringify(next));
       this.view = next; this.discoveryFetcher = fetcher;
@@ -169,7 +187,7 @@ export class ModelEvaluationEngine {
     if (!connection || !safe.providerConfigured) throw new LocalApiError(409, "请先保存蚂蚁平台地址和API Key。");
     this.view = { ...this.view, status: "idle", phase: "正在免费读取可用模型与人民币价格", candidates: [], scores: [], allocation: null, error: null };
     try {
-      const discovered = await discoverAntModels(connection, fetcher);
+      const discovered = await this.discoverModels(connection, fetcher);
       const candidates = [...discovered];
       while (candidates.length > 3 && candidates.reduce((sum, candidate) => sum + maximumCallFen(candidate) * tasks.length, 0) > INTERNAL_PLANNING_CAP_FEN) {
         const expensive = [...candidates].sort((a, b) => maximumCallFen(b) - maximumCallFen(a))[0]!;
@@ -178,7 +196,7 @@ export class ModelEvaluationEngine {
       if (candidates.reduce((sum, candidate) => sum + maximumCallFen(candidate) * tasks.length, 0) > INTERNAL_PLANNING_CAP_FEN) throw new LocalApiError(409, "三个候选模型按公开价及安全余量计算会超过8元内部阈值，未开放付费测评。");
       this.revision = safe.revision;
       const plannedMaximumFen = candidates.reduce((sum, candidate) => sum + maximumCallFen(candidate) * tasks.length, 0);
-      this.view = { ...this.view, status: "discovered", phase: "候选模型已就绪，尚未产生模型费用", connectionRevision: safe.revision, priceCheckedAt: Date.now(), candidates, scores: [], taskResults: [], excludedModels: [], allocation: null, maximumCalls: candidates.length * tasks.length, completedCalls: 0, plannedMaximumFen, resumeCount: 0, resumeAllowed: true, taskVersion: TASK_VERSION, responsePolicyVersion: MODEL_RESPONSE_POLICY_VERSION, startedAt: null, finishedAt: null, lastFailure: null, error: null }; this.persist();
+      this.view = { ...this.view, status: "discovered", phase: "候选模型已就绪，尚未产生模型费用", connectionRevision: safe.revision, priceCheckedAt: Date.now(), candidates, scores: [], taskResults: [], excludedModels: [], allocation: null, maximumCalls: candidates.length * tasks.length, completedCalls: 0, plannedMaximumFen, resumeCount: 0, resumeAllowed: true, taskVersion: TASK_VERSION, candidatePolicyVersion: MODEL_SHORTLIST_VERSION, responsePolicyVersion: MODEL_RESPONSE_POLICY_VERSION, startedAt: null, finishedAt: null, lastFailure: null, error: null }; this.persist();
       return this.get();
     } catch (error) { this.view = { ...this.view, status: "failed", phase: "候选模型读取失败", error: safeError(error) }; this.persist(); throw error; }
   }
@@ -190,7 +208,7 @@ export class ModelEvaluationEngine {
     const safe = this.settings.safe(); const connection = this.settings.connection();
     if (!connection || safe.revision !== this.revision) throw new LocalApiError(409, "平台连接在候选发现后发生变化。请重新读取候选模型，未产生付费调用。");
     const historical = this.budget().claimStart(SESSION_ID, this.ownerId, RUN_LEASE_MS, this.view.viewRevision); this.applyBudget(historical);
-    this.controller = new AbortController(); this.view = { ...this.view, status: "running", phase: "正在开始受限测评", scores: [], taskResults: [], allocation: null, resumeAllowed: true, startedAt: Date.now(), finishedAt: null, lastFailure: null, error: null }; this.persist();
+    this.controller = new AbortController(); this.view = { ...this.view, status: "running", phase: "正在开始受限测评", allocation: null, resumeAllowed: true, startedAt: Date.now(), finishedAt: null, lastFailure: null, error: null }; this.persist();
     void this.run(connection, this.controller.signal); return this.get();
   }
   async resume(fetcher: typeof fetch = fetch) {
@@ -231,7 +249,7 @@ export class ModelEvaluationEngine {
       const excludedModels = legacyIncompatible ? [...retainedExclusions, { modelId: legacyIncompatible.id, displayName: legacyIncompatible.displayName, reason: "旧版严格解析连续中断，已保留费用并跳过该候选", costFen: null, usageEstimated: true, occurredAt: this.view.updatedAt }] : retainedExclusions;
       const excludedIds = new Set(excludedModels.map(item => item.modelId));
       const preservedIds = [...new Set([...completedModelIds, ...restoredTruncations.map(item => item.modelId)])].filter(id => !excludedIds.has(id));
-      const candidates = await discoverAntModels(connection, fetcher, undefined, preservedIds, [...excludedIds]);
+      const candidates = await this.discoverModels(connection, fetcher, undefined, preservedIds, [...excludedIds]);
       const expectedResumeCount = this.view.resumeCount;
       if (this.view.status !== "blocked" || (expectedResumeCount >= MAX_RESUME_ATTEMPTS && !policyUpgrade) || this.controller || this.settings.safe().revision !== this.revision) throw new LocalApiError(409, "测评状态在价格核对期间发生变化，未继续付费调用。");
       if (!preservedIds.every(id => candidates.some(candidate => candidate.id === id))) throw new LocalApiError(409, "已完成模型已不在当前可用价格表中，未继续付费调用。");
@@ -243,7 +261,7 @@ export class ModelEvaluationEngine {
       this.budget().claimResume(SESSION_ID, this.ownerId, RUN_LEASE_MS, this.view.viewRevision, expectedResumeCount, policyUpgrade && policyFailure?.modelId ? { expectedPolicyVersion: this.view.responsePolicyVersion, expectedFailureModelId: policyFailure.modelId } : undefined); this.applyBudget(budget);
       this.controller = new AbortController();
       const excludedCompletedCalls = this.view.taskResults.filter(result => excludedIds.has(result.modelId)).length;
-      this.view = { ...this.view, status: "running", phase: policyUpgrade ? "已加长答题空间，正在重新测评此前被截断的候选" : legacyIncompatible ? `已跳过不兼容的${legacyIncompatible.displayName}，正在继续其余候选` : "已保留完成结果，正在继续剩余测评", candidates, excludedModels, priceCheckedAt: Date.now(), maximumCalls: candidates.length * tasks.length + excludedCompletedCalls, plannedMaximumFen, resumeCount: policyUpgrade ? 0 : expectedResumeCount + 1, responsePolicyVersion: MODEL_RESPONSE_POLICY_VERSION, finishedAt: null, lastFailure: null, error: null };
+      this.view = { ...this.view, status: "running", phase: policyUpgrade ? "已加长答题空间，正在重新测评此前被截断的候选" : legacyIncompatible ? `已跳过不兼容的${legacyIncompatible.displayName}，正在继续其余候选` : "已保留完成结果，正在继续剩余测评", candidates, candidatePolicyVersion: MODEL_SHORTLIST_VERSION, excludedModels, priceCheckedAt: Date.now(), maximumCalls: candidates.length * tasks.length + excludedCompletedCalls, plannedMaximumFen, resumeCount: policyUpgrade ? 0 : expectedResumeCount + 1, responsePolicyVersion: MODEL_RESPONSE_POLICY_VERSION, finishedAt: null, lastFailure: null, error: null };
       try { this.persist(); } catch (error) { this.controller = null; this.budget().releaseRun(SESSION_ID, this.ownerId, "blocked"); throw error; }
       void this.run(connection, this.controller.signal); return this.get();
     } finally { this.resuming = false; }
@@ -269,7 +287,7 @@ export class ModelEvaluationEngine {
     const excludedIds = new Set(excludedModels.map(item => item.modelId));
     const preservedIds = [...new Set([...progressIds, ...deferredToRestore.map(item => item.modelId)])].filter(id => !excludedIds.has(id));
     const previousIds = new Set(this.view.candidates.filter(item => !excludedIds.has(item.id)).map(item => item.id));
-    const candidates = await discoverAntModels(connection, this.discoveryFetcher, signal, preservedIds, [...excludedIds]);
+    const candidates = await this.discoverModels(connection, this.discoveryFetcher, signal, preservedIds, [...excludedIds]);
     if (!progressIds.every(id => candidates.some(candidate => candidate.id === id))) throw new LocalApiError(409, "已有得分或题目记录的模型已不在当前可用价格表中，未继续付费调用。");
     if (!candidates.some(candidate => !previousIds.has(candidate.id))) return false;
     const completedIds = new Set(this.view.scores.map(score => score.modelId));
@@ -279,7 +297,7 @@ export class ModelEvaluationEngine {
     if (budget.spentFen + budget.reservedFen + budget.uncertainFen + plannedMaximumFen > Math.min(INTERNAL_PLANNING_CAP_FEN, budget.capFen)) throw new LocalApiError(409, "自动换入候选后的最高预留会超过8元内部阈值，已停止且没有发起新调用。");
     const excludedCompletedCalls = this.view.taskResults.filter(result => excludedIds.has(result.modelId)).length;
     this.budget().heartbeatRun(SESSION_ID, this.ownerId, RUN_LEASE_MS);
-    this.view = { ...this.view, candidates, excludedModels, priceCheckedAt: Date.now(), maximumCalls: candidates.length * tasks.length + excludedCompletedCalls, plannedMaximumFen, resumeCount: this.view.resumeCount + 1, phase: "已自动跳过不兼容响应并换入其他候选", lastFailure: null, error: null };
+    this.view = { ...this.view, candidates, candidatePolicyVersion: MODEL_SHORTLIST_VERSION, excludedModels, priceCheckedAt: Date.now(), maximumCalls: candidates.length * tasks.length + excludedCompletedCalls, plannedMaximumFen, resumeCount: this.view.resumeCount + 1, phase: "已自动跳过不兼容响应并换入其他候选", lastFailure: null, error: null };
     this.persist(); return true;
   }
   private async run(connection: ProviderConnection, signal: AbortSignal) {
@@ -352,7 +370,7 @@ export class ModelEvaluationEngine {
         const score = modelScoreSchema.parse({ modelId: candidate.id, total, structure, evidence, originality, format, latencyMs, promptTokens, completionTokens, costFen: candidateCost, usageEstimated, notes });
         scores.push(score); this.view = { ...this.view, scores: [...scores] }; this.persist();
       }
-      const allocation = allocate(scores, this.view.candidates);
+      const allocation = allocate(scores.filter(score => this.view.candidates.some(candidate => candidate.id === score.modelId)), this.view.candidates);
       if (!allocation) {
         const hasExcluded = this.view.excludedModels.length > 0 && this.view.completedCalls < this.view.maximumCalls;
         if (hasExcluded && await this.replaceIncompatibleCandidates(connection, signal)) continue;

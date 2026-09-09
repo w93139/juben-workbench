@@ -82,3 +82,24 @@ test("旧轮停下后显示历史评分限制，免费规划不开始调用且�
   await expect(dialog.getByRole("button", { name: "开始受限测评" })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "下载上一轮报告" })).toBeVisible(); expect(prepares).toBe(1);
 });
+
+
+test("研究依据可展开，等待首题时进度轨道和运行提示可见且不会重启测评", async ({ page }) => {
+  let posts = 0;
+  await page.route("**/api/studio/settings", route => route.fulfill({ json: { baseUrl: "https://maas-api.antdigital.com/v1", mainModel: "", reviewA: "", reviewB: "", hasApiKey: true, providerConfigured: true, configured: false, source: "local", revision: 1, environmentLocked: false } }));
+  await page.route("**/api/studio/capability", route => route.fulfill({ json: { configured: false, message: "等待选型" } }));
+  await page.route("**/api/studio/evaluation", route => {
+    if (route.request().method() === "POST") posts++;
+    return route.fulfill({ json: { ...idle, status: "running", phase: "正在测评 Qwen：结构与证据拆解", candidates: [candidate("qwen3.8-max", "Qwen", 1)], maximumCalls: 9, candidatePolicyVersion: "script-research/2026-09-09" } });
+  });
+  await page.goto("/"); await page.getByRole("button", { name: "配置模型", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  const progress = dialog.getByRole("progressbar", { name: "模型测评完成进度" });
+  await expect(progress).toHaveAttribute("aria-valuenow", "0");
+  expect(await progress.evaluate(el => getComputedStyle(el).backgroundColor)).toBe("rgb(227, 222, 214)");
+  await expect(dialog.getByText("正在等待本题回答，完成后更新进度。")).toBeVisible();
+  await dialog.getByText("根据公开资料筛选：3 个首选＋1 个替补", { exact: true }).click();
+  await expect(dialog.getByText("Kimi K3 · 跨角色信息与独立复核", { exact: true })).toBeVisible();
+  expect(posts).toBe(0);
+  await page.screenshot({ path: "test-results/research-shortlist-progress.png" });
+});

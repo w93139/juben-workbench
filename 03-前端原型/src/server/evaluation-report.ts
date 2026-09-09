@@ -1,4 +1,5 @@
 import { MODEL_EVALUATION_TASK_VERSION, evaluationSummary, exclusionExplanation, type EvaluationView } from "@/domain/model-evaluation";
+import { MODEL_SHORTLIST, MODEL_SHORTLIST_VERSION } from "@/domain/model-shortlist";
 import { LocalApiError } from "./local-security";
 
 const TASK_NAMES = ["结构与证据拆解", "原创方向设计", "一致性审查"];
@@ -83,6 +84,9 @@ export function buildEvaluationReport(view: EvaluationView, generatedAt = Date.n
   }
   lines.push("## 费用", "", `- 已核算：${money(view.spentFen)}`, `- 在途预留：${money(view.reservedFen)}`, `- 待平台核对：${money(view.uncertainFen)}`, `- 工作台估算硬上限：${money(view.budgetCapFen)}`, "- “待平台核对”不是确认扣款；最终金额以蚂蚁平台账单为准。完整费用以本节账本合计为准，可能包含未形成成绩的异常调用。", "");
   if (view.error) lines.push("## 当前未解决事项", "", `- ${view.error}`, ...(view.lastFailure ? [`- 最近一次定位：${displayName(view, view.lastFailure.modelId ?? "未知模型")}，${view.lastFailure.taskIndex == null ? "题目未知" : TASK_NAMES[view.lastFailure.taskIndex]}，类型 ${view.lastFailure.category}`] : legacyInterrupted ? ["- 中断候选可按执行顺序定位，但响应具体字段未保存，不能事后补造。"] : ["- 旧记录没有保存失败调用的模型归属和响应形态，不能事后补造。"]), "");
+  if (view.candidatePolicyVersion === MODEL_SHORTLIST_VERSION) {
+    lines.push("## 候选研究依据", "", "- 2026-09-09人工核对公开资料；首批最多3个候选，另有1个指定替补。旧轮已完成结果可能保留，不因本次研究重测。", "- 角色建议是待验证假设；官方能力和公开写作评测不证明剧本杀效果，模型版本与推理档位可能不同。", ...MODEL_SHORTLIST.map(item => `- ${item.name}：${item.focus}。${item.reason} [官方资料](${item.url})`), "- [Arena创意写作评测](https://arena.ai/leaderboard/text/creative-writing)", "");
+  } else lines.push("## 候选研究依据", "", "- 本轮沿用先前的候选计划，不能事后宣称由新版研究清单筛选。", "");
   lines.push("## 评分方法", "", "- 评分由工作台三道固定合成题的程序规则计算；LiteLLM不提供这些剧本质量分数。", "- 总分：结构30%、证据30%、原创25%、格式15%。进入分配还要求总分≥70、结构≥60、证据≥70、原创≥60、格式≥95。", "- 这是字段、引用和关键词规则的小样筛选，不能当作全面的创作能力排行榜。", "");
   lines.push("## 适用边界", "", "- 测评只使用三类固定合成小样，没有发送用户剧本。", "- 得分用于当前工作台的模型角色分配，不证明长篇创作、完整 Skill 执行或真人试玩效果。", "- 未完成模型不能与完整模型直接排名；没有三个模型达到质量线时不会自动分配。", "");
   const date = new Date(view.updatedAt); const dateStamp = Number.isNaN(date.getTime()) ? "未知日期" : date.toISOString().slice(0, 10);

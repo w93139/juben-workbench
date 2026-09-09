@@ -1,33 +1,44 @@
 import { describe, expect, it, vi } from "vitest";
+import { RESEARCH_SELECTION_POLICY } from "@/domain/model-shortlist";
 import { discoverAntModels } from "@/server/model-discovery";
 
 const connection = { baseUrl: "https://maas-api.antdigital.com/v1", apiKey: "test-only-placeholder" };
 const item = (name: string, provider: string, input: string, output: string, contextLength = 128000) => ({ name, displayName: name.toUpperCase(), provider, status: "RELEASED", contextLength, inPrice: input, outPrice: output, type: "TEXT_GENERATE", offShelfFlag: 0, modelProtocolCompatibility: { openai_chat_completions: true }, protocolParameters: [{ protocolName: "openai_chat_completions", parameters: { response_format: true } }] });
-function fetcher(permitted = ["premium", "cheap-a", "cheap-b", "cheap-c", "ocr-model"]) {
+const ids = [...RESEARCH_SELECTION_POLICY.ids];
+function fetcher(permitted = [...ids, "premium", "cheap", "ocr-model"], overrides: Record<string, object> = {}) {
   return vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
     void options;
     return String(input).endsWith("/models")
       ? Response.json({ data: permitted.map(id => ({ id })) })
-      : Response.json({ success: true, data: { items: [item("premium", "P", "¥8/M", "¥40/M", 1_000_000), item("cheap-a", "A", "¥1/M", "¥2/M"), item("cheap-b", "B", "¥2/M", "¥3/M"), item("cheap-c", "C", "¥3/M", "¥4/M"), { ...item("ocr-model", "O", "¥0.1/M", "¥0.2/M"), type: "TEXT_GENERATE" }] } });
+      : Response.json({ success: true, data: { items: [...ids.map((id, i) => ({ ...item(id, `P${i}`, `¥${i+1}/M`, `¥${i+2}/M`), ...(id === "kimi-k3" ? { type: "VISUAL_UNDERSTANDING" } : {}), ...overrides[id] })), item("premium", "Premium", "¥80/M", "¥400/M"), item("cheap", "Cheap", "¥0/M", "¥0/M"), item("ocr-model", "O", "¥0.1/M", "¥0.2/M")] } });
   });
 }
 describe("蚂蚁模型发现", () => {
-  it("只交集账号权限与公开人民币价格，保留一款高阶和不同厂商的经济候选", async () => {
+  it("只选择研究的三个首选，不因高价或低价加入其他模型", async () => {
     const call = fetcher(); const result = await discoverAntModels(connection, call as typeof fetch);
-    expect(result.map(model => model.id)).toEqual(["premium", "cheap-a", "cheap-b", "cheap-c"]);
-    expect(result[0]).toMatchObject({ inputPriceMicroCnyPerMillion: 8_000_000, outputPriceMicroCnyPerMillion: 40_000_000 });
+    expect(result.map(model => model.id)).toEqual(ids.slice(0, 3));
+    expect(result[0]).toMatchObject({ inputPriceMicroCnyPerMillion: 1_000_000, outputPriceMicroCnyPerMillion: 2_000_000 });
     expect(call.mock.calls[1]?.[1]?.headers).toEqual({ accept: "application/json" });
+    expect(call).toHaveBeenCalledTimes(2);
+  });
+  it("首选缺失时只换入指定替补，多模态Kimi也可接受纯文本测评", async () => {
+    const result = await discoverAntModels(connection, fetcher(ids.filter(id => id !== ids[0])) as typeof fetch);
+    expect(result.map(model => model.id)).toEqual(ids.slice(1));
+    expect(result.some(model => model.id === "kimi-k3")).toBe(true);
+  });
+  it("格式不支持时换入替补；两个排除后不漫游搜索新模型", async () => {
+    const call = fetcher(undefined, { [ids[0]!]: { protocolParameters: [{ protocolName: "openai_chat_completions", parameters: { response_format: false } }] } });
+    expect((await discoverAntModels(connection, call as typeof fetch)).map(item => item.id)).toEqual(ids.slice(1));
+    await expect(discoverAntModels(connection, fetcher() as typeof fetch, undefined, [], ids.slice(0, 2))).rejects.toThrow("不会扩大到其他模型");
+  });
+  it("保留旧轮已完成候选，但新名额只从研究清单选择", async () => {
+    const result = await discoverAntModels(connection, fetcher() as typeof fetch, undefined, ["premium"]);
+    expect(result.map(model => model.id)).toEqual(["premium", ids[0], ids[1]]);
   });
   it("错误地址、无价格或认证失败均不进入付费测评", async () => {
     await expect(discoverAntModels({ ...connection, baseUrl: "https://other.invalid/v1" }, fetcher() as typeof fetch)).rejects.toThrow("只支持蚂蚁数科");
     const unauthorized = vi.fn(async () => new Response("secret-detail", { status: 401 }));
     await expect(discoverAntModels(connection, unauthorized as typeof fetch)).rejects.toThrow("拒绝了API Key");
     await expect(discoverAntModels(connection, fetcher(["one"]) as typeof fetch)).rejects.toThrow("缺少三个");
-  });
-  it("排除不支持评测JSON格式的模型", async () => {
-    const call = vi.fn(async (input: string | URL | Request) => String(input).endsWith("/models")
-      ? Response.json({ data: ["bad", "a", "b", "c"].map(id => ({ id })) })
-      : Response.json({ success: true, data: { items: [{ ...item("bad", "Bad", "¥0/M", "¥0/M"), protocolParameters: [{ protocolName: "openai_chat_completions", parameters: { response_format: false } }] }, item("a", "A", "¥1/M", "¥2/M"), item("b", "B", "¥2/M", "¥3/M"), item("c", "C", "¥3/M", "¥4/M")] } }));
-    await expect(discoverAntModels(connection, call as typeof fetch)).resolves.not.toEqual(expect.arrayContaining([expect.objectContaining({ id: "bad" })]));
   });
 });

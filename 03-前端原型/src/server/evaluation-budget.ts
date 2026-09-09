@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { LocalApiError } from "./local-security";
 import { evaluationViewSchema, MODEL_EVALUATION_TASK_VERSION } from "@/domain/model-evaluation";
+import { MODEL_SHORTLIST_VERSION } from "@/domain/model-shortlist";
 
 export interface BudgetSnapshot { capFen: number; spentFen: number; reservedFen: number; uncertainFen: number }
 export interface ResponsePolicyUpgradeClaim { expectedPolicyVersion: string | null; expectedFailureModelId: string }
@@ -33,9 +34,15 @@ export class EvaluationBudgetLedger {
       const prior = this.loadView(sessionId); const view = evaluationViewSchema.parse(JSON.parse(prior ?? "null"));
       const next = evaluationViewSchema.parse(JSON.parse(serialized)); const budget = this.snapshot(sessionId);
       const run = this.db.prepare("SELECT state, lease_until FROM evaluation_run WHERE session_id = ?").get(sessionId) as { state: string; lease_until: number } | undefined;
-      const refreshing = view.status === "discovered" && view.archivedViewRevision != null && view.carriedBudget != null && view.startedAt == null && !view.completedCalls && !view.scores.length && !view.taskResults.length;
-      if ((!refreshing && (!["blocked", "failed", "cancelled"].includes(view.status) || view.taskVersion === MODEL_EVALUATION_TASK_VERSION)) || view.viewRevision !== expectedRevision || budget.reservedFen !== 0 || (run?.state === "running" && run.lease_until > Date.now())) throw new LocalApiError(409, "测评状态已变化或仍有在途请求，未重新规划。");
-      if (next.status !== "discovered" || next.taskVersion !== MODEL_EVALUATION_TASK_VERSION || next.archivedViewRevision !== (refreshing ? view.archivedViewRevision : expectedRevision) || next.viewRevision !== expectedRevision + 1 || next.scores.length || next.taskResults.length || next.completedCalls || next.spentFen !== budget.spentFen || next.uncertainFen !== budget.uncertainFen || next.carriedBudget?.spentFen !== budget.spentFen || next.carriedBudget?.uncertainFen !== budget.uncertainFen) throw new LocalApiError(409, "新计划与费用账本不一致，未重新规划。");
+      const refreshing = view.status === "discovered" && view.archivedViewRevision != null && view.carriedBudget != null && view.startedAt == null;
+      const researchChange = view.candidatePolicyVersion !== MODEL_SHORTLIST_VERSION && !["usage", "budget"].includes(view.lastFailure?.category ?? "");
+      if ((!refreshing && (!["blocked", "failed", "cancelled"].includes(view.status) || (view.taskVersion === MODEL_EVALUATION_TASK_VERSION && !researchChange))) || view.viewRevision !== expectedRevision || budget.reservedFen !== 0 || (run?.state === "running" && run.lease_until > Date.now())) throw new LocalApiError(409, "测评状态已变化或仍有在途请求，未重新规划。");
+      const sameRules = view.taskVersion === MODEL_EVALUATION_TASK_VERSION;
+      const retainedScores = view.scores.filter(item => next.candidates.some(candidate => candidate.id === item.modelId));
+      const retainedTasks = view.taskResults.filter(item => next.candidates.some(candidate => candidate.id === item.modelId));
+      const retainedCalls = retainedScores.length * 3 + retainedTasks.filter(item => !retainedScores.some(score => score.modelId === item.modelId)).length;
+      const resultsMatch = sameRules ? JSON.stringify(next.scores) === JSON.stringify(retainedScores) && JSON.stringify(next.taskResults) === JSON.stringify(retainedTasks) && next.completedCalls === retainedCalls : !next.scores.length && !next.taskResults.length && !next.completedCalls;
+      if (next.status !== "discovered" || next.taskVersion !== MODEL_EVALUATION_TASK_VERSION || next.candidatePolicyVersion !== MODEL_SHORTLIST_VERSION || next.archivedViewRevision !== (refreshing ? view.archivedViewRevision : expectedRevision) || next.viewRevision !== expectedRevision + 1 || !resultsMatch || next.spentFen !== budget.spentFen || next.uncertainFen !== budget.uncertainFen || next.carriedBudget?.spentFen !== budget.spentFen || next.carriedBudget?.uncertainFen !== budget.uncertainFen) throw new LocalApiError(409, "新计划与费用账本不一致，未重新规划。");
       if (!refreshing) this.db.prepare("INSERT INTO evaluation_archive(session_id, view_revision, view_json) VALUES (?, ?, ?)").run(sessionId, expectedRevision, prior!);
       this.saveView(sessionId, serialized); this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
