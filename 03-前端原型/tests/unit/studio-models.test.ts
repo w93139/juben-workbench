@@ -40,7 +40,9 @@ describe("真实模型编排服务（只用假transport，不访问网络）", (
     // Ensure the existing rich blueprint schema can be encoded for providers.
     await openAITransport(config, "main", "生成蓝图", {}, blueprintDataSchema, new AbortController().signal);
     fetchMock.mockImplementationOnce(async () => Response.json({ choices: [{ finish_reason: "length", message: { content: "{}" } }] }));
-    await expect(openAITransport(config, "main", "检查", {}, studioAuditSchema, new AbortController().signal)).rejects.toMatchObject({ code: "MODEL_RESPONSE_INVALID" });
+    await expect(openAITransport(config, "main", "检查", {}, studioAuditSchema, new AbortController().signal)).rejects.toMatchObject({ code: "MODEL_RESPONSE_INCOMPLETE" });
+    fetchMock.mockImplementationOnce(async () => Response.json({ choices: [{ finish_reason: "stop", message: { content: [{ type: "text", text: JSON.stringify(audit()) }] } }] }));
+    await expect(openAITransport(config, "main", "检查", {}, studioAuditSchema, new AbortController().signal)).resolves.toEqual(audit());
     fetchMock.mockImplementationOnce(async () => new Response("provider-secret-should-not-be-returned", { status: 401 }));
     await expect(openAITransport(config, "main", "检查", {}, studioAuditSchema, new AbortController().signal)).rejects.toMatchObject({ code: "MODEL_REQUEST_FAILED" });
   });

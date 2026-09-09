@@ -38,6 +38,11 @@ describe("剧本领域小样测评", () => {
     });
     expect(parsed).not.toHaveProperty("futureDisplayField");
   });
+  it("允许三次候选替换累计保存超过四条排除记录", () => {
+    const excludedModels = Array.from({ length: 16 }, (_, index) => ({ modelId: `excluded-${index}`, displayName: `排除候选${index}`, reason: "响应不兼容", costFen: 1, usageEstimated: false, occurredAt: Date.now() }));
+    const parsed = evaluationViewSchema.parse({ status: "blocked", phase: "等待替换候选", connectionRevision: 1, priceCheckedAt: Date.now(), updatedAt: Date.now(), budgetCapFen: 1000, spentFen: 16, reservedFen: 0, uncertainFen: 0, candidates: [], scores: [], taskResults: [], excludedModels, allocation: null, completedCalls: 0, maximumCalls: 48, plannedMaximumFen: 0, resumeCount: 3, resumeAllowed: false, error: "候选已用尽" });
+    expect(parsed.excludedModels).toHaveLength(16);
+  });
   it("发现阶段零内容调用，付费阶段记录用量并自动分配三个不同模型", async () => {
     const { settings, engine } = setup(); const discovered = await engine.discover(fetcher as typeof fetch);
     expect(discovered).toMatchObject({ status: "discovered", completedCalls: 0, maximumCalls: 12, spentFen: 0 });
@@ -89,7 +94,8 @@ describe("剧本领域小样测评", () => {
     staleConnection.connectionChanged(); expect(staleConnection.get()).toMatchObject({ status: "blocked", resumeCount: 1 });
     const future = latest.updatedAt + 121_000; vi.spyOn(Date, "now").mockReturnValue(future);
     expect(observer.get()).toMatchObject({ status: "blocked", resumeCount: 1, viewRevision: latest.viewRevision });
-    await expect(observer.resume(fetcher as typeof fetch)).rejects.toThrow("已经续测过一次"); expect(calls).toBe(2);
+    await observer.resume(fetcher as typeof fetch); rejectCall(new DOMException("third stopped", "AbortError")); const resumed = await finished(observer);
+    expect(resumed).toMatchObject({ status: "blocked", resumeCount: 2 }); expect(calls).toBe(3);
   });
   it("已知Token用量超过预留时记录较大待核对金额并禁止续测", async () => {
     const overage: EvaluationTransport = async (...args) => ({ ...await transport(...args), promptTokens: 1_000_000, completionTokens: 900 });
@@ -130,11 +136,56 @@ describe("剧本领域小样测评", () => {
     try {
       globalThis.fetch = async () => Response.json({ model: "model-a", choices: [{ finish_reason: "stop", message: { content: "{}" } }], usage: { prompt_tokens: 10, completion_tokens: 5 } });
       await expect(antEvaluationTransport(connection, "model-a", "system", "prompt", new AbortController().signal)).resolves.toMatchObject({ promptTokens: 10, completionTokens: 5, usageEstimated: false });
-      await expect(antEvaluationTransport(connection, "model-b", "system", "prompt", new AbortController().signal)).rejects.toThrow("实际模型");
+      await expect(antEvaluationTransport(connection, "model-b", "system", "prompt", new AbortController().signal)).resolves.toMatchObject({ identityUnverifiable: "服务回传的实际模型编号与候选不一致，无法确认计费模型" });
       globalThis.fetch = async () => Response.json({ model: "model-a", choices: [{ finish_reason: "stop", message: { content: "{}" } }] });
       await expect(antEvaluationTransport(connection, "model-a", "system", "prompt", new AbortController().signal)).resolves.toMatchObject({ promptTokens: 8000, completionTokens: 900, usageEstimated: true });
       globalThis.fetch = async () => Response.json({ model: "model-a", choices: [{ finish_reason: "stop", message: { content: "{}" } }], usage: { prompt_tokens: 30000 } });
       await expect(antEvaluationTransport(connection, "model-a", "system", "prompt", new AbortController().signal)).rejects.toThrow("异常Token用量");
+      globalThis.fetch = async () => Response.json({ model: "model-a", choices: [{ finish_reason: "stop", message: { content: [{ type: "text", text: "{" }, { type: "text", text: "}" }] } }], usage: { prompt_tokens: 10, completion_tokens: 5 } });
+      await expect(antEvaluationTransport(connection, "model-a", "system", "prompt", new AbortController().signal)).resolves.toMatchObject({ content: "{}", incompatibleReason: undefined, responseNotes: ["服务以文本分片返回正文，已按顺序合并评分"] });
+      globalThis.fetch = async () => Response.json({ model: "model-a", choices: [{ finish_reason: "stop", message: { content: [{ type: "reasoning", text: "不可作为最终正文" }] } }], usage: { prompt_tokens: 10, completion_tokens: 5 } });
+      await expect(antEvaluationTransport(connection, "model-a", "system", "prompt", new AbortController().signal)).resolves.toMatchObject({ content: "", incompatibleReason: "服务没有返回可评分的最终正文" });
+      globalThis.fetch = async () => Response.json({ model: "model-a", choices: [{ finish_reason: "length", message: { content: "{\"unfinished\":" } }], usage: { prompt_tokens: 10, completion_tokens: 900 } });
+      await expect(antEvaluationTransport(connection, "model-a", "system", "prompt", new AbortController().signal)).resolves.toMatchObject({ incompatibleReason: "服务以length结束，正文可能不完整", promptTokens: 10, completionTokens: 900 });
+      globalThis.fetch = async () => Response.json({ choices: [{ finish_reason: "stop", message: { content: "{}" } }], usage: { prompt_tokens: 10, completion_tokens: 5 } });
+      await expect(antEvaluationTransport(connection, "model-a", "system", "prompt", new AbortController().signal)).resolves.toMatchObject({ identityUnverifiable: "服务未回传实际模型编号，无法确认计费模型" });
     } finally { globalThis.fetch = original; }
+  });
+  it("一个候选返回可核算但不兼容的正文时只排除该模型，其余候选继续", async () => {
+    const incompatible: EvaluationTransport = async (...args) => args[1] === "cheap-a"
+      ? { content: "", promptTokens: 20, completionTokens: 10, latencyMs: 10, incompatibleReason: "服务以length结束，正文可能不完整" }
+      : transport(...args);
+    const { engine } = setup(incompatible); await engine.discover(fetcher as typeof fetch); engine.start(); const done = await finished(engine);
+    expect(done.status).toBe("completed"); expect(done.completedCalls).toBe(9); expect(done.scores.map(item => item.modelId)).not.toContain("cheap-a");
+    expect(done.excludedModels).toEqual([expect.objectContaining({ modelId: "cheap-a", reason: expect.stringContaining("length") })]); expect(done.allocation).not.toBeNull();
+  });
+  it("实际计费模型身份无法确认时按最高预留待核对并禁止续测", async () => {
+    const unknownIdentity: EvaluationTransport = async () => ({ content: "{}", promptTokens: 20, completionTokens: 10, latencyMs: 10, identityUnverifiable: "服务未回传实际模型编号，无法确认计费模型" });
+    const { engine } = setup(unknownIdentity); await engine.discover(fetcher as typeof fetch); engine.start(); const stopped = await finished(engine);
+    expect(stopped).toMatchObject({ status: "blocked", completedCalls: 0, resumeAllowed: false }); expect(stopped.uncertainFen).toBeGreaterThan(0);
+    await expect(engine.resume(fetcher as typeof fetch)).rejects.toThrow("不允许自动续测");
+  });
+  it("候选完成部分题目后被排除，续测会换入新候选并保留历史进度", async () => {
+    const fiveIds = [...modelIds, "cheap-d"];
+    const fiveFetcher = async (input: string | URL | Request) => String(input).endsWith("/models") ? Response.json({ data: fiveIds.map(id => ({ id })) }) : Response.json({ success: true, data: { items: fiveIds.map(catalogItem) } });
+    let incompatibleId = "", shallowId = "", incompatibleCalls = 0;
+    const mixed: EvaluationTransport = async (...args) => {
+      if (args[1] === incompatibleId && ++incompatibleCalls === 2) return { content: "", promptTokens: 20, completionTokens: 10, latencyMs: 10, incompatibleReason: "服务以length结束，正文可能不完整" };
+      if (args[1] === shallowId) return { content: "{}", promptTokens: 20, completionTokens: 10, latencyMs: 10 };
+      return transport(...args);
+    };
+    const { engine } = setup(mixed); const discovered = await engine.discover(fiveFetcher as typeof fetch); incompatibleId = discovered.candidates[1]!.id; shallowId = discovered.candidates[2]!.id;
+    engine.start(); const blocked = await finished(engine); expect(blocked.status).toBe("blocked"); expect(blocked.taskResults.filter(item => item.modelId === incompatibleId)).toHaveLength(1);
+    const callsBeforeResume = incompatibleCalls; await engine.resume(fiveFetcher as typeof fetch); const done = await finished(engine);
+    expect(done.status).toBe("completed"); expect(incompatibleCalls).toBe(callsBeforeResume); expect(done.maximumCalls).toBe(13); expect(done.completedCalls).toBe(13); expect(done.scores).toHaveLength(4);
+  });
+  it("真实旧记录第二次停在同一候选时，下一次只跳过该候选并换入其他模型", async () => {
+    const { root, settings, engine } = setup(); const discovered = await engine.discover(fetcher as typeof fetch); const selected = discovered.candidates[0]!; const incompatible = discovered.candidates[1]!;
+    const score = { modelId: selected.id, total: 64, structure: 71, evidence: 48, originality: 53, format: 100, latencyMs: 1000, promptTokens: 614, completionTokens: 5461, costFen: 20, usageEstimated: false, notes: ["旧汇总"] };
+    const file = join(root, "budget.sqlite"); const value = new EvaluationBudgetLedger(file); value.reserve("ant-model-selection-v1", "old-a", 2); value.markUncertain("old-a"); value.reserve("ant-model-selection-v1", "old-b", 2); value.markUncertain("old-b");
+    value.saveView("ant-model-selection-v1", JSON.stringify({ ...discovered, status: "blocked", scores: [score], taskResults: [], completedCalls: 3, resumeCount: 1, resumeAllowed: true, viewRevision: 8, error: "模型服务返回的正文结构不完整，已停止后续付费调用。" })); value.close();
+    const called: string[] = []; const resumedTransport: EvaluationTransport = async (...args) => { called.push(args[1]); return transport(...args); };
+    const restored = new ModelEvaluationEngine(settings, resumedTransport, () => new EvaluationBudgetLedger(file), () => {}); await restored.resume(fetcher as typeof fetch); const done = await finished(restored);
+    expect(called).not.toContain(incompatible.id); expect(done.excludedModels).toEqual([expect.objectContaining({ modelId: incompatible.id, reason: expect.stringContaining("旧版严格解析") })]); expect(done.scores).toHaveLength(3);
   });
 });

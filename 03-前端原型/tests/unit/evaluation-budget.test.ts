@@ -35,6 +35,11 @@ describe("模型测评人民币硬预算", () => {
     value.saveView("s", JSON.stringify({ status: "blocked", resumeCount: 1, resumeAllowed: true, viewRevision: 4 }));
     expect(() => value.claimResume("s", "owner-b", 1000, 3)).toThrow("其他进程更新"); value.close();
   });
+  it("后续人工续测必须同时匹配最新版本和当前续测次数", () => {
+    const value = ledger(); value.saveView("s", JSON.stringify({ status: "blocked", resumeCount: 1, resumeAllowed: true, viewRevision: 7 }));
+    expect(() => value.claimResume("s", "owner-a", 1000, 7, 1)).not.toThrow(); value.releaseRun("s", "owner-a", "blocked");
+    expect(() => value.claimResume("s", "owner-b", 1000, 7, 0)).toThrow("其他进程更新"); value.close();
+  });
   it("陈旧运行视图不能取得恢复租约覆盖新状态", () => {
     const value = ledger(); value.saveView("s", JSON.stringify({ status: "running", viewRevision: 2 }));
     expect(() => value.claimRecovery("s", "owner-a", 1000, 2)).not.toThrow(); value.releaseRun("s", "owner-a", "blocked");

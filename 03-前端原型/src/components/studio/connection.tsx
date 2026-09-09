@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Settings2, Square } from "lucide-react";
+import { Download, FileText, Settings2, Square } from "lucide-react";
 import type { SafeStudioSettings } from "@/server/studio-settings";
 import { evaluationViewSchema, priceLabel, type EvaluationView } from "@/domain/model-evaluation";
 import { localJson } from "@/services/studio-client";
@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../ui/dia
 
 const ANT_BASE_URL = "https://maas-api.antdigital.com/v1";
 type Draft = Pick<SafeStudioSettings, "baseUrl" | "mainModel" | "reviewA" | "reviewB">;
+type EvaluationReport = { filename: string; markdown: string; viewRevision: number };
 const money = (fen: number) => `¥${(fen / 100).toFixed(2)}`;
 async function fetchConnection(signal?: AbortSignal) {
   const [safe, view] = await Promise.all([
@@ -29,6 +30,7 @@ export function StudioConnection() {
   const [draft, setDraft] = useState<Draft>({ baseUrl: ANT_BASE_URL, mainModel: "", reviewA: "", reviewB: "" });
   const [apiKey, setApiKey] = useState(""); const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(false); const [busy, setBusy] = useState(false); const [saved, setSaved] = useState(false);
+  const [report, setReport] = useState<EvaluationReport | null>(null); const [showReport, setShowReport] = useState(false);
 
   function applyConnection({ safe, view }: Awaited<ReturnType<typeof fetchConnection>>) {
     setSettings(safe); setDraft({ baseUrl: safe.baseUrl || ANT_BASE_URL, mainModel: safe.mainModel, reviewA: safe.reviewA, reviewB: safe.reviewB }); setEvaluation(view);
@@ -47,7 +49,6 @@ export function StudioConnection() {
     }).catch(setError), 1200);
     return () => window.clearInterval(timer);
   }, [open, evaluation, cache]);
-
   const locked = loading || busy || settings?.environmentLocked === true || evaluation?.status === "running" || evaluation?.status === "cancelling";
   async function save(event: React.FormEvent) {
     event.preventDefault(); if (locked || !settings) return;
@@ -65,11 +66,29 @@ export function StudioConnection() {
       setEvaluation(next);
     } catch (failure) { setError(failure); } finally { setBusy(false); }
   }
-  const roleName = (id: string) => evaluation?.candidates.find(candidate => candidate.id === id)?.displayName || id;
+  async function loadReport() {
+    setBusy(true); setError(null);
+    try {
+      let latest = evaluationViewSchema.parse(await localJson("/api/studio/evaluation"));
+      let value = await localJson("/api/studio/evaluation/report") as EvaluationReport;
+      if (value.viewRevision !== latest.viewRevision) {
+        latest = evaluationViewSchema.parse(await localJson("/api/studio/evaluation"));
+        value = await localJson("/api/studio/evaluation/report") as EvaluationReport;
+      }
+      setEvaluation(latest); setReport(value); setShowReport(value.viewRevision === latest.viewRevision); return value;
+    }
+    catch (failure) { setError(failure); return null; } finally { setBusy(false); }
+  }
+  async function downloadReport() {
+    const value = report?.viewRevision === evaluation?.viewRevision ? report : await loadReport(); if (!value) return;
+    const url = URL.createObjectURL(new Blob([value.markdown], { type: "text/markdown;charset=utf-8" })); const link = document.createElement("a"); link.href = url; link.download = value.filename; link.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  const roleName = (id: string) => evaluation?.candidates.find(candidate => candidate.id === id)?.displayName || evaluation?.excludedModels.find(candidate => candidate.modelId === id)?.displayName || id;
   const hasRecordedCost = !!evaluation && evaluation.spentFen + evaluation.reservedFen + evaluation.uncertainFen > 0;
+  const showCurrentReport = showReport && report != null && report.viewRevision === evaluation?.viewRevision;
 
   return <>
-    <Button size="sm" variant="outline" onClick={() => { setSettings(null); setEvaluation(null); setLoading(true); setError(null); setSaved(false); setApiKey(""); setOpen(true); }}><Settings2 size={15} />配置模型</Button>
+    <Button size="sm" variant="outline" onClick={() => { setSettings(null); setEvaluation(null); setReport(null); setShowReport(false); setLoading(true); setError(null); setSaved(false); setApiKey(""); setOpen(true); }}><Settings2 size={15} />配置模型</Button>
     <Dialog open={open} onOpenChange={value => { if (busy) return; setOpen(value); if (!value) { setApiKey(""); setError(null); } }}><DialogContent className="sm:max-w-2xl"><DialogTitle>连接蚂蚁平台并自动选型</DialogTitle><DialogDescription>先保存连接，再读取候选模型。只有你点击“开始测评”后才会产生费用；工作台按平台公开价估算并保留安全余量。</DialogDescription>
       {loading ? <p role="status">正在读取连接设置…</p> : <div className="space-y-5">
         {settings?.environmentLocked && <p className="stage-callout">当前配置由服务端环境变量管理，页面只读。{!settings.configured && "环境变量尚不完整，请在服务端补齐。"}</p>}
@@ -96,12 +115,14 @@ export function StudioConnection() {
           <div className="h-2 overflow-hidden rounded-full bg-[var(--muted)]"><div className="h-full bg-[#333333] transition-all" style={{ width: `${evaluation.maximumCalls ? evaluation.completedCalls / evaluation.maximumCalls * 100 : 0}%` }} /></div>
           <p role="status" className="text-sm">{evaluation.phase} · 已完成 {evaluation.completedCalls}/{evaluation.maximumCalls} · 已核算 {money(evaluation.spentFen)}{evaluation.uncertainFen ? ` · 待核对 ${money(evaluation.uncertainFen)}` : ""}</p>
           {evaluation.status === "discovered" && <Button type="button" disabled={busy} onClick={() => void action("start")}>开始受限测评</Button>}
-          {evaluation.status === "blocked" && evaluation.resumeAllowed && evaluation.completedCalls < evaluation.maximumCalls && evaluation.resumeCount < 1 && <div className="space-y-2"><p className="field-hint">已完成题目不会重测；待核对金额继续计入10元上限。点击后先免费核对候选与价格，再继续剩余付费调用。</p><Button type="button" disabled={busy} onClick={() => void action("resume")}>{busy ? "正在核对…" : "核对价格并继续测评"}</Button></div>}
+          {evaluation.status === "blocked" && evaluation.resumeAllowed && evaluation.completedCalls < evaluation.maximumCalls && evaluation.resumeCount < 3 && <div className="space-y-2"><p className="field-hint">已完成题目和已排除候选不会重测；待核对金额继续计入10元上限。点击后先免费核对候选与价格，再继续剩余付费调用。</p><Button type="button" disabled={busy} onClick={() => void action("resume")}>{busy ? "正在核对…" : evaluation.resumeCount ? "跳过不兼容模型并继续" : "核对价格并继续测评"}</Button></div>}
           {evaluation.status === "blocked" && !evaluation.resumeAllowed && <p className="field-hint">本次用量或记录存在异常，已关闭自动续测，避免重复扣费。</p>}
           {evaluation.status === "running" && <Button type="button" variant="outline" disabled={busy} onClick={() => void action("cancel")}><Square size={14} />停止测评</Button>}
           {!!evaluation.scores.length && <div className="space-y-2">{evaluation.scores.map(score => <div className="rounded-lg bg-[var(--muted)] p-3 text-sm" key={score.modelId}><div className="flex items-center justify-between gap-3"><span className="break-all">{roleName(score.modelId)}</span><strong>{score.total}分 · {money(score.costFen)}</strong></div><p className="field-hint mt-1">结构 {score.structure} · 证据 {score.evidence} · 原创 {score.originality} · 格式 {score.format} · {(score.latencyMs / 1000).toFixed(1)}秒 · {score.promptTokens + score.completionTokens} Token{score.usageEstimated ? "（上限估算）" : ""}</p><p className="field-hint mt-1">{score.notes.join("；")}</p></div>)}</div>}
+          {!!evaluation.excludedModels.length && <div className="stage-callout"><strong>已排除的不兼容候选</strong>{evaluation.excludedModels.map(item => <p className="mt-1" key={item.modelId}>{roleName(item.modelId)}：{item.reason}</p>)}</div>}
           {evaluation.allocation && <div className="stage-callout"><strong>自动分配完成</strong><p className="mt-2">主模型：{roleName(evaluation.allocation.mainModel)}</p><p>审查 A：{roleName(evaluation.allocation.reviewA)}</p><p>审查 B：{roleName(evaluation.allocation.reviewB)}</p></div>}
           {evaluation.error && <p className="text-sm text-[var(--danger)]">{evaluation.error}</p>}
+          {!['idle','discovered','running','cancelling'].includes(evaluation.status) && (evaluation.completedCalls > 0 || evaluation.excludedModels.length > 0 || evaluation.spentFen > 0 || evaluation.uncertainFen > 0 || evaluation.lastFailure != null) && <div className="space-y-3 border-t border-[var(--border)] pt-3"><div className="flex flex-wrap gap-2"><Button type="button" variant="outline" disabled={busy} onClick={() => report && report.viewRevision === evaluation.viewRevision ? setShowReport(value => !value) : void loadReport()}><FileText size={15} />{showCurrentReport ? "收起测评报告" : "查看测评报告"}</Button><Button type="button" variant="outline" disabled={busy} onClick={() => void downloadReport()}><Download size={15} />下载报告（Markdown）</Button></div>{showCurrentReport && <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-lg bg-[var(--muted)] p-3 text-xs leading-6">{report.markdown}</pre>}</div>}
         </section> : null}
         <p className="stage-callout">公开价可能与最终账单口径不同，建议同时在蚂蚁平台设置账号侧消费限额。测评只代表固定小样表现；未经真人试玩的效果不会写成“已验证”。</p>
       </div>}

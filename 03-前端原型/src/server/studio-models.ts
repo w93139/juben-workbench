@@ -35,9 +35,12 @@ export const openAITransport: ModelTransport = async (config, model, instruction
   const response = await fetch(`${config.baseUrl}/chat/completions`, { method: "POST", redirect: "error", signal, headers: { "content-type": "application/json", authorization: `Bearer ${config.apiKey}` }, body: JSON.stringify(body) });
   if (!response.ok) { await response.body?.cancel(); throw new StudioError("MODEL_REQUEST_FAILED", "模型服务未完成请求，请检查服务端模型配置、额度及接口支持情况。", 502); }
   let parsed: unknown; try { parsed = JSON.parse(await responseText(response, signal)); } catch (error) { if (error instanceof StudioError) throw error; throw new StudioError("MODEL_RESPONSE_INVALID", "模型返回格式不完整，本次结果未采纳。", 502); }
-  const envelope = z.object({ choices: z.array(z.object({ finish_reason: z.literal("stop"), message: z.object({ content: z.string() }) })).min(1) }).safeParse(parsed);
-  if (!envelope.success) throw new StudioError("MODEL_RESPONSE_INVALID", "模型输出未完整结束或格式不符合要求，本次结果未采纳。", 502);
-  try { return JSON.parse(envelope.data.choices[0].message.content); } catch { throw new StudioError("MODEL_RESPONSE_INVALID", "模型未返回严格JSON，本次结果未采纳。", 502); }
+  const envelope = z.object({ choices: z.array(z.object({ finish_reason: z.string().max(100).nullable().optional(), message: z.object({ content: z.unknown().optional() }).passthrough() }).passthrough()).min(1).max(16) }).passthrough().safeParse(parsed);
+  if (!envelope.success) throw new StudioError("MODEL_RESPONSE_INVALID", "模型没有返回兼容的正文选项，本次结果未采纳。", 502);
+  const choice = envelope.data.choices[0]!; if (choice.finish_reason !== "stop") throw new StudioError("MODEL_RESPONSE_INCOMPLETE", `模型输出以${choice.finish_reason ?? "未知原因"}结束，本次不采用不完整结果。`, 502);
+  const raw = choice.message.content; const content = typeof raw === "string" ? raw : Array.isArray(raw) ? raw.map(item => typeof item === "string" ? item : item && typeof item === "object" && "type" in item && item.type === "text" && "text" in item && typeof item.text === "string" ? item.text : "").join("") : "";
+  if (!content.trim()) throw new StudioError("MODEL_RESPONSE_INVALID", "模型没有返回可用的最终正文，本次结果未采纳。", 502);
+  try { return JSON.parse(content); } catch { throw new StudioError("MODEL_RESPONSE_INVALID", "模型未返回严格JSON，本次结果未采纳。", 502); }
 };
 const artifactBundleSchema = z.object({ artifacts: z.array(studioArtifactSchema).min(6).max(240) }).strict();
 function safeError(error: unknown) { return error instanceof StudioError ? { code: error.code, message: error.message } : { code: "MODEL_UNAVAILABLE", message: "模型调用未完成，未生成可用结果。请检查服务端连接后重试。" }; }

@@ -27,12 +27,18 @@ export const modelAllocationSchema = z.object({ mainModel: text(200), reviewA: t
   .refine(value => new Set([value.mainModel, value.reviewA, value.reviewB]).size === 3, "三个创作角色必须使用不同模型");
 export type ModelAllocation = z.infer<typeof modelAllocationSchema>;
 
+export const excludedModelSchema = z.object({ modelId: text(200), displayName: text(300), reason: text(500), costFen: z.number().int().nonnegative().nullable(), usageEstimated: z.boolean(), occurredAt: z.number().int().nonnegative() }).strict();
+export type ExcludedModel = z.infer<typeof excludedModelSchema>;
+
 export const evaluationViewSchema = z.object({
   status: z.enum(["idle", "discovered", "running", "cancelling", "completed", "cancelled", "blocked", "failed"]),
   phase: z.string().max(1000), connectionRevision: z.number().int().nonnegative(), priceCheckedAt: z.number().int().nonnegative().nullable(), updatedAt: z.number().int().nonnegative(), budgetCapFen: z.literal(1000), spentFen: z.number().int().nonnegative(),
   reservedFen: z.number().int().nonnegative(), uncertainFen: z.number().int().nonnegative(),
-  candidates: z.array(modelCandidateSchema).max(4), scores: z.array(modelScoreSchema).max(4), taskResults: z.array(taskEvaluationResultSchema).max(12).default([]).refine(items => new Set(items.map(item => `${item.modelId}:${item.taskIndex}`)).size === items.length, "测评题目结果不能重复"), allocation: modelAllocationSchema.nullable(),
-  completedCalls: z.number().int().nonnegative(), maximumCalls: z.number().int().nonnegative(), plannedMaximumFen: z.number().int().nonnegative(), resumeCount: z.number().int().nonnegative().default(0), resumeAllowed: z.boolean().default(true), viewRevision: z.number().int().nonnegative().default(0), error: z.string().max(2000).nullable(),
+  candidates: z.array(modelCandidateSchema).max(4), scores: z.array(modelScoreSchema).max(4), taskResults: z.array(taskEvaluationResultSchema).max(48).default([]).refine(items => new Set(items.map(item => `${item.modelId}:${item.taskIndex}`)).size === items.length, "测评题目结果不能重复"), excludedModels: z.array(excludedModelSchema).max(16).default([]).refine(items => new Set(items.map(item => item.modelId)).size === items.length, "排除模型不能重复"), allocation: modelAllocationSchema.nullable(),
+  completedCalls: z.number().int().nonnegative(), maximumCalls: z.number().int().nonnegative(), plannedMaximumFen: z.number().int().nonnegative(), resumeCount: z.number().int().nonnegative().default(0), resumeAllowed: z.boolean().default(true), viewRevision: z.number().int().nonnegative().default(0),
+  taskVersion: z.string().trim().min(1).max(100).nullable().default(null), startedAt: z.number().int().nonnegative().nullable().default(null), finishedAt: z.number().int().nonnegative().nullable().default(null),
+  lastFailure: z.object({ modelId: text(200).nullable(), taskIndex: z.number().int().min(0).max(2).nullable(), category: z.enum(["service", "response", "usage", "budget"]), occurredAt: z.number().int().nonnegative() }).strict().nullable().default(null),
+  error: z.string().max(2000).nullable(),
 });
 export type EvaluationView = z.infer<typeof evaluationViewSchema>;
 

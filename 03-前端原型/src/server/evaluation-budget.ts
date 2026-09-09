@@ -36,13 +36,13 @@ export class EvaluationBudgetLedger {
       this.db.exec("COMMIT"); return recovered;
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
-  claimResume(sessionId: string, ownerId: string, leaseMs: number, expectedViewRevision: number) {
+  claimResume(sessionId: string, ownerId: string, leaseMs: number, expectedViewRevision: number, expectedResumeCount = 0) {
     const now = Date.now(); this.db.exec("BEGIN IMMEDIATE");
     try {
       const result = this.db.prepare("SELECT view_json FROM evaluation_result WHERE session_id = ?").get(sessionId) as { view_json: string } | undefined;
       let view: { status?: unknown; resumeCount?: unknown; resumeAllowed?: unknown; viewRevision?: unknown };
       try { view = JSON.parse(result?.view_json ?? "null"); } catch { throw new LocalApiError(409, "测评记录无法核对，未继续付费调用。"); }
-      if (!view || view.status !== "blocked" || (view.resumeCount ?? 0) !== 0 || (view.resumeAllowed ?? true) !== true || (view.viewRevision ?? 0) !== expectedViewRevision) throw new LocalApiError(409, "测评状态已由其他进程更新，未重复续测。");
+      if (!view || view.status !== "blocked" || (view.resumeCount ?? 0) !== expectedResumeCount || (view.resumeAllowed ?? true) !== true || (view.viewRevision ?? 0) !== expectedViewRevision) throw new LocalApiError(409, "测评状态已由其他进程更新，未重复续测。");
       const current = this.db.prepare("SELECT owner_id, state, lease_until FROM evaluation_run WHERE session_id = ?").get(sessionId) as { owner_id: string; state: string; lease_until: number } | undefined;
       if (current?.state === "running" && current.lease_until > now) throw new LocalApiError(409, "另一工作台进程正在执行这轮测评，未重复发起调用。");
       this.db.prepare("INSERT INTO evaluation_run(session_id, owner_id, state, lease_until) VALUES (?, ?, 'running', ?) ON CONFLICT(session_id) DO UPDATE SET owner_id = excluded.owner_id, state = 'running', lease_until = excluded.lease_until").run(sessionId, ownerId, now + leaseMs);

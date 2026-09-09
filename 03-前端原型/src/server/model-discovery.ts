@@ -48,7 +48,7 @@ const excluded = /(embedding|rerank|ocr|vision|image|audio|speech|tts|moderation
 function family(candidate: ModelCandidate) { return candidate.provider.toLowerCase() || candidate.id.split(/[-_.]/)[0]!.toLowerCase(); }
 function totalPrice(candidate: ModelCandidate) { return candidate.inputPriceMicroCnyPerMillion + candidate.outputPriceMicroCnyPerMillion; }
 
-export async function discoverAntModels(connection: ProviderConnection, fetcher: typeof fetch = fetch, signal?: AbortSignal, preferredIds: string[] = []): Promise<ModelCandidate[]> {
+export async function discoverAntModels(connection: ProviderConnection, fetcher: typeof fetch = fetch, signal?: AbortSignal, preferredIds: string[] = [], excludedIds: string[] = []): Promise<ModelCandidate[]> {
   const modelsUrl = new URL(connection.baseUrl.replace(/\/+$/, "") + "/models");
   if (modelsUrl.origin !== "https://maas-api.antdigital.com" || modelsUrl.pathname !== "/v1/models") throw new LocalApiError(400, "自动选型当前只支持蚂蚁数科官方模型地址。");
   const timeout = AbortSignal.timeout(20_000); const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
@@ -67,7 +67,7 @@ export async function discoverAntModels(connection: ProviderConnection, fetcher:
     const candidate = modelCandidateSchema.safeParse({ id: item.name, displayName: item.displayName, provider: item.provider, contextLength: context(item.contextLength), inputPriceMicroCnyPerMillion: input, outputPriceMicroCnyPerMillion: output });
     return candidate.success ? [candidate.data] : [];
   });
-  const usable = priced.filter(candidate => (candidate.contextLength ?? 0) >= 64_000);
+  const excludedSet = new Set(excludedIds); const usable = priced.filter(candidate => (candidate.contextLength ?? 0) >= 64_000 && !excludedSet.has(candidate.id));
   const byFamily = new Map<string, ModelCandidate[]>();
   for (const candidate of usable) byFamily.set(family(candidate), [...(byFamily.get(family(candidate)) ?? []), candidate]);
   // One higher-price tier keeps the comparison broad; the remaining seats favor

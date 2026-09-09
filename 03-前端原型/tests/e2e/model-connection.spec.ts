@@ -39,8 +39,12 @@ test("中断后明确保留已完成结果，由用户点击才继续剩余测�
     expect(route.request().postDataJSON()).toEqual({ action: "resume" });
     return route.fulfill({ status: 202, json: { ...blocked, status: "running", phase: "已保留完成结果，正在继续剩余测评", resumeCount: 1, error: null } });
   });
+  const markdown = "# 剧本工作台模型测评报告\n\n测评尚未完整结束\n\n待平台核对：¥0.02";
+  await page.route("**/api/studio/evaluation/report", route => route.fulfill({ json: { filename: "模型测评报告.md", markdown, viewRevision: 0 } }));
   await page.goto("/"); await page.getByRole("button", { name: "配置模型", exact: true }).click();
-  const dialog = page.getByRole("dialog"); await expect(dialog.getByText(/已完成题目不会重测/)).toBeVisible();
+  const dialog = page.getByRole("dialog"); await expect(dialog.getByText(/已完成题目和已排除候选不会重测/)).toBeVisible();
+  await dialog.getByRole("button", { name: "查看测评报告" }).click(); await expect(dialog.getByText("# 剧本工作台模型测评报告", { exact: false })).toBeVisible();
+  const download = page.waitForEvent("download"); await dialog.getByRole("button", { name: "下载报告（Markdown）" }).click(); expect((await download).suggestedFilename()).toBe("模型测评报告.md");
   await dialog.getByRole("button", { name: "核对价格并继续测评" }).click();
   await expect(dialog.getByText(/已保留完成结果，正在继续剩余测评/)).toBeVisible();
 });
