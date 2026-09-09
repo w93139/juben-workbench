@@ -4,6 +4,7 @@ import { emptyBlueprintData, checkBlueprint, blueprintDataSchema } from "@/domai
 import { studioJobViewSchema, studioReviewResultSchema, studioAuditSchema, type StudioArtifact, type StudioAudit } from "@/domain/studio";
 import { StudioEngine, StudioError, readStudioConfig, openAITransport, type ModelTransport, type StudioConfig } from "@/server/studio-models";
 import { StudioJobStore } from "@/server/studio-job-store";
+import { sourceNoteSchema, type Segment } from "@/server/long-analysis";
 
 const config: StudioConfig = { baseUrl: "https://model.invalid/v1", apiKey: "test-only-no-real-credential", mainModel: "main", reviewA: "review-a", reviewB: "review-b" };
 function blueprint() {
@@ -31,6 +32,36 @@ const transport = (calls: string[] = []): ModelTransport => async (_config, mode
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("真实模型编排服务（只用假transport，不访问网络）", () => {
+  it("短输入不采用模型自行编造的分段覆盖数量", async () => {
+    const engine = new StudioEngine(() => config, async () => ({ ...analysis(), coverage: { method: "segmented", documents: 999, parts: 999 } }));
+    const done = await wait(engine, (await engine.start("analyze", { documents: [{ id: "doc", name: "剧本", text: "原始全文" }] })).jobId);
+    if (done.result?.kind !== "analysis") throw new Error("结果类型错误");
+    expect(done.result.analysis.coverage).toBeUndefined();
+  });
+  it("大于600KB原文自动分段；汇总失败后新引擎复用已存摘要而不重读原文", async () => {
+    const store = new StudioJobStore(":memory:"); let failFinal = true; let sourceCalls = 0;
+    const input = { documents: Array.from({ length: 3 }, (_, i) => ({ id: `d${i}`, name: `角色${i}`, text: `原始${i}。` + "中".repeat(90000) })) };
+    const call: ModelTransport = async (_config, _model, _prompt, payload, schema) => {
+      expect(Buffer.byteLength(JSON.stringify(payload))).toBeLessThan(600000);
+      const data = payload as { segments?: Segment[]; notes?: { sourceRefs: { documentId: string; location: string; quote: string }[] }[] };
+      const ref = data.segments ? { documentId: data.segments[0].documentId, location: "测试模型位置", quote: data.segments[0].text.slice(0, 5) } : data.notes![0].sourceRefs[0];
+      if (data.segments) sourceCalls++;
+      if (schema === sourceNoteSchema) return { summary: "测试分段的事实与关系", sourceRefs: [ref], unknowns: [] };
+      if (failFinal) throw new Error("测试最终汇总中断");
+      return { ...analysis(), sourceRefs: [ref] };
+    };
+    try {
+      const engine = new StudioEngine(() => config, call, Date.now, store);
+      const failed = await wait(engine, (await engine.start("analyze", input)).jobId);
+      expect(failed.status).toBe("failed"); expect(failed.error?.message).toContain("正在生成统一大纲"); expect(sourceCalls).toBeGreaterThan(1);
+      const before = sourceCalls; failFinal = false;
+      const restarted = new StudioEngine(() => config, call, Date.now, store);
+      const done = await wait(restarted, (await restarted.start("analyze", input)).jobId);
+      expect(done.status).toBe("completed"); expect(sourceCalls).toBe(before);
+      if (done.result?.kind !== "analysis") throw new Error("结果类型错误");
+      expect(done.result.analysis.coverage).toEqual({ method: "segmented", documents: 3, parts: before });
+    } finally { store.close(); }
+  });
   it("三模型正式请求复用已测输出额度，Kimi携带low且不发送不支持的参数", async () => {
     const fetchMock = vi.fn(async () => Response.json({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify(audit()) } }] }));
     vi.stubGlobal("fetch", fetchMock);
@@ -89,7 +120,7 @@ describe("真实模型编排服务（只用假transport，不访问网络）", (
     const input = { documents: [{ id: "doc", name: "剧本.txt", text: "原始全文" }] };
     const job = await engine.start("analyze", input); const done = await wait(engine, job.jobId); expect(done.result?.kind).toBe("analysis"); expect(studioJobViewSchema.safeParse(done).success).toBe(true);
     await expect(engine.start("analyze", { ...input, passed: true })).rejects.toMatchObject({ code: "INVALID_INPUT" });
-    await expect(engine.start("analyze", { documents: [{ id: "doc", name: "剧本", text: "中".repeat(250000) }] })).rejects.toMatchObject({ code: "CONTEXT_TOO_LARGE" }); expect(call).toHaveBeenCalledTimes(1);
+    await expect(engine.start("analyze", { documents: Array.from({ length: 50 }, (_, i) => ({ id: `large-${i}`, name: "剧本", text: "中".repeat(100000) })) })).rejects.toMatchObject({ code: "CONTEXT_TOO_LARGE" }); expect(call).toHaveBeenCalledTimes(1);
     const bad = new StudioEngine(() => config, async () => ({ ...analysis(), sourceRefs: [{ documentId: "doc", location: "未知", quote: "原文不存在" }] }));
     const invalid = await wait(bad, (await bad.start("analyze", input)).jobId); expect(invalid.error?.code).toBe("SOURCE_REFERENCE_INVALID");
   });

@@ -1,5 +1,6 @@
 import { materialSchema, type Material, type WorkbenchState } from "@/domain/workbench";
 import { studioInputs, studioJobViewSchema, type StudioOperation } from "@/domain/studio";
+import { ANALYSIS_DOCUMENT_LIMIT, ANALYSIS_INPUT_BYTES, SINGLE_CONTEXT_BYTES } from "@/domain/analysis-limits";
 import { changeWorkbench, readWorkbench } from "./workbench-store";
 
 export class StudioRequestError extends Error {
@@ -50,9 +51,12 @@ export async function startStudioJob(projectId: string, state: WorkbenchState, o
   const parsed = studioInputs[operation].safeParse(body);
   if (!parsed.success) {
     const count = operation === "analyze" ? state.documents.filter(d => !d.excluded).length : 0;
-    throw new Error(count > 200 ? `本次选中了${count}份材料，单次拆解最多200份。请将无关或重复文件设为“本轮不使用”后再试，未调用模型。` : "当前资料不完整或格式超限，请检查未读取文件、空正文及当前方向，未调用模型。");
+    throw new Error(count > ANALYSIS_DOCUMENT_LIMIT ? `本次选中了${count}份材料，当前最多支持${ANALYSIS_DOCUMENT_LIMIT}份。请整理文件数量后再试，未调用模型。` : "当前资料不完整或格式超限，请检查未读取文件、空正文及当前方向，未调用模型。");
   }
-  if (new TextEncoder().encode(JSON.stringify(parsed.data)).length > 600000) throw new Error("当前正文超过单次完整拆解容量（约600 KB），未调用模型。请排除重复或无关材料；不会自动截断原文。");
+  const inputBytes = new TextEncoder().encode(JSON.stringify(parsed.data)).length;
+  if (inputBytes > (operation === "analyze" ? ANALYSIS_INPUT_BYTES : SINGLE_CONTEXT_BYTES)) throw new Error(operation === "analyze"
+    ? "当前材料超过长剧本处理容量（约12 MB），未调用模型，原文已保留。请先整理重复或无关材料；必要正文请保留。"
+    : "当前创作资料超过本步骤处理容量（约600 KB），未调用模型，已有内容已保留。");
   const requestId = crypto.randomUUID();
   const reserved = await changeWorkbench(projectId, state.revision, next => {
     if (next.job) throw new Error("当前已有任务在处理。");

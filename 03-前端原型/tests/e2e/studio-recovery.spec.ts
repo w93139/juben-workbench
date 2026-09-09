@@ -151,6 +151,34 @@ test("拆解POST被拒绝时显示具体原因、恢复按钮且刷新保留材�
   expect((await readState(page, base)).documents).toEqual(state.documents); expect(posts).toBe(1);
 });
 
+test("超过600KB原剧本进入分段处理，完成后显示覆盖数量且刷新保留", async ({ page }) => {
+  await offlineCapability(page); const base = await seedProject(page, "长剧本拆解入口"); const state = prepared();
+  state.analysis = null; state.analysisSourceRevision = null; state.choiceId = null;
+  state.documents = Array.from({ length: 3 }, (_, index) => ({ ...state.documents[0], id: `doc-${index}`, name: `第${index + 1}部分.txt`, text: "自有长剧本测试正文".repeat(10000) }));
+  await writeState(page, base, state);
+  let submitted = ""; let jobId = ""; let finished = false;
+  await page.route("**/api/studio/analyze", route => {
+    submitted = route.request().postData()!; jobId = route.request().headers()["x-studio-request-id"];
+    return route.fulfill({ status: 202, json: { jobId, status: "running", phase: "正在分段读取 1/3" } });
+  });
+  const completedAnalysis = { ...analysis, coverage: { method: "segmented", documents: 3, parts: 3 } };
+  await page.route("**/api/studio/status?*", route => route.fulfill({ json: finished
+    ? { jobId, status: "completed", phase: "已完成", result: { kind: "analysis", analysis: completedAnalysis } }
+    : { jobId, status: "running", phase: "正在分段读取 1/3" } }));
+  await page.goto(`${base}/stages/materials`);
+  await page.getByRole("button", { name: "拆解大纲", exact: true }).click();
+  await expect(page).toHaveURL(`${base}/stages/analysis`);
+  await expect(page.getByRole("heading", { name: "正在分段读取 1/3", exact: true })).toBeVisible();
+  expect(Buffer.byteLength(submitted)).toBeGreaterThan(600000);
+  expect(JSON.parse(submitted).documents.map((doc: { text: string }) => doc.text)).toEqual(state.documents.map(doc => doc.text));
+  finished = true;
+  await expect(page.getByText("已分段处理 3 份材料 · 3 段", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /责任与选择/ })).toBeEnabled();
+  await page.reload();
+  await expect(page.getByText("已分段处理 3 份材料 · 3 段", { exact: true })).toBeVisible();
+  expect((await readState(page, base)).documents).toEqual(state.documents);
+});
+
 test("旧任务404自动结束等待并解锁更改文件夹，刷新不重发模型", async ({ page }) => {
   await offlineCapability(page); const base = await seedProject(page, "旧拆解恢复"); const state = prepared();
   state.job = { jobId: randomUUID(), operation: "analyze", phase: "正在提交资料", sourceRevision: state.sourceRevision, blueprintRevision: state.blueprintRevision };

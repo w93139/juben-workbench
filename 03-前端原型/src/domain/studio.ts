@@ -1,14 +1,16 @@
 import { z } from "zod";
 import { blueprintDataSchema } from "./blueprint";
 import { moduleIds } from "./production";
+import { ANALYSIS_DOCUMENT_LIMIT } from "./analysis-limits";
 
 const text = (max: number) => z.string().trim().min(1).max(max);
-export const studioDocumentSchema = z.object({ id: text(120), name: text(500), text: text(300000) }).strict();
+export const studioDocumentSchema = z.object({ id: text(120), name: text(500), text: z.string().min(1).max(300000).refine(value => !!value.trim(), "原文不能为空") }).strict();
 export const studioAnalysisSchema = z.object({
   outline: text(30000),
   directions: z.array(z.object({ id: text(100), title: text(200), summary: text(5000), outline: text(15000), risk: text(5000) }).strict()).min(2).max(5),
   sourceRefs: z.array(z.object({ documentId: text(120), location: text(1000), quote: text(3000) }).strict()).min(1).max(100),
   unknowns: z.array(text(2000)).max(100),
+  coverage: z.object({ method: z.literal("segmented"), documents: z.number().int().positive(), parts: z.number().int().positive() }).strict().optional(),
 }).strict();
 export type StudioAnalysis = z.infer<typeof studioAnalysisSchema>;
 export const studioArtifactSchema = z.object({
@@ -23,7 +25,7 @@ export const studioAuditSchema = z.object({
 }).strict();
 export type StudioAudit = z.infer<typeof studioAuditSchema>;
 export const studioInputs = {
-  analyze: z.object({ documents: z.array(studioDocumentSchema).min(1).max(200), instructions: z.string().max(10000).default("") }).strict(),
+  analyze: z.object({ documents: z.array(studioDocumentSchema).min(1).max(ANALYSIS_DOCUMENT_LIMIT), instructions: z.string().max(10000).default("") }).strict(),
   blueprint: z.object({ analysis: studioAnalysisSchema, choiceId: text(100), instructions: z.string().max(10000).default("") }).strict(),
   review: z.object({ blueprint: blueprintDataSchema }).strict(),
 };

@@ -31,7 +31,23 @@ it("提交期间404暂不释放，旧404解锁并保留资料、不自动重试"
   delete saved.job.submittedAt;
   const recovered = await pollStudioJob("p", saved); expect(recovered.job).toBeNull(); expect(recovered.error).toContain("没有自动重试"); expect(recovered.documents).toHaveLength(1);
 });
-it("过量或空材料在预留任务前失败，不发送请求", async () => {
-  const fetcher = vi.fn(); vi.stubGlobal("fetch", fetcher); saved.documents = Array.from({ length: 201 }, () => saved.documents[0]);
-  await expect(startStudioJob("p", saved, "analyze")).rejects.toThrow("201份"); expect(saved.job).toBeNull(); expect(fetcher).not.toHaveBeenCalled();
+it("超过2000份材料在预留任务前失败，不发送请求", async () => {
+  const fetcher = vi.fn(); vi.stubGlobal("fetch", fetcher); saved.documents = Array.from({ length: 2001 }, (_, i) => ({ ...saved.documents[0], id: `d${i}` }));
+  await expect(startStudioJob("p", saved, "analyze")).rejects.toThrow("2001份"); expect(saved.job).toBeNull(); expect(fetcher).not.toHaveBeenCalled();
+});
+it("超过600KB的长剧本和超过200份材料可提交，正文不截断", async () => {
+  saved.documents = Array.from({ length: 201 }, (_, i) => ({ ...saved.documents[0], id: `d${i}`, text: "文".repeat(1200) }));
+  const fetcher = vi.fn(async (_url: string, init: RequestInit) => Response.json({ jobId: (init.headers as Record<string, string>)["X-Studio-Request-Id"], status: "running", phase: "正在分段读取" })); vi.stubGlobal("fetch", fetcher);
+  await startStudioJob("p", saved, "analyze");
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  const sent = fetcher.mock.calls[0][1].body as string;
+  expect(new TextEncoder().encode(sent).length).toBeGreaterThan(600000);
+  expect(JSON.parse(sent).documents).toHaveLength(201);
+  expect(JSON.parse(sent).documents[200].text).toBe("文".repeat(1200));
+});
+it("超过12MB的长剧本不预留任务、不发请求且保留原文", async () => {
+  saved.documents = Array.from({ length: 14 }, (_, i) => ({ ...saved.documents[0], id: `d${i}`, text: "文".repeat(300000) }));
+  const fetcher = vi.fn(); vi.stubGlobal("fetch", fetcher);
+  await expect(startStudioJob("p", saved, "analyze")).rejects.toThrow("约12 MB");
+  expect(saved.job).toBeNull(); expect(fetcher).not.toHaveBeenCalled(); expect(saved.documents[13].text).toHaveLength(300000);
 });

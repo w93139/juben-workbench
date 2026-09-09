@@ -44,3 +44,10 @@ it("任务数量限制跨实例一致，伪造通过编号不可读取", () => {
   expect(() => b.claim({ jobId: randomUUID(), status: "running", phase: "测试" }, "third")).toThrow("两个创作任务");
   expect(b.validated(randomUUID())).toBeNull();
 });
+it("分段检查点跨连接可读并按保留期过期", () => {
+  let now = Date.now(); const path = file(); const a = store(path, () => now); const b = store(path, () => now);
+  const key = "a".repeat(64); const note = { summary: "自有测试摘要", sourceRefs: [], unknowns: [] };
+  a.saveAnalysisNote(key, note); expect(b.readAnalysisNote(key)).toEqual(note);
+  expect(() => a.saveAnalysisNote("invalid", note)).toThrow("保存限制");
+  now += 8 * 24 * 60 * 60 * 1000; expect(b.readAnalysisNote(key)).toBeNull();
+});

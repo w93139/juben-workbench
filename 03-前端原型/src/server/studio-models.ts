@@ -1,5 +1,7 @@
 import { StudioJobStore } from "./studio-job-store";
 import { evaluationResponseProfile } from "@/domain/model-evaluation";
+import { ANALYSIS_INPUT_BYTES, SINGLE_CONTEXT_BYTES } from "@/domain/analysis-limits";
+import { analyzeLongSource, LongAnalysisError } from "./long-analysis";
 import { studioSettingsStore } from "./studio-settings";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -9,7 +11,7 @@ import { studioAnalysisSchema, studioArtifactSchema, studioAuditSchema, studioIn
 export class StudioError extends Error { constructor(public code: string, message: string, public status = 400) { super(message); this.name = "StudioError"; } }
 export interface StudioConfig { baseUrl: string; apiKey: string; mainModel: string; reviewA: string; reviewB: string }
 export type ModelTransport = (config: StudioConfig, model: string, instructions: string, payload: unknown, schema: z.ZodType, signal: AbortSignal) => Promise<unknown>;
-const CONTEXT_BYTES = 600000;
+const CONTEXT_BYTES = SINGLE_CONTEXT_BYTES;
 const RESPONSE_BYTES = 2000000;
 const CALL_TIMEOUT = 240000;
 const JOB_TTL = 2 * 60 * 60 * 1000;
@@ -46,7 +48,7 @@ export const openAITransport: ModelTransport = async (config, model, instruction
   try { return JSON.parse(content); } catch { throw new StudioError("MODEL_RESPONSE_INVALID", "模型未返回严格JSON，本次结果未采纳。", 502); }
 };
 const artifactBundleSchema = z.object({ artifacts: z.array(studioArtifactSchema).min(6).max(240) }).strict();
-function safeError(error: unknown) { return error instanceof StudioError ? { code: error.code, message: error.message } : { code: "MODEL_UNAVAILABLE", message: "模型调用未完成，未生成可用结果。请检查服务端连接后重试。" }; }
+function safeError(error: unknown) { return error instanceof LongAnalysisError ? { code: "ANALYSIS_PART_FAILED", message: error.message } : error instanceof StudioError ? { code: error.code, message: error.message } : { code: "MODEL_UNAVAILABLE", message: "模型调用未完成，未生成可用结果。请检查服务端连接后重试。" }; }
 function auditIssues(audit: StudioAudit, label: string, source?: unknown) {
   const values: string[] = []; const visit = (value: unknown) => { if (typeof value === "string") values.push(value); else if (Array.isArray(value)) value.forEach(visit); else if (value && typeof value === "object") Object.values(value).forEach(visit); }; if (source) visit(source);
   return [...(source && audit.evidence.some((entry) => !values.some((value) => value.includes(entry.quote))) ? [`${label}：报告引用无法在冻结资料中核对`] : []),...audit.blocking.map((issue) => `${label}：${issue}`), ...(!audit.contentComplete ? [`${label}：内容尚不完整`] : []), ...(!audit.playerHostIsolation ? [`${label}：玩家与主持信息隔离未通过`] : []), ...(!audit.findingsAddressed ? [`${label}：仍有未处理审查发现`] : [])]; }
@@ -86,8 +88,12 @@ export class StudioEngine {
     if (requestId !== undefined && !z.string().uuid().safeParse(requestId).success) throw new StudioError("INVALID_REQUEST_ID", "任务编号无效，请刷新后重试。", 400);
     const parsed = studioInputs[operation].safeParse(input);
     if (!parsed.success) throw new StudioError("INVALID_INPUT", "请求资料不完整或格式不正确，请检查当前步骤的输入。", 400);
-    context(parsed.data); this.clean();
-    const fingerprint = createHash("sha256").update(operation + context(parsed.data)).digest("hex");
+    const serialized = JSON.stringify(parsed.data);
+    if (operation === "analyze") {
+      if (Buffer.byteLength(serialized) > ANALYSIS_INPUT_BYTES) throw new StudioError("CONTEXT_TOO_LARGE", "当前拆解材料超过12 MB本机处理上限，尚未调用模型。", 413);
+    } else context(parsed.data);
+    this.clean();
+    const fingerprint = createHash("sha256").update(operation + serialized).digest("hex");
     const existing = requestId ? this.store?.read(requestId) ?? this.jobs.get(requestId) : undefined;
     if (existing) {
       if (existing.fingerprint !== fingerprint) throw new StudioError("REQUEST_ID_CONFLICT", "同一任务编号的输入已变化，请建立新任务。", 409);
@@ -106,7 +112,7 @@ export class StudioEngine {
       }
     }
     this.jobs.set(jobId, job);
-    void this.run(operation, parsed.data, config, job).then((result) => { job.view = { ...job.view, status: "completed", phase: result.kind === "review" && !result.passed ? "审查结束，有待处理问题" : "本步处理完成", result }; this.store?.save(job.view); }).catch((error: unknown) => { job.view = { jobId, status: "failed", phase: "处理未完成", error: safeError(error) }; try { this.store?.save(job.view); } catch { job.view.error = { code: "JOB_SAVE_FAILED", message: "任务结果保存失败，请检查本机磁盘。没有自动重试模型。" }; } });
+    void this.run(operation, parsed.data, config, job).then((result) => { job.view = { ...job.view, status: "completed", phase: result.kind === "review" && !result.passed ? "审查结束，有待处理问题" : "本步处理完成", result }; this.store?.save(job.view); }).catch((error: unknown) => { const failure = safeError(error); if (operation === "analyze" && /分段|汇总|批原文/.test(job.view.phase)) failure.message = `${job.view.phase}。${failure.message}`; job.view = { jobId, status: "failed", phase: "处理未完成", error: failure }; try { this.store?.save(job.view); } catch { job.view.error = { code: "JOB_SAVE_FAILED", message: "任务结果保存失败，请检查本机磁盘。没有自动重试模型。" }; } });
     return structuredClone(job.view);
   }
   get(jobId: string) { this.clean(); const job = this.store?.read(jobId) ?? this.jobs.get(jobId); if (!job) throw new StudioError("JOB_NOT_FOUND", "未找到上次任务记录，材料已保留。没有自动重新调用模型；请检查提示后手动重新拆解。", 404); return structuredClone(job.view); }
@@ -126,7 +132,16 @@ export class StudioEngine {
     const phase = (value: string) => { job.view.phase = value; this.store?.save(job.view); };
     if (operation === "analyze") {
       const data = studioInputs.analyze.parse(input); phase("主模型正在读取全文、拆解结构并提出方向");
-      const analysis = await this.call(config, config.mainModel, "读取全部输入材料，拆解真相因果、时间线、人物关系、知识分配、线索支持与轮次节奏。每项原文事实要给可核对摘录；保留未确认内容。提出2至5个原创写作方向和三幕大纲，说明迁移机制及风险，不得只换名。outline中按明确事实/推断/原创/待定区分。", data, studioAnalysisSchema);
+      const analysis = Buffer.byteLength(JSON.stringify(data)) > CONTEXT_BYTES
+        ? await analyzeLongSource(data, {
+          call: (instructions, payload, schema) => this.call(config, config.mainModel, instructions, payload, schema),
+          phase,
+          modelIdentity: JSON.stringify({ baseUrl: config.baseUrl, model: config.mainModel, profile: evaluationResponseProfile(config.mainModel) }),
+          readCheckpoint: key => this.store?.readAnalysisNote(key),
+          writeCheckpoint: (key, note) => this.store?.saveAnalysisNote(key, note),
+        })
+        : await this.call(config, config.mainModel, "读取全部输入材料，拆解真相因果、时间线、人物关系、知识分配、线索支持与轮次节奏。每项原文事实要给可核对摘录；保留未确认内容。提出2至5个原创写作方向和三幕大纲，说明迁移机制及风险，不得只换名。outline中按明确事实/推断/原创/待定区分。", data, studioAnalysisSchema);
+      if (Buffer.byteLength(JSON.stringify(data)) <= CONTEXT_BYTES) delete analysis.coverage;
       if (new Set(analysis.directions.map((d) => d.id)).size !== analysis.directions.length || analysis.sourceRefs.some((ref) => !data.documents.some((doc) => doc.id === ref.documentId && doc.text.includes(ref.quote)))) throw new StudioError("SOURCE_REFERENCE_INVALID", "分析中的原文引用无法在输入材料核对，结果未采纳。", 502);
       return { kind: "analysis", analysis };
     }

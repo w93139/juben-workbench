@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { assertLocalRequest, localErrorResponse } from "@/server/local-security";
 import { StudioError, readStudioConfig, studioEngine } from "@/server/studio-models";
 import type { StudioOperation } from "@/domain/studio";
+import { ANALYSIS_INPUT_BYTES } from "@/domain/analysis-limits";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,10 +26,11 @@ export async function POST(request: Request, context: { params: Promise<{ operat
     if (!["analyze", "blueprint", "review"].includes(operation)) return response({ error: { code: "NOT_FOUND", message: "没有这个操作。" } }, 404);
     readStudioConfig();
     if (!request.headers.get("content-type")?.startsWith("application/json")) throw new StudioError("INVALID_INPUT", "请发送JSON资料。", 415);
-    if (Number(request.headers.get("content-length") ?? 0) > 700000) throw new StudioError("CONTEXT_TOO_LARGE", "请求资料超过限制，未发起模型调用。", 413);
+    const requestLimit = operation === "analyze" ? ANALYSIS_INPUT_BYTES + 65536 : 700000;
+    if (Number(request.headers.get("content-length") ?? 0) > requestLimit) throw new StudioError("CONTEXT_TOO_LARGE", "请求资料超过限制，未发起模型调用。", 413);
     const reader = request.body?.getReader(); if (!reader) throw new StudioError("INVALID_INPUT", "请求资料为空。", 400);
     const chunks: Uint8Array[] = []; let bytes = 0;
-    try { while (true) { const next = await reader.read(); if (next.done) break; bytes += next.value.byteLength; if (bytes > 700000) throw new StudioError("CONTEXT_TOO_LARGE", "请求资料超过限制，未发起模型调用。", 413); chunks.push(next.value); } } finally { await reader.cancel().catch(() => {}); }
+    try { while (true) { const next = await reader.read(); if (next.done) break; bytes += next.value.byteLength; if (bytes > requestLimit) throw new StudioError("CONTEXT_TOO_LARGE", "请求资料超过限制，未发起模型调用。", 413); chunks.push(next.value); } } finally { await reader.cancel().catch(() => {}); }
     let input: unknown; try { input = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { throw new StudioError("INVALID_INPUT", "请求资料不是有效JSON。", 400); }
     return response(await studioEngine.start(operation as StudioOperation, input, request.headers.get("x-studio-request-id") ?? undefined), 202);
   } catch (error) { return failure(error); }

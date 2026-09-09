@@ -20,8 +20,19 @@ export class StudioJobStore {
     }
     this.db = new DatabaseSync(file); if (file !== ":memory:") chmodSync(file, 0o600);
     this.db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS studio_jobs (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, view_json TEXT NOT NULL, status TEXT NOT NULL, owner_pid INTEGER NOT NULL, lease_until INTEGER NOT NULL, expires_at INTEGER NOT NULL, validation_id TEXT UNIQUE)");
+    this.db.exec("CREATE TABLE IF NOT EXISTS studio_analysis_notes (cache_key TEXT PRIMARY KEY, note_json TEXT NOT NULL, expires_at INTEGER NOT NULL)");
   }
   close() { this.db.close(); }
+  readAnalysisNote(key: string): unknown {
+    this.db.prepare("DELETE FROM studio_analysis_notes WHERE expires_at < ?").run(this.now());
+    const row = this.db.prepare("SELECT note_json FROM studio_analysis_notes WHERE cache_key = ?").get(key) as { note_json: string } | undefined;
+    return row ? JSON.parse(row.note_json) : null;
+  }
+  saveAnalysisNote(key: string, note: unknown) {
+    const serialized = JSON.stringify(note);
+    if (!/^[a-f0-9]{64}$/.test(key) || Buffer.byteLength(serialized) > 90000) throw new LocalApiError(400, "分段摘要超出保存限制，未继续调用模型。");
+    this.db.prepare("INSERT INTO studio_analysis_notes(cache_key, note_json, expires_at) VALUES (?, ?, ?) ON CONFLICT(cache_key) DO UPDATE SET note_json = excluded.note_json, expires_at = excluded.expires_at").run(key, serialized, this.now() + RETENTION);
+  }
   private recover() {
     const now = this.now();
     const rows = this.db.prepare("SELECT id, owner_pid, lease_until FROM studio_jobs WHERE status = 'running'").all() as { id: string; owner_pid: number; lease_until: number }[];
