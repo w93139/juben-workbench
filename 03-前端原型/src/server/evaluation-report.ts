@@ -37,6 +37,10 @@ export function buildEvaluationReport(view: EvaluationView, generatedAt = Date.n
   ];
   if (view.allocation) lines.push(`- 主创作模型：${displayName(view, view.allocation.mainModel)}`, `- 审查模型 A：${displayName(view, view.allocation.reviewA)}`, `- 审查模型 B：${displayName(view, view.allocation.reviewB)}`);
   else lines.push("尚未形成三个模型的可靠分配。未完整测评或未达到质量线时，不给出“最佳模型”结论。");
+  const legacyInterrupted = view.resumeCount > 0 && view.excludedModels.length === 0 && view.lastFailure == null && view.error === "模型服务返回的正文结构不完整，已停止后续付费调用。"
+    ? view.candidates.find(candidate => !view.scores.some(score => score.modelId === candidate.id) && !view.taskResults.some(result => result.modelId === candidate.id))
+    : undefined;
+  if (legacyInterrupted) lines.push("", "## 中断诊断", "", `- 分析推断：按旧版固定候选顺序和已保存进度，中断发生在 ${displayName(view, legacyInterrupted.id)} 的第一道“结构与证据拆解”。`, "- 可确认范围：服务请求已返回，但旧版严格正文结构校验没有通过，因此停止后续调用。", "- 无法确认范围：旧版没有保存异常响应原文，不能事后判定是结束标志、正文为空、正文分片还是其他具体字段。");
   lines.push("", "## 模型比较", "", "| 模型 | 状态 | 总分 | 结构 | 证据 | 原创 | 格式 | 响应时间 | 结果费用 |", "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
   const modelIds = [...new Set([...view.candidates.map(item => item.id), ...view.scores.map(item => item.modelId), ...view.taskResults.map(item => item.modelId), ...view.excludedModels.map(item => item.modelId)])];
   for (const modelId of modelIds) {
@@ -67,7 +71,7 @@ export function buildEvaluationReport(view: EvaluationView, generatedAt = Date.n
     lines.push("");
   }
   lines.push("## 费用", "", `- 已核算：${money(view.spentFen)}`, `- 在途预留：${money(view.reservedFen)}`, `- 待平台核对：${money(view.uncertainFen)}`, `- 工作台估算硬上限：${money(view.budgetCapFen)}`, "- “待平台核对”不是确认扣款；最终金额以蚂蚁平台账单为准。完整费用以本节账本合计为准，可能包含未形成成绩的异常调用。", "");
-  if (view.error) lines.push("## 当前未解决事项", "", `- ${view.error}`, ...(view.lastFailure ? [`- 最近一次定位：${displayName(view, view.lastFailure.modelId ?? "未知模型")}，${view.lastFailure.taskIndex == null ? "题目未知" : TASK_NAMES[view.lastFailure.taskIndex]}，类型 ${view.lastFailure.category}`] : ["- 旧记录没有保存失败调用的模型归属和响应形态，不能事后补造。"]), "");
+  if (view.error) lines.push("## 当前未解决事项", "", `- ${view.error}`, ...(view.lastFailure ? [`- 最近一次定位：${displayName(view, view.lastFailure.modelId ?? "未知模型")}，${view.lastFailure.taskIndex == null ? "题目未知" : TASK_NAMES[view.lastFailure.taskIndex]}，类型 ${view.lastFailure.category}`] : legacyInterrupted ? ["- 中断候选可按执行顺序定位，但响应具体字段未保存，不能事后补造。"] : ["- 旧记录没有保存失败调用的模型归属和响应形态，不能事后补造。"]), "");
   lines.push("## 适用边界", "", "- 测评只使用三类固定合成小样，没有发送用户剧本。", "- 得分用于当前工作台的模型角色分配，不证明长篇创作、完整 Skill 执行或真人试玩效果。", "- 未完成模型不能与完整模型直接排名；没有三个模型达到质量线时不会自动分配。", "");
   const date = new Date(view.updatedAt); const dateStamp = Number.isNaN(date.getTime()) ? "未知日期" : date.toISOString().slice(0, 10);
   return { filename: `模型测评报告-${dateStamp}.md`, markdown: lines.join("\n"), viewRevision: view.viewRevision };

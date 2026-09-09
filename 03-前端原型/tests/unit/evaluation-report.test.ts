@@ -5,7 +5,7 @@ import { buildEvaluationReport } from "@/server/evaluation-report";
 const base = evaluationViewSchema.parse({
   status: "blocked", phase: "测评因费用或服务状态停止", connectionRevision: 1, priceCheckedAt: 1_800_000_000_000, updatedAt: 1_800_000_001_000,
   budgetCapFen: 1000, spentFen: 20, reservedFen: 0, uncertainFen: 4,
-  candidates: [{ id: "qwen", displayName: "Qwen | Max", provider: "Qwen", contextLength: 128000, inputPriceMicroCnyPerMillion: 1, outputPriceMicroCnyPerMillion: 2 }],
+  candidates: [{ id: "qwen", displayName: "Qwen | Max", provider: "Qwen", contextLength: 128000, inputPriceMicroCnyPerMillion: 1, outputPriceMicroCnyPerMillion: 2 }, { id: "lingdt", displayName: "LingDT Flash", provider: "AntDigital", contextLength: 128000, inputPriceMicroCnyPerMillion: 1, outputPriceMicroCnyPerMillion: 2 }],
   scores: [{ modelId: "qwen", total: 64, structure: 71, evidence: 48, originality: 53, format: 100, latencyMs: 1000, promptTokens: 600, completionTokens: 5000, costFen: 20, usageEstimated: false, notes: ["未达到质量线"] }],
   taskResults: [], allocation: null, completedCalls: 3, maximumCalls: 12, plannedMaximumFen: 39, resumeCount: 1, resumeAllowed: true, viewRevision: 2,
   error: "模型服务返回的正文结构不完整，已停止后续付费调用。",
@@ -16,6 +16,7 @@ describe("模型测评报告", () => {
     const report = buildEvaluationReport(base, 1_800_000_002_000);
     expect(report.markdown).toContain("测评尚未完整结束"); expect(report.markdown).toContain("逐题明细未保存，不能补造"); expect(report.markdown).toContain("待平台核对：¥0.04");
     expect(report.markdown).toContain("没有发送用户剧本"); expect(report.markdown).not.toContain("最佳模型：Qwen"); expect(report.markdown).toContain("Qwen \\| Max");
+    expect(report.markdown).toContain("分析推断：按旧版固定候选顺序"); expect(report.markdown).toContain("响应具体字段未保存");
   });
   it("完成状态只展示数据库已有的三个角色分配", () => {
     const candidates = ["a", "b", "c"].map(id => ({ id, displayName: id.toUpperCase(), provider: id, contextLength: 128000, inputPriceMicroCnyPerMillion: 1, outputPriceMicroCnyPerMillion: 2 }));
