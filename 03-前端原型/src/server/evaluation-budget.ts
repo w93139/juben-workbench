@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { LocalApiError } from "./local-security";
 
 export interface BudgetSnapshot { capFen: number; spentFen: number; reservedFen: number; uncertainFen: number }
+export interface ResponsePolicyUpgradeClaim { expectedPolicyVersion: string | null; expectedFailureModelId: string }
 type Row = { cap_fen: number; spent_fen: number; reserved_fen: number; uncertain_fen: number };
 const CAP_FEN = 1000;
 
@@ -36,13 +37,27 @@ export class EvaluationBudgetLedger {
       this.db.exec("COMMIT"); return recovered;
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
-  claimResume(sessionId: string, ownerId: string, leaseMs: number, expectedViewRevision: number, expectedResumeCount = 0) {
+  claimResume(sessionId: string, ownerId: string, leaseMs: number, expectedViewRevision: number, expectedResumeCount = 0, policyUpgrade?: ResponsePolicyUpgradeClaim) {
     const now = Date.now(); this.db.exec("BEGIN IMMEDIATE");
     try {
       const result = this.db.prepare("SELECT view_json FROM evaluation_result WHERE session_id = ?").get(sessionId) as { view_json: string } | undefined;
-      let view: { status?: unknown; resumeCount?: unknown; resumeAllowed?: unknown; viewRevision?: unknown };
+      let view: { status?: unknown; resumeCount?: unknown; resumeAllowed?: unknown; viewRevision?: unknown; responsePolicyVersion?: unknown; reservedFen?: unknown; lastFailure?: unknown; excludedModels?: unknown };
       try { view = JSON.parse(result?.view_json ?? "null"); } catch { throw new LocalApiError(409, "测评记录无法核对，未继续付费调用。"); }
-      if (!view || view.status !== "blocked" || (view.resumeCount ?? 0) !== expectedResumeCount || (view.resumeAllowed ?? true) !== true || (view.viewRevision ?? 0) !== expectedViewRevision) throw new LocalApiError(409, "测评状态已由其他进程更新，未重复续测。");
+      const failure = view?.lastFailure && typeof view.lastFailure === "object" ? view.lastFailure as { modelId?: unknown; category?: unknown } : null;
+      const exclusions = Array.isArray(view?.excludedModels) ? view.excludedModels : [];
+      const ledger = this.snapshot(sessionId);
+      const policyUpgradeAllowed = !!policyUpgrade
+        && (view?.responsePolicyVersion === undefined || view.responsePolicyVersion === null ? null : view.responsePolicyVersion) === policyUpgrade.expectedPolicyVersion
+        && view?.reservedFen === 0
+        && ledger.reservedFen === 0
+        && failure?.category === "response"
+        && failure.modelId === policyUpgrade.expectedFailureModelId
+        && exclusions.some(item => item && typeof item === "object"
+          && (item as { modelId?: unknown }).modelId === policyUpgrade.expectedFailureModelId
+          && typeof (item as { reason?: unknown }).reason === "string"
+          && /length|长度上限|被截断/i.test((item as { reason: string }).reason)
+          && typeof (item as { costFen?: unknown }).costFen === "number");
+      if (!view || view.status !== "blocked" || (view.resumeCount ?? 0) !== expectedResumeCount || ((view.resumeAllowed ?? true) !== true && !policyUpgradeAllowed) || (view.viewRevision ?? 0) !== expectedViewRevision) throw new LocalApiError(409, "测评状态已由其他进程更新，未重复续测。");
       const current = this.db.prepare("SELECT owner_id, state, lease_until FROM evaluation_run WHERE session_id = ?").get(sessionId) as { owner_id: string; state: string; lease_until: number } | undefined;
       if (current?.state === "running" && current.lease_until > now) throw new LocalApiError(409, "另一工作台进程正在执行这轮测评，未重复发起调用。");
       this.db.prepare("INSERT INTO evaluation_run(session_id, owner_id, state, lease_until) VALUES (?, ?, 'running', ?) ON CONFLICT(session_id) DO UPDATE SET owner_id = excluded.owner_id, state = 'running', lease_until = excluded.lease_until").run(sessionId, ownerId, now + leaseMs);

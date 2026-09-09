@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export const MODEL_RESPONSE_POLICY_VERSION = "openai-json/2-4096";
+
 const text = (max: number) => z.string().trim().min(1).max(max);
 export const modelCandidateSchema = z.object({
   id: text(200), displayName: text(300), provider: text(120), contextLength: z.number().int().nonnegative().nullable(),
@@ -37,6 +39,7 @@ export const evaluationViewSchema = z.object({
   candidates: z.array(modelCandidateSchema).max(4), scores: z.array(modelScoreSchema).max(4), taskResults: z.array(taskEvaluationResultSchema).max(48).default([]).refine(items => new Set(items.map(item => `${item.modelId}:${item.taskIndex}`)).size === items.length, "测评题目结果不能重复"), excludedModels: z.array(excludedModelSchema).max(16).default([]).refine(items => new Set(items.map(item => item.modelId)).size === items.length, "排除模型不能重复"), allocation: modelAllocationSchema.nullable(),
   completedCalls: z.number().int().nonnegative(), maximumCalls: z.number().int().nonnegative(), plannedMaximumFen: z.number().int().nonnegative(), resumeCount: z.number().int().nonnegative().default(0), resumeAllowed: z.boolean().default(true), viewRevision: z.number().int().nonnegative().default(0),
   taskVersion: z.string().trim().min(1).max(100).nullable().default(null), startedAt: z.number().int().nonnegative().nullable().default(null), finishedAt: z.number().int().nonnegative().nullable().default(null),
+  responsePolicyVersion: z.string().trim().min(1).max(100).nullable().default(null),
   lastFailure: z.object({ modelId: text(200).nullable(), taskIndex: z.number().int().min(0).max(2).nullable(), category: z.enum(["service", "response", "usage", "budget"]), occurredAt: z.number().int().nonnegative() }).strict().nullable().default(null),
   error: z.string().max(2000).nullable(),
 });

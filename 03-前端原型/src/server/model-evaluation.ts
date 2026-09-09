@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { evaluationViewSchema, modelScoreSchema, taskEvaluationResultSchema, type EvaluationView, type ModelAllocation, type ModelCandidate, type ModelScore, type TaskEvaluationResult } from "@/domain/model-evaluation";
+import { evaluationViewSchema, MODEL_RESPONSE_POLICY_VERSION, modelScoreSchema, taskEvaluationResultSchema, type EvaluationView, type ModelAllocation, type ModelCandidate, type ModelScore, type TaskEvaluationResult } from "@/domain/model-evaluation";
 import { discoverAntModels } from "./model-discovery";
 import { EvaluationBudgetLedger, type BudgetSnapshot } from "./evaluation-budget";
 import { LocalApiError } from "./local-security";
@@ -9,7 +9,7 @@ import { writeLiteLLMConfig } from "./litellm-config";
 
 const SESSION_ID = "ant-model-selection-v1";
 const TASK_VERSION = "juben-model-eval/1.0";
-const MAX_OUTPUT_TOKENS = 900;
+const MAX_OUTPUT_TOKENS = 4_096;
 const MAX_PROMPT_TOKENS = 8_000;
 const REQUEST_TIMEOUT_MS = 90_000;
 const PRICE_VALID_MS = 10 * 60 * 1000;
@@ -17,6 +17,9 @@ const INTERNAL_PLANNING_CAP_FEN = 800;
 const COST_SAFETY_MULTIPLIER = 1.2;
 const RUN_LEASE_MS = REQUEST_TIMEOUT_MS + 30_000;
 const MAX_RESUME_ATTEMPTS = 3;
+const DEFERRED_LENGTH_REASON = "旧版length截断，保留为本轮自动替补候选";
+const CAPPED_LENGTH_REASON = "旧版length截断；本轮最多比较4个模型，未进入新版重测";
+const SATISFIED_LENGTH_REASON = "旧版length截断；本轮已取得三个合格模型，无需再次测评";
 
 type UsageResult = { content: string; promptTokens: number; completionTokens: number; latencyMs: number; usageEstimated?: boolean; responseNotes?: string[]; incompatibleReason?: string; identityUnverifiable?: string };
 export type EvaluationTransport = (connection: ProviderConnection, model: string, system: string, prompt: string, signal: AbortSignal) => Promise<UsageResult>;
@@ -100,6 +103,8 @@ function safeError(error: unknown) {
   return "模型测评未完成；没有采用不完整结果。请检查蚂蚁平台额度和模型权限。";
 }
 function mean(values: number[]) { return Math.round(values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length)); }
+function isLengthTruncation(reason: string) { return /length|长度上限|被截断/i.test(reason); }
+function isDeferredLength(reason: string) { return reason === DEFERRED_LENGTH_REASON; }
 function allocate(scores: ModelScore[], candidates: ModelCandidate[]): ModelAllocation | null {
   const eligible = scores.filter(score => score.total >= 70 && score.structure >= 60 && score.evidence >= 70 && score.originality >= 60 && score.format >= 95); if (eligible.length < 3) return null;
   const maximumRate = Math.max(...candidates.map(candidate => candidate.inputPriceMicroCnyPerMillion + candidate.outputPriceMicroCnyPerMillion), 1);
@@ -136,12 +141,13 @@ export const antEvaluationTransport: EvaluationTransport = async (connection, mo
 };
 
 export class ModelEvaluationEngine {
-  private view: EvaluationView = { status: "idle", phase: "尚未读取候选模型", connectionRevision: 0, priceCheckedAt: null, updatedAt: Date.now(), budgetCapFen: 1000, spentFen: 0, reservedFen: 0, uncertainFen: 0, candidates: [], scores: [], taskResults: [], excludedModels: [], allocation: null, completedCalls: 0, maximumCalls: 0, plannedMaximumFen: 0, resumeCount: 0, resumeAllowed: true, viewRevision: 0, taskVersion: null, startedAt: null, finishedAt: null, lastFailure: null, error: null };
+  private view: EvaluationView = { status: "idle", phase: "尚未读取候选模型", connectionRevision: 0, priceCheckedAt: null, updatedAt: Date.now(), budgetCapFen: 1000, spentFen: 0, reservedFen: 0, uncertainFen: 0, candidates: [], scores: [], taskResults: [], excludedModels: [], allocation: null, completedCalls: 0, maximumCalls: 0, plannedMaximumFen: 0, resumeCount: 0, resumeAllowed: true, viewRevision: 0, taskVersion: null, responsePolicyVersion: null, startedAt: null, finishedAt: null, lastFailure: null, error: null };
   private revision = 0;
   private readonly ownerId = randomUUID();
   private restored = false;
   private controller: AbortController | null = null;
   private resuming = false;
+  private discoveryFetcher: typeof fetch = fetch;
   private ledger: EvaluationBudgetLedger | null = null;
   constructor(private settings: StudioSettingsStore = studioSettingsStore, private transport: EvaluationTransport = antEvaluationTransport, private ledgerFactory = () => new EvaluationBudgetLedger(), private writeGatewayConfig: (allocation: ModelAllocation) => unknown = writeLiteLLMConfig) {}
   private budget() { return this.ledger ??= this.ledgerFactory(); }
@@ -169,6 +175,7 @@ export class ModelEvaluationEngine {
   private applyBudget(value: BudgetSnapshot) { this.view = { ...this.view, spentFen: value.spentFen, reservedFen: value.reservedFen, uncertainFen: value.uncertainFen }; }
   get() { this.restore(); if (!this.controller) this.reloadLatest(); this.recoverStale(); return evaluationViewSchema.parse(structuredClone(this.view)); }
   async discover(fetcher: typeof fetch = fetch) {
+    this.discoveryFetcher = fetcher;
     this.restore();
     if (["running", "cancelling"].includes(this.view.status)) throw new LocalApiError(409, "测评正在运行，请等待或先停止。");
     const historical = this.budget().snapshot(SESSION_ID);
@@ -187,13 +194,14 @@ export class ModelEvaluationEngine {
       if (candidates.reduce((sum, candidate) => sum + maximumCallFen(candidate) * tasks.length, 0) > INTERNAL_PLANNING_CAP_FEN) throw new LocalApiError(409, "三个候选模型按公开价及安全余量计算会超过8元内部阈值，未开放付费测评。");
       this.revision = safe.revision;
       const plannedMaximumFen = candidates.reduce((sum, candidate) => sum + maximumCallFen(candidate) * tasks.length, 0);
-      this.view = { ...this.view, status: "discovered", phase: "候选模型已就绪，尚未产生模型费用", connectionRevision: safe.revision, priceCheckedAt: Date.now(), candidates, scores: [], taskResults: [], excludedModels: [], allocation: null, maximumCalls: candidates.length * tasks.length, completedCalls: 0, plannedMaximumFen, resumeCount: 0, resumeAllowed: true, taskVersion: TASK_VERSION, startedAt: null, finishedAt: null, lastFailure: null, error: null }; this.persist();
+      this.view = { ...this.view, status: "discovered", phase: "候选模型已就绪，尚未产生模型费用", connectionRevision: safe.revision, priceCheckedAt: Date.now(), candidates, scores: [], taskResults: [], excludedModels: [], allocation: null, maximumCalls: candidates.length * tasks.length, completedCalls: 0, plannedMaximumFen, resumeCount: 0, resumeAllowed: true, taskVersion: TASK_VERSION, responsePolicyVersion: MODEL_RESPONSE_POLICY_VERSION, startedAt: null, finishedAt: null, lastFailure: null, error: null }; this.persist();
       return this.get();
     } catch (error) { this.view = { ...this.view, status: "failed", phase: "候选模型读取失败", error: safeError(error) }; this.persist(); throw error; }
   }
   start() {
     this.restore();
     if (this.view.status !== "discovered" || this.view.candidates.length < 3) throw new LocalApiError(409, "请先读取至少三个候选模型。");
+    if (this.view.responsePolicyVersion !== MODEL_RESPONSE_POLICY_VERSION) throw new LocalApiError(409, "测评答题长度已经更新，请先免费重新读取候选模型和费用计划。");
     if (!this.view.priceCheckedAt || Date.now() - this.view.priceCheckedAt > PRICE_VALID_MS) throw new LocalApiError(409, "公开价格读取已超过10分钟，请重新读取候选模型后再开始，未产生付费调用。");
     const safe = this.settings.safe(); const connection = this.settings.connection();
     if (!connection || safe.revision !== this.revision) throw new LocalApiError(409, "平台连接在候选发现后发生变化。请重新读取候选模型，未产生付费调用。");
@@ -204,12 +212,18 @@ export class ModelEvaluationEngine {
     void this.run(connection, this.controller.signal); return this.get();
   }
   async resume(fetcher: typeof fetch = fetch) {
+    this.discoveryFetcher = fetcher;
     if (this.resuming) throw new LocalApiError(409, "正在核对续测条件，请勿重复点击。");
     this.resuming = true;
     try {
       this.restore();
-      if (this.view.status !== "blocked" || !this.view.resumeAllowed || this.view.completedCalls >= this.view.maximumCalls) throw new LocalApiError(409, "当前中断原因不允许自动续测，请先核对平台账单。");
-      if (this.view.resumeCount >= MAX_RESUME_ATTEMPTS) throw new LocalApiError(409, "本轮已经续测三次。为避免重复费用，请先核对平台账单后再决定是否建立新测评轮次。");
+      const policyFailure = this.view.lastFailure;
+      const failedLengthModel = policyFailure?.category === "response" && policyFailure.modelId
+        ? this.view.excludedModels.find(item => item.modelId === policyFailure.modelId && isLengthTruncation(item.reason) && item.costFen != null)
+        : undefined;
+      const policyUpgrade = this.view.responsePolicyVersion !== MODEL_RESPONSE_POLICY_VERSION && this.view.reservedFen === 0 && !!failedLengthModel;
+      if (this.view.status !== "blocked" || (!this.view.resumeAllowed && !policyUpgrade) || (this.view.completedCalls >= this.view.maximumCalls && !policyUpgrade)) throw new LocalApiError(409, "当前中断原因不允许自动续测，请先核对平台账单。");
+      if (this.view.resumeCount >= MAX_RESUME_ATTEMPTS && !policyUpgrade) throw new LocalApiError(409, "本轮已经完成三轮候选替换。为避免重复费用，请先核对平台账单后再决定是否建立新测评轮次。");
       const recoverableCalls = this.view.scores.length * tasks.length + this.view.taskResults.filter(result => !this.view.scores.some(score => score.modelId === result.modelId)).length;
       if (recoverableCalls !== this.view.completedCalls) throw new LocalApiError(409, "旧测评记录无法确认每道已完成题目，未自动重测，请先核对平台账单。");
       const connection = this.settings.connection(); const safe = this.settings.safe();
@@ -217,22 +231,36 @@ export class ModelEvaluationEngine {
       const legacyIncompatible = this.view.resumeCount > 0 && this.view.excludedModels.length === 0 && this.view.lastFailure == null && this.view.error === "模型服务返回的正文结构不完整，已停止后续付费调用。"
         ? this.view.candidates.find(candidate => !this.view.scores.some(score => score.modelId === candidate.id) && !this.view.taskResults.some(result => result.modelId === candidate.id))
         : undefined;
-      const excludedModels = legacyIncompatible ? [...this.view.excludedModels, { modelId: legacyIncompatible.id, displayName: legacyIncompatible.displayName, reason: "旧版严格解析连续中断，已保留费用并跳过该候选", costFen: null, usageEstimated: true, occurredAt: this.view.updatedAt }] : this.view.excludedModels;
+      const truncatedModels = policyUpgrade ? this.view.excludedModels.filter(item => isLengthTruncation(item.reason)) : [];
+      const priorExcludedIds = new Set(this.view.excludedModels.map(item => item.modelId));
+      const completedModelIds = [...new Set([...this.view.scores.map(score => score.modelId), ...this.view.taskResults.filter(result => !priorExcludedIds.has(result.modelId)).map(result => result.modelId)])];
+      const availableSeats = Math.max(0, 4 - completedModelIds.length);
+      const orderedTruncations = policyUpgrade && policyFailure?.modelId
+        ? [...truncatedModels].sort((a, b) => Number(b.modelId === policyFailure.modelId) - Number(a.modelId === policyFailure.modelId))
+        : truncatedModels;
+      const restoredTruncations = orderedTruncations.slice(0, availableSeats);
+      const restoredTruncationIds = new Set(restoredTruncations.map(item => item.modelId));
+      const retainedExclusions = policyUpgrade
+        ? this.view.excludedModels.flatMap(item => isLengthTruncation(item.reason)
+          ? restoredTruncationIds.has(item.modelId) ? [] : [{ ...item, reason: DEFERRED_LENGTH_REASON }]
+          : [item])
+        : this.view.excludedModels;
+      const excludedModels = legacyIncompatible ? [...retainedExclusions, { modelId: legacyIncompatible.id, displayName: legacyIncompatible.displayName, reason: "旧版严格解析连续中断，已保留费用并跳过该候选", costFen: null, usageEstimated: true, occurredAt: this.view.updatedAt }] : retainedExclusions;
       const excludedIds = new Set(excludedModels.map(item => item.modelId));
-      const preservedIds = [...new Set([...this.view.scores.map(score => score.modelId), ...this.view.taskResults.map(result => result.modelId)])].filter(id => !excludedIds.has(id));
+      const preservedIds = [...new Set([...completedModelIds, ...restoredTruncations.map(item => item.modelId)])].filter(id => !excludedIds.has(id));
       const candidates = await discoverAntModels(connection, fetcher, undefined, preservedIds, [...excludedIds]);
       const expectedResumeCount = this.view.resumeCount;
-      if (this.view.status !== "blocked" || expectedResumeCount >= MAX_RESUME_ATTEMPTS || this.controller || this.settings.safe().revision !== this.revision) throw new LocalApiError(409, "测评状态在价格核对期间发生变化，未继续付费调用。");
+      if (this.view.status !== "blocked" || (expectedResumeCount >= MAX_RESUME_ATTEMPTS && !policyUpgrade) || this.controller || this.settings.safe().revision !== this.revision) throw new LocalApiError(409, "测评状态在价格核对期间发生变化，未继续付费调用。");
       if (!preservedIds.every(id => candidates.some(candidate => candidate.id === id))) throw new LocalApiError(409, "已完成模型已不在当前可用价格表中，未继续付费调用。");
       const completedIds = new Set(this.view.scores.map(score => score.modelId));
       const completedTasks = new Set(this.view.taskResults.map(result => `${result.modelId}:${result.taskIndex}`));
       const plannedMaximumFen = candidates.reduce((sum, candidate) => completedIds.has(candidate.id) ? sum : sum + tasks.reduce((taskSum, _task, taskIndex) => taskSum + (completedTasks.has(`${candidate.id}:${taskIndex}`) ? 0 : maximumCallFen(candidate)), 0), 0);
       const budget = this.budget().snapshot(SESSION_ID);
       if (budget.spentFen + budget.reservedFen + budget.uncertainFen + plannedMaximumFen > Math.min(INTERNAL_PLANNING_CAP_FEN, budget.capFen)) throw new LocalApiError(409, "剩余候选按最新公开价会超过8元内部阈值，未继续付费调用。");
-      this.budget().claimResume(SESSION_ID, this.ownerId, RUN_LEASE_MS, this.view.viewRevision, expectedResumeCount); this.applyBudget(budget);
+      this.budget().claimResume(SESSION_ID, this.ownerId, RUN_LEASE_MS, this.view.viewRevision, expectedResumeCount, policyUpgrade && policyFailure?.modelId ? { expectedPolicyVersion: this.view.responsePolicyVersion, expectedFailureModelId: policyFailure.modelId } : undefined); this.applyBudget(budget);
       this.controller = new AbortController();
       const excludedCompletedCalls = this.view.taskResults.filter(result => excludedIds.has(result.modelId)).length;
-      this.view = { ...this.view, status: "running", phase: legacyIncompatible ? `已跳过不兼容的${legacyIncompatible.displayName}，正在继续其余候选` : "已保留完成结果，正在继续剩余测评", candidates, excludedModels, priceCheckedAt: Date.now(), maximumCalls: candidates.length * tasks.length + excludedCompletedCalls, plannedMaximumFen, resumeCount: expectedResumeCount + 1, finishedAt: null, lastFailure: null, error: null };
+      this.view = { ...this.view, status: "running", phase: policyUpgrade ? "已加长答题空间，正在重新测评此前被截断的候选" : legacyIncompatible ? `已跳过不兼容的${legacyIncompatible.displayName}，正在继续其余候选` : "已保留完成结果，正在继续剩余测评", candidates, excludedModels, priceCheckedAt: Date.now(), maximumCalls: candidates.length * tasks.length + excludedCompletedCalls, plannedMaximumFen, resumeCount: policyUpgrade ? 0 : expectedResumeCount + 1, responsePolicyVersion: MODEL_RESPONSE_POLICY_VERSION, finishedAt: null, lastFailure: null, error: null };
       try { this.persist(); } catch (error) { this.controller = null; this.budget().releaseRun(SESSION_ID, this.ownerId, "blocked"); throw error; }
       void this.run(connection, this.controller.signal); return this.get();
     } finally { this.resuming = false; }
@@ -247,10 +275,35 @@ export class ModelEvaluationEngine {
     if (!["running", "cancelling"].includes(this.view.status)) return;
     this.view = { ...this.view, status: "cancelling", phase: "平台连接已更新，正在停止旧连接的测评" }; this.persist(); this.controller?.abort();
   }
+  private async replaceIncompatibleCandidates(connection: ProviderConnection, signal: AbortSignal) {
+    if (this.view.resumeCount >= MAX_RESUME_ATTEMPTS || signal.aborted) return false;
+    const currentlyExcludedIds = new Set(this.view.excludedModels.map(item => item.modelId));
+    const progressIds = [...new Set([...this.view.scores.map(score => score.modelId), ...this.view.taskResults.filter(result => !currentlyExcludedIds.has(result.modelId)).map(result => result.modelId)])];
+    const deferred = this.view.excludedModels.filter(item => isDeferredLength(item.reason));
+    const deferredToRestore = deferred.slice(0, Math.max(0, 4 - progressIds.length));
+    const restoredIds = new Set(deferredToRestore.map(item => item.modelId));
+    const excludedModels = this.view.excludedModels.filter(item => !restoredIds.has(item.modelId));
+    const excludedIds = new Set(excludedModels.map(item => item.modelId));
+    const preservedIds = [...new Set([...progressIds, ...deferredToRestore.map(item => item.modelId)])].filter(id => !excludedIds.has(id));
+    const previousIds = new Set(this.view.candidates.filter(item => !excludedIds.has(item.id)).map(item => item.id));
+    const candidates = await discoverAntModels(connection, this.discoveryFetcher, signal, preservedIds, [...excludedIds]);
+    if (!progressIds.every(id => candidates.some(candidate => candidate.id === id))) throw new LocalApiError(409, "已有得分或题目记录的模型已不在当前可用价格表中，未继续付费调用。");
+    if (!candidates.some(candidate => !previousIds.has(candidate.id))) return false;
+    const completedIds = new Set(this.view.scores.map(score => score.modelId));
+    const completedTasks = new Set(this.view.taskResults.map(result => `${result.modelId}:${result.taskIndex}`));
+    const plannedMaximumFen = candidates.reduce((sum, candidate) => completedIds.has(candidate.id) ? sum : sum + tasks.reduce((taskSum, _task, taskIndex) => taskSum + (completedTasks.has(`${candidate.id}:${taskIndex}`) ? 0 : maximumCallFen(candidate)), 0), 0);
+    const budget = this.budget().snapshot(SESSION_ID);
+    if (budget.spentFen + budget.reservedFen + budget.uncertainFen + plannedMaximumFen > Math.min(INTERNAL_PLANNING_CAP_FEN, budget.capFen)) throw new LocalApiError(409, "自动换入候选后的最高预留会超过8元内部阈值，已停止且没有发起新调用。");
+    const excludedCompletedCalls = this.view.taskResults.filter(result => excludedIds.has(result.modelId)).length;
+    this.budget().heartbeatRun(SESSION_ID, this.ownerId, RUN_LEASE_MS);
+    this.view = { ...this.view, candidates, excludedModels, priceCheckedAt: Date.now(), maximumCalls: candidates.length * tasks.length + excludedCompletedCalls, plannedMaximumFen, resumeCount: this.view.resumeCount + 1, phase: "已自动跳过不兼容响应并换入其他候选", lastFailure: null, error: null };
+    this.persist(); return true;
+  }
   private async run(connection: ProviderConnection, signal: AbortSignal) {
     const scores: ModelScore[] = [...this.view.scores];
     const taskResults: TaskEvaluationResult[] = [...this.view.taskResults];
     try {
+      for (;;) {
       for (const candidate of this.view.candidates) {
         if (scores.some(score => score.modelId === candidate.id) || this.view.excludedModels.some(item => item.modelId === candidate.id)) continue;
         for (const [taskIndex, task] of tasks.entries()) {
@@ -316,9 +369,17 @@ export class ModelEvaluationEngine {
         scores.push(score); this.view = { ...this.view, scores: [...scores] }; this.persist();
       }
       const allocation = allocate(scores, this.view.candidates);
-      if (!allocation) { const hasExcluded = this.view.excludedModels.length > 0 && this.view.completedCalls < this.view.maximumCalls; this.view = { ...this.view, status: "blocked", phase: hasExcluded ? "有候选返回不兼容，需替换后继续测评" : "测评完成，但没有三个模型同时达到最低质量线", resumeAllowed: hasExcluded && this.view.resumeCount < MAX_RESUME_ATTEMPTS, finishedAt: Date.now(), error: hasExcluded ? "不兼容候选不会重试；继续时会免费复核并换入其他候选。" : "本次不会自动分配模型，也不会把测评结果写成已验证。" }; this.persist(); this.budget().releaseRun(SESSION_ID, this.ownerId, "blocked"); return; }
+      if (!allocation) {
+        const hasExcluded = this.view.excludedModels.length > 0 && this.view.completedCalls < this.view.maximumCalls;
+        if (hasExcluded && await this.replaceIncompatibleCandidates(connection, signal)) continue;
+        const excludedModels = this.view.excludedModels.map(item => isDeferredLength(item.reason) ? { ...item, reason: CAPPED_LENGTH_REASON } : item);
+        this.view = { ...this.view, status: "blocked", phase: hasExcluded ? "不兼容候选已自动跳过，但没有更多可替换模型" : "测评完成，但没有三个模型同时达到最低质量线", excludedModels, resumeAllowed: false, finishedAt: Date.now(), error: hasExcluded ? "系统已自动跳过不兼容响应；当前可用候选不足或已达到三轮替换上限。" : "本轮最多比较4个模型，仍没有三个模型同时达到质量线；不会自动增加调用。" }; this.persist(); this.budget().releaseRun(SESSION_ID, this.ownerId, "blocked"); return;
+      }
       this.writeGatewayConfig(allocation); this.settings.setSelection(allocation, this.revision);
-      this.view = { ...this.view, status: "completed", phase: "测评完成，三个模型已自动分配", allocation, finishedAt: Date.now(), error: null }; this.persist(); this.budget().releaseRun(SESSION_ID, this.ownerId, "completed");
+      const excludedModels = this.view.excludedModels.map(item => isDeferredLength(item.reason) ? { ...item, reason: SATISFIED_LENGTH_REASON } : item);
+      this.view = { ...this.view, status: "completed", phase: "测评完成，三个模型已自动分配", excludedModels, allocation, finishedAt: Date.now(), error: null }; this.persist(); this.budget().releaseRun(SESSION_ID, this.ownerId, "completed");
+      return;
+      }
     } catch (error) {
       const cancelled = signal.aborted;
       this.view = { ...this.view, status: cancelled ? "cancelled" : "blocked", phase: cancelled ? "测评已停止" : "测评因费用或服务状态停止", resumeAllowed: !cancelled && !(error instanceof UsageAccountingError), finishedAt: Date.now(), error: safeError(error) }; this.persist(); this.budget().releaseRun(SESSION_ID, this.ownerId, cancelled ? "cancelled" : "blocked");

@@ -16,7 +16,7 @@ test("先安全保存蚂蚁连接，再免费读取候选模型；不会自动�
   await page.route("**/api/studio/evaluation", async route => {
     if (route.request().method() === "GET") return route.fulfill({ json: idle });
     const body = route.request().postDataJSON(); expect(body.action).toBe("discover"); discoveryCalls++;
-    return route.fulfill({ json: { ...idle, status: "discovered", phase: "候选模型已就绪，尚未产生模型费用", priceCheckedAt: Date.now(), candidates: [candidate("model-a", "A", 1), candidate("model-b", "B", 2), candidate("model-c", "C", 3)], maximumCalls: 9, plannedMaximumFen: 90 } });
+    return route.fulfill({ json: { ...idle, status: "discovered", phase: "候选模型已就绪，尚未产生模型费用", priceCheckedAt: Date.now(), candidates: [candidate("model-a", "A", 1), candidate("model-b", "B", 2), candidate("model-c", "C", 3)], maximumCalls: 9, plannedMaximumFen: 90, responsePolicyVersion: "openai-json/2-4096" } });
   });
   await page.route(/\/api\/studio\/(analyze|blueprint|review)$/, route => { contentCalls++; return route.abort(); });
   await page.goto("/"); await seedProject(page, "连接验收"); await page.getByRole("button", { name: "配置模型", exact: true }).click();
@@ -42,9 +42,23 @@ test("中断后明确保留已完成结果，由用户点击才继续剩余测�
   const markdown = "# 剧本工作台模型测评报告\n\n测评尚未完整结束\n\n待平台核对：¥0.02";
   await page.route("**/api/studio/evaluation/report", route => route.fulfill({ json: { filename: "模型测评报告.md", markdown, viewRevision: 0 } }));
   await page.goto("/"); await page.getByRole("button", { name: "配置模型", exact: true }).click();
-  const dialog = page.getByRole("dialog"); await expect(dialog.getByText(/已完成题目和已排除候选不会重测/)).toBeVisible();
+  const dialog = page.getByRole("dialog"); await expect(dialog.getByText(/已完成题目不会重测/)).toBeVisible();
   await dialog.getByRole("button", { name: "查看测评报告" }).click(); await expect(dialog.getByText("# 剧本工作台模型测评报告", { exact: false })).toBeVisible();
   const download = page.waitForEvent("download"); await dialog.getByRole("button", { name: "下载报告（Markdown）" }).click(); expect((await download).suggestedFilename()).toBe("模型测评报告.md");
   await dialog.getByRole("button", { name: "核对价格并继续测评" }).click();
   await expect(dialog.getByText(/已保留完成结果，正在继续剩余测评/)).toBeVisible();
+});
+
+test("旧版length截断会解释为答题空间不足，并提供新版长度入口", async ({ page }) => {
+  const models = [candidate("model-a", "A", 1), candidate("model-b", "B", 2), candidate("model-c", "C", 3)];
+  const blocked = { ...idle, status: "blocked", phase: "有候选返回不兼容", connectionRevision: 1, priceCheckedAt: Date.now(), spentFen: 28, uncertainFen: 4, candidates: models, scores: [{ modelId: "model-a", total: 64, structure: 71, evidence: 48, originality: 53, format: 100, latencyMs: 1000, promptTokens: 6000, completionTokens: 75, costFen: 20, usageEstimated: false, notes: ["未达到金标"] }], excludedModels: [{ modelId: "model-b", displayName: "MODEL-B", reason: "服务以length结束，正文可能不完整", costFen: 2, usageEstimated: false, occurredAt: Date.now() }], completedCalls: 3, maximumCalls: 9, plannedMaximumFen: 45, resumeCount: 3, resumeAllowed: false, responsePolicyVersion: null, lastFailure: { modelId: "model-b", taskIndex: 0, category: "response", occurredAt: Date.now() }, error: "旧版长度不足" };
+  await page.route("**/api/studio/settings", route => route.fulfill({ json: { baseUrl: "https://maas-api.antdigital.com/v1", mainModel: "", reviewA: "", reviewB: "", hasApiKey: true, providerConfigured: true, configured: false, source: "local", revision: 1, environmentLocked: false } }));
+  await page.route("**/api/studio/evaluation", async route => {
+    if (route.request().method() === "GET") return route.fulfill({ json: blocked });
+    expect(route.request().postDataJSON()).toEqual({ action: "resume" });
+    return route.fulfill({ status: 202, json: { ...blocked, status: "running", phase: "已加长答题空间，正在重新测评此前被截断的候选", excludedModels: [], resumeCount: 0, responsePolicyVersion: "openai-json/2-4096", error: null } });
+  });
+  await page.goto("/"); await page.getByRole("button", { name: "配置模型", exact: true }).click(); const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText(/回答达到旧版长度上限，正文被截断；不是模型损坏/)).toBeVisible();
+  await dialog.getByRole("button", { name: "使用新版长度继续测评" }).click(); await expect(dialog.getByText(/已加长答题空间/)).toBeVisible();
 });

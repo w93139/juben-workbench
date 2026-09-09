@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Download, FileText, Settings2, Square } from "lucide-react";
 import type { SafeStudioSettings } from "@/server/studio-settings";
-import { evaluationViewSchema, priceLabel, type EvaluationView } from "@/domain/model-evaluation";
+import { evaluationViewSchema, MODEL_RESPONSE_POLICY_VERSION, priceLabel, type EvaluationView } from "@/domain/model-evaluation";
 import { localJson } from "@/services/studio-client";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -86,6 +86,12 @@ export function StudioConnection() {
   const roleName = (id: string) => evaluation?.candidates.find(candidate => candidate.id === id)?.displayName || evaluation?.excludedModels.find(candidate => candidate.modelId === id)?.displayName || id;
   const hasRecordedCost = !!evaluation && evaluation.spentFen + evaluation.reservedFen + evaluation.uncertainFen > 0;
   const showCurrentReport = showReport && report != null && report.viewRevision === evaluation?.viewRevision;
+  const failedLengthModel = evaluation?.lastFailure?.category === "response" && evaluation.lastFailure.modelId
+    ? evaluation.excludedModels.find(item => item.modelId === evaluation.lastFailure?.modelId && /length|长度上限|被截断/i.test(item.reason) && item.costFen != null)
+    : undefined;
+  const canUpgradeTruncated = evaluation?.status === "blocked" && evaluation.responsePolicyVersion !== MODEL_RESPONSE_POLICY_VERSION && evaluation.reservedFen === 0 && !!failedLengthModel;
+  const readableExclusion = (reason: string) => reason.includes("自动替补候选") ? "旧版回答曾被截断；当前候选不完整时会自动替补" : reason.includes("最多比较4个模型") ? "旧版回答曾被截断；本轮最多比较4个模型，因此未重测" : reason.includes("已取得三个合格模型") ? "旧版回答曾被截断；本轮已有三个合格模型，因此无需重测" : /length|长度上限|被截断/i.test(reason) ? "回答达到旧版长度上限，正文被截断；不是模型损坏" : reason;
+  const displayPhase = canUpgradeTruncated ? "旧版答题空间不足，需要使用新版长度继续" : evaluation?.phase;
 
   return <>
     <Button size="sm" variant="outline" onClick={() => { setSettings(null); setEvaluation(null); setReport(null); setShowReport(false); setLoading(true); setError(null); setSaved(false); setApiKey(""); setOpen(true); }}><Settings2 size={15} />配置模型</Button>
@@ -113,13 +119,15 @@ export function StudioConnection() {
         {evaluation?.status !== "idle" && evaluation?.candidates.length ? <section className="space-y-3 rounded-xl border border-[var(--border)] p-4">
           <div><p className="field-label">3 · 小样测评与自动分配</p><p className="field-hint mt-1">固定测试“结构拆解、原创方向、一致性审查”，不发送你的剧本；达到质量线后，同等表现优先费用更低的模型。最多{evaluation.maximumCalls}次短调用；按当前公开价加安全余量，{evaluation.resumeCount ? "剩余调用" : "本轮"}最多预留{money(evaluation.plannedMaximumFen)}，工作台估算限额{money(evaluation.budgetCapFen)}。</p></div>
           <div className="h-2 overflow-hidden rounded-full bg-[var(--muted)]"><div className="h-full bg-[#333333] transition-all" style={{ width: `${evaluation.maximumCalls ? evaluation.completedCalls / evaluation.maximumCalls * 100 : 0}%` }} /></div>
-          <p role="status" className="text-sm">{evaluation.phase} · 已完成 {evaluation.completedCalls}/{evaluation.maximumCalls} · 已核算 {money(evaluation.spentFen)}{evaluation.uncertainFen ? ` · 待核对 ${money(evaluation.uncertainFen)}` : ""}</p>
-          {evaluation.status === "discovered" && <Button type="button" disabled={busy} onClick={() => void action("start")}>开始受限测评</Button>}
-          {evaluation.status === "blocked" && evaluation.resumeAllowed && evaluation.completedCalls < evaluation.maximumCalls && evaluation.resumeCount < 3 && <div className="space-y-2"><p className="field-hint">已完成题目和已排除候选不会重测；待核对金额继续计入10元上限。点击后先免费核对候选与价格，再继续剩余付费调用。</p><Button type="button" disabled={busy} onClick={() => void action("resume")}>{busy ? "正在核对…" : evaluation.resumeCount ? "跳过不兼容模型并继续" : "核对价格并继续测评"}</Button></div>}
-          {evaluation.status === "blocked" && !evaluation.resumeAllowed && <p className="field-hint">本次用量或记录存在异常，已关闭自动续测，避免重复扣费。</p>}
+          <p role="status" className="text-sm">{displayPhase} · 已完成 {evaluation.completedCalls}/{evaluation.maximumCalls} · 已核算 {money(evaluation.spentFen)}{evaluation.uncertainFen ? ` · 待核对 ${money(evaluation.uncertainFen)}` : ""}</p>
+          {evaluation.status === "discovered" && evaluation.responsePolicyVersion !== MODEL_RESPONSE_POLICY_VERSION && <div className="space-y-2"><p className="field-hint">答题长度已升级，需要免费刷新一次候选价格和最高费用计划。</p><Button type="button" variant="outline" disabled={busy} onClick={() => void action("discover")}>更新测评计划（免费）</Button></div>}
+          {evaluation.status === "discovered" && evaluation.responsePolicyVersion === MODEL_RESPONSE_POLICY_VERSION && <Button type="button" disabled={busy} onClick={() => void action("start")}>开始受限测评</Button>}
+          {canUpgradeTruncated && <div className="space-y-2"><p className="field-hint">这轮所有候选共用了旧版每题900 Token上限，所以多个模型会出现相同的length提示。它表示回答被提前截断，不是模型损坏。新版提供4096 Token；继续后仍无法完整回答的候选会自动跳过并替换。</p><Button type="button" disabled={busy} onClick={() => void action("resume")}>{busy ? "正在核对…" : "使用新版长度继续测评"}</Button></div>}
+          {!canUpgradeTruncated && evaluation.status === "blocked" && evaluation.resumeAllowed && evaluation.completedCalls < evaluation.maximumCalls && evaluation.resumeCount < 3 && <div className="space-y-2"><p className="field-hint">已完成题目不会重测。点击后先免费核对候选与价格，再继续剩余付费调用；真正不兼容的候选会自动跳过。</p><Button type="button" disabled={busy} onClick={() => void action("resume")}>{busy ? "正在核对…" : "核对价格并继续测评"}</Button></div>}
+          {!canUpgradeTruncated && evaluation.status === "blocked" && !evaluation.resumeAllowed && <p className="field-hint">本次用量、费用或候选数量无法继续安全核对，已停止自动调用，避免重复扣费。</p>}
           {evaluation.status === "running" && <Button type="button" variant="outline" disabled={busy} onClick={() => void action("cancel")}><Square size={14} />停止测评</Button>}
           {!!evaluation.scores.length && <div className="space-y-2">{evaluation.scores.map(score => <div className="rounded-lg bg-[var(--muted)] p-3 text-sm" key={score.modelId}><div className="flex items-center justify-between gap-3"><span className="break-all">{roleName(score.modelId)}</span><strong>{score.total}分 · {money(score.costFen)}</strong></div><p className="field-hint mt-1">结构 {score.structure} · 证据 {score.evidence} · 原创 {score.originality} · 格式 {score.format} · {(score.latencyMs / 1000).toFixed(1)}秒 · {score.promptTokens + score.completionTokens} Token{score.usageEstimated ? "（上限估算）" : ""}</p><p className="field-hint mt-1">{score.notes.join("；")}</p></div>)}</div>}
-          {!!evaluation.excludedModels.length && <div className="stage-callout"><strong>已排除的不兼容候选</strong>{evaluation.excludedModels.map(item => <p className="mt-1" key={item.modelId}>{roleName(item.modelId)}：{item.reason}</p>)}</div>}
+          {!!evaluation.excludedModels.length && <div className="stage-callout"><strong>本轮未采用的候选</strong>{evaluation.excludedModels.map(item => <p className="mt-1" key={item.modelId}>{roleName(item.modelId)}：{readableExclusion(item.reason)}</p>)}</div>}
           {evaluation.allocation && <div className="stage-callout"><strong>自动分配完成</strong><p className="mt-2">主模型：{roleName(evaluation.allocation.mainModel)}</p><p>审查 A：{roleName(evaluation.allocation.reviewA)}</p><p>审查 B：{roleName(evaluation.allocation.reviewB)}</p></div>}
           {evaluation.error && <p className="text-sm text-[var(--danger)]">{evaluation.error}</p>}
           {!['idle','discovered','running','cancelling'].includes(evaluation.status) && (evaluation.completedCalls > 0 || evaluation.excludedModels.length > 0 || evaluation.spentFen > 0 || evaluation.uncertainFen > 0 || evaluation.lastFailure != null) && <div className="space-y-3 border-t border-[var(--border)] pt-3"><div className="flex flex-wrap gap-2"><Button type="button" variant="outline" disabled={busy} onClick={() => report && report.viewRevision === evaluation.viewRevision ? setShowReport(value => !value) : void loadReport()}><FileText size={15} />{showCurrentReport ? "收起测评报告" : "查看测评报告"}</Button><Button type="button" variant="outline" disabled={busy} onClick={() => void downloadReport()}><Download size={15} />下载报告（Markdown）</Button></div>{showCurrentReport && <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-lg bg-[var(--muted)] p-3 text-xs leading-6">{report.markdown}</pre>}</div>}

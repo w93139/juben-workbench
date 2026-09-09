@@ -10,7 +10,7 @@ const quote = (value: string) => JSON.stringify(value);
 export function liteLLMConfig(allocation: ModelAllocation) {
   const selected = modelAllocationSchema.parse(allocation);
   const models = aliases.map(([alias, field]) => `  - model_name: ${quote(alias)}\n    litellm_params:\n      model: ${quote(`custom_openai/${selected[field]}`)}\n      api_base: os.environ/ANT_MAAS_API_BASE\n      api_key: os.environ/ANT_MAAS_API_KEY`).join("\n");
-  return `# Generated locally after the bounded evaluation. Contains no credentials.\nmodel_list:\n${models}\n\nlitellm_settings:\n  drop_params: false\n  set_verbose: false\n  turn_off_message_logging: true\n\ngeneral_settings:\n  master_key: os.environ/LITELLM_MASTER_KEY\n  store_prompts_in_spend_logs: false\n`;
+  return `# Generated locally after the bounded evaluation. Contains no credentials.\n# Quality scoring and incompatible-response skipping are controlled by the workbench.\nmodel_list:\n${models}\n\nlitellm_settings:\n  drop_params: false\n  num_retries: 0\n  request_timeout: 120\n  set_verbose: false\n  turn_off_message_logging: true\n\ngeneral_settings:\n  master_key: os.environ/LITELLM_MASTER_KEY\n  store_prompts_in_spend_logs: false\n`;
 }
 
 export function writeLiteLLMConfig(allocation: ModelAllocation, root = resolve(process.cwd(), "runtime-data")) {

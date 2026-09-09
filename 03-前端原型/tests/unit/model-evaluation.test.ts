@@ -50,6 +50,11 @@ describe("剧本领域小样测评", () => {
     expect(done.status).toBe("completed"); expect(done.completedCalls).toBe(12); expect(done.spentFen).toBeGreaterThan(0); expect(done.spentFen).toBeLessThanOrEqual(1000);
     expect(new Set(Object.values(done.allocation!)).size).toBe(3); expect(settings.safe({}).configured).toBe(true);
   });
+  it("旧候选计划不能用900 Token预留直接启动4096 Token测评", async () => {
+    const { root, settings, engine } = setup(); const discovered = await engine.discover(fetcher as typeof fetch); const file = join(root, "budget.sqlite"); const value = new EvaluationBudgetLedger(file);
+    value.saveView("ant-model-selection-v1", JSON.stringify({ ...discovered, responsePolicyVersion: null, viewRevision: discovered.viewRevision + 1 })); value.close();
+    const restored = new ModelEvaluationEngine(settings, transport, () => new EvaluationBudgetLedger(file), () => {}); expect(() => restored.start()).toThrow("免费重新读取候选模型");
+  });
   it("调用失败后将最高费用列为待核对并停止后续调用", async () => {
     const { engine } = setup(async () => { throw new DOMException("timeout", "AbortError"); }); await engine.discover(fetcher as typeof fetch); engine.start(); const done = await finished(engine);
     expect(done.status).toBe("blocked"); expect(done.completedCalls).toBe(0); expect(done.uncertainFen).toBeGreaterThan(0); expect(done.allocation).toBeNull();
@@ -138,7 +143,7 @@ describe("剧本领域小样测评", () => {
       await expect(antEvaluationTransport(connection, "model-a", "system", "prompt", new AbortController().signal)).resolves.toMatchObject({ promptTokens: 10, completionTokens: 5, usageEstimated: false });
       await expect(antEvaluationTransport(connection, "model-b", "system", "prompt", new AbortController().signal)).resolves.toMatchObject({ identityUnverifiable: "服务回传的实际模型编号与候选不一致，无法确认计费模型" });
       globalThis.fetch = async () => Response.json({ model: "model-a", choices: [{ finish_reason: "stop", message: { content: "{}" } }] });
-      await expect(antEvaluationTransport(connection, "model-a", "system", "prompt", new AbortController().signal)).resolves.toMatchObject({ promptTokens: 8000, completionTokens: 900, usageEstimated: true });
+      await expect(antEvaluationTransport(connection, "model-a", "system", "prompt", new AbortController().signal)).resolves.toMatchObject({ promptTokens: 8000, completionTokens: 4096, usageEstimated: true });
       globalThis.fetch = async () => Response.json({ model: "model-a", choices: [{ finish_reason: "stop", message: { content: "{}" } }], usage: { prompt_tokens: 30000 } });
       await expect(antEvaluationTransport(connection, "model-a", "system", "prompt", new AbortController().signal)).rejects.toThrow("异常Token用量");
       globalThis.fetch = async () => Response.json({ model: "model-a", choices: [{ finish_reason: "stop", message: { content: [{ type: "text", text: "{" }, { type: "text", text: "}" }] } }], usage: { prompt_tokens: 10, completion_tokens: 5 } });
@@ -165,7 +170,7 @@ describe("剧本领域小样测评", () => {
     expect(stopped).toMatchObject({ status: "blocked", completedCalls: 0, resumeAllowed: false }); expect(stopped.uncertainFen).toBeGreaterThan(0);
     await expect(engine.resume(fetcher as typeof fetch)).rejects.toThrow("不允许自动续测");
   });
-  it("候选完成部分题目后被排除，续测会换入新候选并保留历史进度", async () => {
+  it("候选完成部分题目后被排除，系统自动换入新候选并保留历史进度", async () => {
     const fiveIds = [...modelIds, "cheap-d"];
     const fiveFetcher = async (input: string | URL | Request) => String(input).endsWith("/models") ? Response.json({ data: fiveIds.map(id => ({ id })) }) : Response.json({ success: true, data: { items: fiveIds.map(catalogItem) } });
     let incompatibleId = "", shallowId = "", incompatibleCalls = 0;
@@ -175,9 +180,65 @@ describe("剧本领域小样测评", () => {
       return transport(...args);
     };
     const { engine } = setup(mixed); const discovered = await engine.discover(fiveFetcher as typeof fetch); incompatibleId = discovered.candidates[1]!.id; shallowId = discovered.candidates[2]!.id;
-    engine.start(); const blocked = await finished(engine); expect(blocked.status).toBe("blocked"); expect(blocked.taskResults.filter(item => item.modelId === incompatibleId)).toHaveLength(1);
-    const callsBeforeResume = incompatibleCalls; await engine.resume(fiveFetcher as typeof fetch); const done = await finished(engine);
-    expect(done.status).toBe("completed"); expect(incompatibleCalls).toBe(callsBeforeResume); expect(done.maximumCalls).toBe(13); expect(done.completedCalls).toBe(13); expect(done.scores).toHaveLength(4);
+    engine.start(); const done = await finished(engine);
+    expect(done.status).toBe("completed"); expect(done.taskResults.filter(item => item.modelId === incompatibleId)).toHaveLength(1);
+    expect(incompatibleCalls).toBe(2); expect(done.resumeCount).toBe(1); expect(done.maximumCalls).toBe(13); expect(done.completedCalls).toBe(13); expect(done.scores).toHaveLength(4);
+  });
+  it("真实旧记录的一项得分、四项截断和旧异常可分批升级，费用记录保持不变", async () => {
+    const sixIds = [...modelIds, "cheap-d", "legacy-bad"];
+    const sixFetcher = async (input: string | URL | Request) => String(input).endsWith("/models") ? Response.json({ data: sixIds.map(id => ({ id })) }) : Response.json({ success: true, data: { items: sixIds.map(catalogItem) } });
+    const { root, settings, engine } = setup(); const discovered = await engine.discover(sixFetcher as typeof fetch); const selected = discovered.candidates[0]!;
+    const score = { modelId: selected.id, total: 64, structure: 71, evidence: 48, originality: 53, format: 100, latencyMs: 1000, promptTokens: 614, completionTokens: 5461, costFen: 20, usageEstimated: false, notes: ["旧汇总"] };
+    const lengthIds = sixIds.filter(id => id !== selected.id && id !== "legacy-bad");
+    const excludedModels = [
+      ...lengthIds.map(id => ({ modelId: id, displayName: id, reason: "服务以length结束，正文可能不完整", costFen: 1, usageEstimated: false, occurredAt: Date.now() })),
+      { modelId: "legacy-bad", displayName: "legacy-bad", reason: "旧版严格解析连续中断，已保留费用并跳过该候选", costFen: null, usageEstimated: true, occurredAt: Date.now() },
+    ];
+    const file = join(root, "budget.sqlite"); const value = new EvaluationBudgetLedger(file);
+    value.reserve("ant-model-selection-v1", "score-cost", 20); value.settle("score-cost", 20);
+    for (const [index] of lengthIds.entries()) { value.reserve("ant-model-selection-v1", `length-${index}`, 1); value.settle(`length-${index}`, 1); }
+    for (const callId of ["legacy-1", "legacy-2"]) { value.reserve("ant-model-selection-v1", callId, 2); value.markUncertain(callId); }
+    const legacyDiscovered = { ...discovered, responsePolicyVersion: undefined };
+    value.saveView("ant-model-selection-v1", JSON.stringify({ ...legacyDiscovered, status: "blocked", spentFen: 24, uncertainFen: 4, scores: [score], taskResults: [], excludedModels, completedCalls: 3, maximumCalls: 9, resumeCount: 3, resumeAllowed: false, lastFailure: { modelId: lengthIds.at(-1), taskIndex: 0, category: "response", occurredAt: Date.now() }, viewRevision: 12, error: "旧版长度不足" })); value.close();
+    const called: string[] = []; const resumedTransport: EvaluationTransport = async (...args) => { called.push(args[1]); return transport(...args); };
+    const restored = new ModelEvaluationEngine(settings, resumedTransport, () => new EvaluationBudgetLedger(file), () => {}); await restored.resume(sixFetcher as typeof fetch); const done = await finished(restored);
+    expect(done.status).toBe("completed"); expect(done.responsePolicyVersion).toBe("openai-json/2-4096"); expect(done.resumeCount).toBe(0); expect(done.scores).toHaveLength(4);
+    expect(done.spentFen).toBeGreaterThan(24); expect(done.uncertainFen).toBe(4); expect(called).not.toContain(selected.id);
+    expect(done.excludedModels).toEqual(expect.arrayContaining([expect.objectContaining({ modelId: "legacy-bad" }), expect.objectContaining({ reason: expect.stringContaining("已取得三个合格模型") })]));
+  });
+  it("旧截断替补超过四模型上限时明确停止，不暗中增加调用", async () => {
+    const sixIds = [...modelIds, "cheap-d", "cheap-e"];
+    const sixFetcher = async (input: string | URL | Request) => String(input).endsWith("/models") ? Response.json({ data: sixIds.map(id => ({ id })) }) : Response.json({ success: true, data: { items: sixIds.map(catalogItem) } });
+    const { root, settings, engine } = setup(); const discovered = await engine.discover(sixFetcher as typeof fetch); const selected = discovered.candidates[0]!;
+    const score = { modelId: selected.id, total: 64, structure: 71, evidence: 48, originality: 53, format: 100, latencyMs: 1000, promptTokens: 614, completionTokens: 5461, costFen: 20, usageEstimated: false, notes: ["旧汇总"] };
+    const lengthIds = sixIds.filter(id => id !== selected.id).slice(0, 4);
+    const exclusions = lengthIds.map(id => ({ modelId: id, displayName: id, reason: "服务以length结束，正文可能不完整", costFen: 1, usageEstimated: false, occurredAt: Date.now() }));
+    const file = join(root, "budget.sqlite"); const value = new EvaluationBudgetLedger(file);
+    value.reserve("ant-model-selection-v1", "old-score", 20); value.settle("old-score", 20);
+    for (const [index] of lengthIds.entries()) { value.reserve("ant-model-selection-v1", `old-length-${index}`, 1); value.settle(`old-length-${index}`, 1); }
+    const legacyDiscovered = { ...discovered, responsePolicyVersion: undefined };
+    value.saveView("ant-model-selection-v1", JSON.stringify({ ...legacyDiscovered, status: "blocked", spentFen: 24, scores: [score], taskResults: [], excludedModels: exclusions, completedCalls: 3, maximumCalls: 9, resumeCount: 3, resumeAllowed: false, lastFailure: { modelId: lengthIds.at(-1), taskIndex: 0, category: "response", occurredAt: Date.now() }, viewRevision: 15, error: "旧版长度不足" })); value.close();
+    let calls = 0; const shallow: EvaluationTransport = async () => { calls++; return { content: "{}", promptTokens: 20, completionTokens: 10, latencyMs: 10 }; };
+    const restored = new ModelEvaluationEngine(settings, shallow, () => new EvaluationBudgetLedger(file), () => {}); await restored.resume(sixFetcher as typeof fetch); const done = await finished(restored);
+    expect(done).toMatchObject({ status: "blocked", responsePolicyVersion: "openai-json/2-4096", resumeAllowed: false }); expect(done.scores).toHaveLength(4); expect(calls).toBe(9);
+    expect(done.excludedModels).toEqual(expect.arrayContaining([expect.objectContaining({ reason: expect.stringContaining("最多比较4个模型") })]));
+  });
+  it("自动换候选时已评分模型若下架，会在新付费调用前停止", async () => {
+    const fiveIds = [...modelIds, "cheap-d"]; let unavailable = false; let scoredId = ""; let incompatibleId = ""; let calls = 0;
+    const changingFetcher = async (input: string | URL | Request) => {
+      const ids = unavailable ? fiveIds.filter(id => id !== scoredId) : fiveIds;
+      return String(input).endsWith("/models") ? Response.json({ data: ids.map(id => ({ id })) }) : Response.json({ success: true, data: { items: ids.map(catalogItem) } });
+    };
+    const changingTransport: EvaluationTransport = async (...args) => {
+      calls++;
+      if (args[1] === incompatibleId) { unavailable = true; return { content: "", promptTokens: 20, completionTokens: 10, latencyMs: 10, incompatibleReason: "服务以length结束，正文可能不完整" }; }
+      if (args[1] !== scoredId) return { content: "{}", promptTokens: 20, completionTokens: 10, latencyMs: 10 };
+      return transport(...args);
+    };
+    const { engine } = setup(changingTransport); const discovered = await engine.discover(changingFetcher as typeof fetch); scoredId = discovered.candidates[0]!.id; incompatibleId = discovered.candidates[1]!.id;
+    engine.start(); const stopped = await finished(engine);
+    expect(stopped.status).toBe("blocked"); expect(stopped.allocation).toBeNull(); expect(stopped.scores.map(item => item.modelId)).toContain(scoredId); expect(calls).toBe(10);
+    expect(stopped.error).toContain("已有得分或题目记录的模型已不在当前可用价格表中");
   });
   it("真实旧记录第二次停在同一候选时，下一次只跳过该候选并换入其他模型", async () => {
     const { root, settings, engine } = setup(); const discovered = await engine.discover(fetcher as typeof fetch); const selected = discovered.candidates[0]!; const incompatible = discovered.candidates[1]!;

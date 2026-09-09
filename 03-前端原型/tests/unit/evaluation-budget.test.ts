@@ -40,6 +40,13 @@ describe("模型测评人民币硬预算", () => {
     expect(() => value.claimResume("s", "owner-a", 1000, 7, 1)).not.toThrow(); value.releaseRun("s", "owner-a", "blocked");
     expect(() => value.claimResume("s", "owner-b", 1000, 7, 0)).toThrow("其他进程更新"); value.close();
   });
+  it("响应策略升级可原子接管已关闭的旧版截断记录", () => {
+    const value = ledger(); value.saveView("s", JSON.stringify({ status: "blocked", resumeCount: 3, resumeAllowed: false, viewRevision: 9, reservedFen: 0, lastFailure: { modelId: "model-a", category: "response" }, excludedModels: [{ modelId: "model-a", reason: "服务以length结束", costFen: 1 }] }));
+    expect(() => value.claimResume("s", "owner-a", 1000, 9, 3)).toThrow("其他进程更新");
+    expect(() => value.claimResume("s", "owner-a", 1000, 9, 3, { expectedPolicyVersion: null, expectedFailureModelId: "model-a" })).not.toThrow(); value.releaseRun("s", "owner-a", "blocked");
+    value.saveView("s", JSON.stringify({ status: "blocked", resumeCount: 3, resumeAllowed: false, viewRevision: 10, responsePolicyVersion: null, reservedFen: 0, lastFailure: { modelId: "model-b", category: "usage" }, excludedModels: [{ modelId: "model-a", reason: "服务以length结束", costFen: 1 }] }));
+    expect(() => value.claimResume("s", "owner-a", 1000, 10, 3, { expectedPolicyVersion: null, expectedFailureModelId: "model-b" })).toThrow("其他进程更新"); value.close();
+  });
   it("陈旧运行视图不能取得恢复租约覆盖新状态", () => {
     const value = ledger(); value.saveView("s", JSON.stringify({ status: "running", viewRevision: 2 }));
     expect(() => value.claimRecovery("s", "owner-a", 1000, 2)).not.toThrow(); value.releaseRun("s", "owner-a", "blocked");

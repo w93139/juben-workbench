@@ -46,7 +46,7 @@ export function buildEvaluationReport(view: EvaluationView, generatedAt = Date.n
   for (const modelId of modelIds) {
     const score = view.scores.find(item => item.modelId === modelId); const excluded = view.excludedModels.find(item => item.modelId === modelId);
     const partial = view.taskResults.filter(item => item.modelId === modelId).length;
-    const state = score ? "3/3 完成" : excluded ? "响应不兼容，已排除" : partial ? `${partial}/3 部分完成` : "未完成";
+    const state = score ? "3/3 完成" : excluded ? excluded.reason.includes("length") ? "输出被截断，本轮未采用" : "响应不兼容，本轮未采用" : partial ? `${partial}/3 部分完成` : "未完成";
     lines.push(`| ${cell(displayName(view, modelId))} | ${cell(state)} | ${score?.total ?? "—"} | ${score?.structure ?? "—"} | ${score?.evidence ?? "—"} | ${score?.originality ?? "—"} | ${score?.format ?? "—"} | ${score ? `${(score.latencyMs / 1000).toFixed(1)} 秒` : "—"} | ${score ? money(score.costFen) : excluded?.costFen != null ? money(excluded.costFen) : "—"} |`);
   }
   lines.push("", "## 各模型记录", "");

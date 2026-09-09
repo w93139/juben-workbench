@@ -6,6 +6,7 @@ describe("LiteLLM无密钥配置", () => {
     const value = liteLLMConfig({ mainModel: "model/main:v1", reviewA: "model-a", reviewB: "model-b" });
     expect(value).toContain('model_name: "studio-main"'); expect(value).toContain('model: "custom_openai/model/main:v1"');
     expect(value).toContain("os.environ/ANT_MAAS_API_KEY"); expect(value).toContain("os.environ/LITELLM_MASTER_KEY");
+    expect(value).toContain("num_retries: 0"); expect(value).toContain("drop_params: false");
     expect(value.indexOf("general_settings:")).toBeLessThan(value.indexOf("store_prompts_in_spend_logs: false"));
     expect(value).not.toContain("sk-test");
   });
