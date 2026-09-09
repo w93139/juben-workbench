@@ -25,6 +25,7 @@ export function AppFrame({ children, title, projectId, workspace = false }: { ch
       {projects.data?.filter((project) => !project.readOnly).map((project) => nav(`/projects/${project.id}`, project.title, <FolderClosed size={15} />, project.id === projectId))}
       {projects.isPending && <p className="field-hint px-3">正在读取项目…</p>}
       {projects.error && <button className="nav-item" onClick={() => void projects.refetch()}>项目读取失败，点击重试</button>}
+      {projects.isSuccess && !projects.data.some((project) => !project.readOnly) && <p className="field-hint px-3">当前浏览器和地址下暂无项目。之前上传过？请用原浏览器和相同网址打开。</p>}
     </nav>
     <div className="sidebar-footer"><span className="local-dot" />本机工作区<br />作者材料请勿直接展示给玩家</div>
   </>;

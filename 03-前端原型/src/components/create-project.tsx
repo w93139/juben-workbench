@@ -54,6 +54,8 @@ export function UploadProjectButton({ compact = false, fallback = false }: { com
         const project = await service.create({ title: name.trim().slice(0, 40) || "我的剧本", template: "blank", note: "" });
         task.projectId = project.id;
         client.setQueryData(["project", project.id], project);
+        // The project index is already saved even if saving its body fails next.
+        void client.invalidateQueries({ queryKey: ["projects"] });
         if (active()) setCreated(true);
       }
       const state = await readWorkbench(task.projectId);

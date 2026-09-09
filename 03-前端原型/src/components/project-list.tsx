@@ -33,7 +33,7 @@ export function ProjectListPage({ home = false }: { home?: boolean }) {
     {home ? <UploadProjectButton /> : <>
       <div className="section-heading"><h2>全部项目<span className="count">{mine.length}</span></h2></div>
       <div className="search-tools"><div className="search-box"><Search size={15} /><Input aria-label="搜索项目名称" placeholder="搜索项目名称…" value={search} onChange={event => setSearch(event.target.value)} /></div></div>
-      {projects.isPending ? <Loading /> : projects.error ? <LoadError error={projects.error} retry={() => void projects.refetch()} /> : shown.length ? <ProjectTable projects={shown} /> : <section className="panel empty-state"><FolderOpen size={26} className="mx-auto" /><h2>{search ? "没有找到匹配的项目" : "先上传你想改写的剧本"}</h2><Link className="text-link" href="/">上传文件夹</Link></section>}
+      {projects.isPending ? <Loading /> : projects.error ? <LoadError error={projects.error} retry={() => void projects.refetch()} /> : shown.length ? <ProjectTable projects={shown} /> : <section className="panel empty-state"><FolderOpen size={26} className="mx-auto" /><h2>{search ? "没有找到匹配的项目" : "当前浏览器和地址下暂无项目"}</h2>{!search && <p className="field-hint">之前上传过？请先用原浏览器和相同网址打开，再检查项目记录。</p>}<Link className="text-link" href="/">上传文件夹</Link></section>}
     </>}
     <div className="page-footnote"><span><span className="local-dot" />项目保存在此浏览器，清除网站数据后将丢失。</span><span>AI 审查不等同于真人试玩</span></div>
   </AppFrame>;

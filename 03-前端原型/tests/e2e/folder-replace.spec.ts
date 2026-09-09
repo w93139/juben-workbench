@@ -9,6 +9,36 @@ test.beforeEach(async()=>{root=await mkdtemp(join(tmpdir(),"juben-folder-test-")
 test.afterEach(async()=>{await rm(root,{recursive:true,force:true});});
 async function makeFolder(name: string, filename: string) {const dir=join(root,name);await mkdir(dir);await writeFile(join(dir,filename),`这是${name}的自有测试正文`);return dir;}
 
+test("正文保存失败后侧栏仍显示已建项目，重试不重复创建或读取", async ({ page }) => {
+  await page.route("**/api/studio/capability", route => route.fulfill({ json: { configured: false } }));
+  let reads = 0; page.on("request", request => { if (request.url().endsWith("/api/local/materials/read")) reads++; });
+  await page.goto("/");
+  const folder = await makeFolder("保存失败仍保留的剧本", "角色.txt");
+  await page.evaluate(() => {
+    const original = IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function (...args: Parameters<IDBObjectStore["put"]>) {
+      if (this.name === "projects") {
+        IDBObjectStore.prototype.put = original;
+        throw new DOMException("测试正文存储配额不足", "QuotaExceededError");
+      }
+      return original.apply(this, args);
+    };
+  });
+  await page.locator('input[aria-label="选择剧本文件夹"]').setInputFiles(folder);
+  await expect(page.getByRole("dialog")).toContainText("项目已建立，正文保存尚未完成");
+  const entries = () => page.evaluate(() => JSON.parse(localStorage.getItem("juben-workbench:projects:v1")!).projects.map((p: { id: string; title: string }) => ({ id: p.id, title: p.title })));
+  const created = await entries(); expect(created).toHaveLength(1);
+  const sidebarLink = page.locator('.desktop-sidebar a.nav-item').filter({ hasText: "保存失败仍保留的剧本" });
+  await expect(sidebarLink).toBeVisible({ timeout: 3000 });
+  await page.getByRole("button", { name: "重试保存", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/projects/${created[0].id}/stages/materials$`));
+  expect(await entries()).toEqual(created); expect(reads).toBe(1);
+  await page.reload();
+  await expect(sidebarLink).toBeVisible();
+  await page.getByText("查看文件明细", { exact: true }).click();
+  await expect(page.getByText("保存失败仍保留的剧本/角色.txt", { exact: true })).toBeVisible();
+});
+
 test("首页红框成为整块拖拽区，拖入文件直接读取并建项目",async({page})=>{
   await page.goto("/");await expect(page.getByRole("region",{name:"剧本文件夹拖拽区"})).toBeVisible();
   await expect(page.getByRole("button",{name:"上传文件夹",exact:true})).toHaveCount(1);
