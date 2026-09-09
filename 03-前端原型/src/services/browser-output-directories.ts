@@ -15,7 +15,7 @@ async function nativeBridgeState(): Promise<BridgeState> {
   } catch { return "unavailable"; }
 }
 
-type PickerWindow = Window & { showDirectoryPicker?: (options: { startIn: "desktop"; mode: "read" }) => Promise<FileSystemDirectoryHandle> };
+type PickerWindow = Window & { showDirectoryPicker?: (options: { startIn: "desktop"; mode: "readwrite" }) => Promise<FileSystemDirectoryHandle> };
 
 function unavailable() { return new ServiceError("STORAGE_UNAVAILABLE", "无法保存或读取文件夹引用，原输出设置已保留。请重新选择文件夹。"); }
 
@@ -29,8 +29,7 @@ async function openDatabase(): Promise<IDBDatabase> {
   });
 }
 
-// Only a browser directory reference is stored. No entries are enumerated,
-// no file contents are read and no write permission is requested.
+// Store the newly created output child, never the source/parent directory.
 export class BrowserOutputDirectories implements OutputDirectoryPort {
   private bridge: BridgeState | null = loopbackPage() ? null : "unsupported";
   private probe: Promise<BridgeState>;
@@ -80,10 +79,13 @@ export class BrowserOutputDirectories implements OutputDirectoryPort {
     let handle: FileSystemDirectoryHandle;
     try {
       // Keep this as the first awaited operation, directly under the user's click.
-      handle = await browser.showDirectoryPicker({ startIn: "desktop", mode: "read" });
+      const parent = await browser.showDirectoryPicker({ startIn: "desktop", mode: "readwrite" });
+      // A UUID avoids reusing an existing folder on browsers without exclusive mkdir.
+      const childName = `剧本工作台成果-${crypto.randomUUID()}`;
+      handle = await parent.getDirectoryHandle(childName, { create: true });
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return null;
-      throw new ServiceError("DIRECTORY_UNAVAILABLE", "未能打开或访问所选文件夹，原设置已保留。请重新启动本机工作台，或在独立浏览器窗口中允许访问文件夹后重试。");
+      throw new ServiceError("DIRECTORY_UNAVAILABLE", "未能在所选位置新建成果文件夹，原设置已保留。请允许访问和写入文件夹后重试。");
     }
     const result = pickedOutputDirectorySchema.safeParse({ id: crypto.randomUUID(), name: handle.name });
     if (handle.kind !== "directory" || !result.success) throw new ServiceError("DIRECTORY_UNAVAILABLE", "无法读取所选文件夹名称，请重新选择；原设置已保留。");

@@ -32,14 +32,14 @@ export function Studio({ project, step }: { project: Project; step: number }) {
     return () => { channel.close(); window.removeEventListener("authoring-updated", invalidate); };
   }, [cache, project.id]);
   useEffect(() => {
-    if (!state?.job) return;
+    if (!state?.job || busy) return;
     let active = true; let inFlight = false;
     const timer = setInterval(() => {
       if (inFlight) return; inFlight = true;
-      void pollStudioJob(project.id, state).then(next => { if (active) cache.setQueryData(["workbench", project.id], next); }).catch(failure => { if (active) setError(failure); }).finally(() => { inFlight = false; });
+      void pollStudioJob(project.id, state).then(next => { if (active) { setError(null); cache.setQueryData(["workbench", project.id], next); } }).catch(failure => { if (active) setError(failure); }).finally(() => { inFlight = false; });
     }, 1200);
     return () => { active = false; clearInterval(timer); };
-  }, [state, project.id, cache]);
+  }, [state, project.id, cache, busy]);
   if (query.isPending) return <Loading />;
   if (!state) return <LoadError error={query.error} retry={() => void query.refetch()} />;
   const locked = busy || reading || !!state.job;
@@ -49,7 +49,7 @@ export function Studio({ project, step }: { project: Project; step: number }) {
   async function start(operation: StudioOperation, target: string) {
     if (locked) return; setBusy(true); setError(null);
     try { update(await startStudioJob(project.id, state!, operation)); router.push(base + target); }
-    catch (failure) { setError(failure); } finally { setBusy(false); }
+    catch (failure) { setError(failure); await cache.invalidateQueries({ queryKey: key }); } finally { setBusy(false); }
   }
   async function exportKit() {
     setBusy(true); setError(null);

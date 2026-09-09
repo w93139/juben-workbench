@@ -17,7 +17,7 @@ export function OutputLocation({ project, stage }: { project: Project; stage: Ou
   const name = pending?.name || project.outputSettings.directory?.name || project.outputSettings.rootPath || "尚未选择";
   const busy = picking || action.isPending;
   function save(directory: PickedOutputDirectory) {
-    action.mutate(revision => service.saveOutputSettings(project.id, revision, { directory, rootPath: "", stage, folder: project.outputSettings.folders[stage] }), { onSuccess: () => { setPending(null); setNote("已保存"); } });
+    action.mutate(revision => service.saveOutputSettings(project.id, revision, { directory, rootPath: "", stage, folder: project.outputSettings.folders[stage] }), { onSuccess: () => { setPending(null); setNote("成果文件夹已创建并保存"); } });
   }
   async function choose() {
     if (busy || lock.current) return; lock.current = true; setPicking(true); setError(null); setNote(""); action.touch();
@@ -29,7 +29,7 @@ export function OutputLocation({ project, stage }: { project: Project; stage: Ou
     finally { lock.current = false; setPicking(false); }
   }
   return <div className="output-compact" aria-label="输出储存位置">
-    <div className="output-compact-row"><FolderOpen size={15} /><span>输出：</span><strong data-testid="output-directory-name" title={name}>{name}</strong>{pending && <small>待保存</small>}<Button size="sm" variant="ghost" disabled={busy || project.readOnly} onClick={() => void choose()}>{picking ? "正在选择…" : action.isPending ? "正在保存…" : project.outputSettings.directory || project.outputSettings.rootPath ? "更换" : "选择文件夹"}</Button>{note && <small role="status">{note}</small>}{pending && !busy && <Button size="sm" variant="outline" onClick={() => save(pending)}>重试保存</Button>}</div>
+    <div className="output-compact-row"><FolderOpen size={15} /><span>输出：</span><strong data-testid="output-directory-name" title={name}>{name}</strong>{pending && <small>待保存</small>}<Button size="sm" variant="ghost" title="选择保存位置，系统会在其中新建成果文件夹" disabled={busy || project.readOnly} onClick={() => void choose()}>{picking ? "正在选择…" : action.isPending ? "正在保存…" : project.outputSettings.directory || project.outputSettings.rootPath ? "更换" : "选择文件夹"}</Button>{note && <small role="status">{note}</small>}{pending && !busy && <Button size="sm" variant="outline" onClick={() => save(pending)}>重试保存</Button>}</div>
     {error != null && <ErrorMessage error={error} />}{action.error && action.feedback}
   </div>;
 }

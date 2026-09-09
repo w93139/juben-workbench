@@ -12,7 +12,7 @@ export const workbenchSchema = z.object({
   blueprintSourceRevision: z.number().int().nullable(), blueprintChoiceId: z.string().nullable(),
   versions: z.array(z.object({ revision: z.number().int(), data: blueprintDataSchema })).max(20),
   review: studioReviewResultSchema.nullable(), reviewBlueprintRevision: z.number().int().nullable(),
-  job: z.object({ jobId: z.string(), operation: z.enum(["analyze", "blueprint", "review"]), phase: z.string(), sourceRevision: z.number().int(), blueprintRevision: z.number().int() }).nullable(),
+  job: z.object({ jobId: z.string(), operation: z.enum(["analyze", "blueprint", "review"]), phase: z.string(), sourceRevision: z.number().int(), blueprintRevision: z.number().int(), submittedAt: z.number().optional() }).nullable(),
   error: z.string().nullable(),
 });
 export type WorkbenchState = z.infer<typeof workbenchSchema>;

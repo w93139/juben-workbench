@@ -130,3 +130,28 @@ test("更换整本后旧分析与蓝图失效，新文件不会混入旧材料",
   await page.goto(`${base}/stages/analysis`);await expect(page.getByRole("button",{name:"生成蓝图",exact:true})).toBeDisabled();
   await page.goto(`${base}/stages/blueprint`);await expect(page.getByText(/这份蓝图对应旧的材料或创作要求/)).toBeVisible();await expect(page.getByRole("button",{name:"开始交叉验证",exact:true})).toBeDisabled();
 });
+
+test("拆解POST被拒绝时显示具体原因、恢复按钮且刷新保留材料", async ({ page }) => {
+  await offlineCapability(page); const base = await seedProject(page, "拆解拒绝恢复"); const state = prepared(); await writeState(page, base, state);
+  let posts = 0;
+  await page.route("**/api/studio/analyze", route => { posts++; return route.fulfill({ status: 413, json: { error: { code: "CONTEXT_TOO_LARGE", message: "当前材料超过单次完整上下文限制，未发起模型调用。" } } }); });
+  await page.goto(`${base}/stages/materials`);
+  await page.getByRole("button", { name: "拆解大纲", exact: true }).click();
+  await expect(page.getByText("当前材料超过单次完整上下文限制，未发起模型调用。", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "拆解大纲", exact: true })).toBeEnabled();
+  expect((await readState(page, base)).job).toBeNull();
+  await page.reload(); await expect(page.getByRole("button", { name: "拆解大纲", exact: true })).toBeEnabled();
+  expect((await readState(page, base)).documents).toEqual(state.documents); expect(posts).toBe(1);
+});
+
+test("旧任务404自动结束等待并解锁更改文件夹，刷新不重发模型", async ({ page }) => {
+  await offlineCapability(page); const base = await seedProject(page, "旧拆解恢复"); const state = prepared();
+  state.job = { jobId: randomUUID(), operation: "analyze", phase: "正在提交资料", sourceRevision: state.sourceRevision, blueprintRevision: state.blueprintRevision };
+  await writeState(page, base, state); let posts = 0; page.on("request", req => { if (req.url().includes("/api/studio/") && req.method() === "POST") posts++; });
+  await page.route("**/api/studio/status?*", route => route.fulfill({ status: 404, json: { error: { code: "JOB_NOT_FOUND", message: "任务不存在" } } }));
+  await page.goto(`${base}/stages/materials`);
+  await expect(page.getByText(/上次任务记录未找到，已结束等待/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "更改文件夹", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "拆解大纲", exact: true })).toBeEnabled();
+  expect((await readState(page, base)).documents).toEqual(state.documents); expect(posts).toBe(0);
+});

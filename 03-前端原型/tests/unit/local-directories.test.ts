@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test, vi } from "vitest";
-import { mkdtemp, mkdir, open, readFile, rm, stat, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, open, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 let root: string;
@@ -54,4 +54,40 @@ test("独占创建后写入失败会清理自身残包，允许安全重试", as
   } finally { spy.mockRestore(); }
   await expect(directories.writeSelectedZip(selected.id, "重试.zip", new Uint8Array([2]))).resolves.toMatchObject({ written: true });
   expect(await readFile(join(output, "重试.zip"))).toEqual(Buffer.from([2]));
+});
+test("选择父目录后新建成果子目录，登记和导出均指向新目录", async () => {
+  const parent = join(root, "成果父目录"); await mkdir(parent);
+  const selected = await directories.createChosenOutputDirectory(parent);
+  expect(selected.name).toBe("剧本工作台成果");
+  expect(await directories.getLocalDirectory(selected.id)).toEqual({ name: selected.name, kind: "directory" });
+  expect((await stat(join(parent, selected.name))).mode & 0o777).toBe(0o700);
+  await directories.writeSelectedZip(selected.id, "完整档案.zip", new Uint8Array([1, 2]));
+  expect(await readFile(join(parent, selected.name, "完整档案.zip"))).toEqual(Buffer.from([1, 2]));
+  expect(await readdir(parent)).toEqual([selected.name]);
+});
+test("同名目录、文件与软链都跳过，已有内容保持不变", async () => {
+  const parent = join(root, "防重名父目录"); await mkdir(parent);
+  await mkdir(join(parent, "剧本工作台成果"));
+  await writeFile(join(parent, "剧本工作台成果", "原件.txt"), "原件");
+  await writeFile(join(parent, "剧本工作台成果（2）"), "已有文件");
+  await symlink(join(parent, "剧本工作台成果"), join(parent, "剧本工作台成果（3）"));
+  const selected = await directories.createChosenOutputDirectory(parent);
+  expect(selected.name).toBe("剧本工作台成果（4）");
+  expect(await readFile(join(parent, "剧本工作台成果", "原件.txt"), "utf8")).toBe("原件");
+  const second = await directories.createChosenOutputDirectory(parent);
+  expect(second.name).toBe("剧本工作台成果（5）");
+  expect(second.id).not.toBe(selected.id);
+});
+test("取消不新建；登记失败清理本次空目录并保留旧目录记录", async () => {
+  const parent = join(root, "失败父目录"); await mkdir(parent);
+  await expect(directories.createChosenOutputDirectory(parent, AbortSignal.abort())).rejects.toMatchObject({ name: "AbortError" });
+  expect(await readdir(parent)).toEqual([]);
+  const registryPath = join(root, "runtime-data/directories.json");
+  const before = await readFile(registryPath, "utf8");
+  try {
+    await writeFile(registryPath, "损坏的记录");
+    await expect(directories.createChosenOutputDirectory(parent)).rejects.toThrow("原记录未覆盖");
+    expect(await readdir(parent)).toEqual([]);
+    expect(await readFile(registryPath, "utf8")).toBe("损坏的记录");
+  } finally { await writeFile(registryPath, before); }
 });

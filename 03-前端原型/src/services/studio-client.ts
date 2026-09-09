@@ -1,11 +1,15 @@
 import { materialSchema, type Material, type WorkbenchState } from "@/domain/workbench";
-import { studioJobViewSchema, type StudioOperation } from "@/domain/studio";
-import { changeWorkbench } from "./workbench-store";
+import { studioInputs, studioJobViewSchema, type StudioOperation } from "@/domain/studio";
+import { changeWorkbench, readWorkbench } from "./workbench-store";
+
+export class StudioRequestError extends Error {
+  constructor(message: string, public status: number, public code?: string) { super(message); }
+}
 
 export async function localJson(url: string, init?: RequestInit) {
   const response = await fetch(url, { ...init, credentials: "same-origin" });
   const data = await response.json();
-  if (!response.ok) throw new Error(typeof data.error === "string" ? data.error : data.error?.message || data.message || "操作未完成，请重试。");
+  if (!response.ok) throw new StudioRequestError(typeof data.error === "string" ? data.error : data.error?.message || data.message || "操作未完成，请重试。", response.status, data.error?.code);
   return data;
 }
 export async function readMaterials(files: File[], onProgress: (done: number, total: number, name: string) => void, signal?: AbortSignal): Promise<Material[]> {
@@ -43,10 +47,16 @@ export async function startStudioJob(projectId: string, state: WorkbenchState, o
   const body = operation === "analyze" ? { documents: state.documents.filter(d => !d.excluded).map(({ id, name, text }) => ({ id, name, text })), instructions: state.instructions }
     : operation === "blueprint" ? { analysis: state.analysis, choiceId: state.choiceId, instructions: state.instructions }
     : { blueprint: state.blueprint };
+  const parsed = studioInputs[operation].safeParse(body);
+  if (!parsed.success) {
+    const count = operation === "analyze" ? state.documents.filter(d => !d.excluded).length : 0;
+    throw new Error(count > 200 ? `本次选中了${count}份材料，单次拆解最多200份。请将无关或重复文件设为“本轮不使用”后再试，未调用模型。` : "当前资料不完整或格式超限，请检查未读取文件、空正文及当前方向，未调用模型。");
+  }
+  if (new TextEncoder().encode(JSON.stringify(parsed.data)).length > 600000) throw new Error("当前正文超过单次完整拆解容量（约600 KB），未调用模型。请排除重复或无关材料；不会自动截断原文。");
   const requestId = crypto.randomUUID();
   const reserved = await changeWorkbench(projectId, state.revision, next => {
     if (next.job) throw new Error("当前已有任务在处理。");
-    next.job = { jobId: requestId, operation, phase: "正在提交资料", sourceRevision: state.sourceRevision, blueprintRevision: state.blueprintRevision };
+    next.job = { jobId: requestId, operation, phase: "正在提交资料", sourceRevision: state.sourceRevision, blueprintRevision: state.blueprintRevision, submittedAt: Date.now() };
     next.error = null;
   });
   try {
@@ -54,14 +64,29 @@ export async function startStudioJob(projectId: string, state: WorkbenchState, o
     if (job.jobId !== requestId) throw new Error("任务编号不一致，请停止等待后重试。");
     return reserved;
   } catch (error) {
-    // Keep the persisted request ID: status recovery never starts another paid call.
+    // HTTP refusal happened before acceptance. Network uncertainty keeps the same ID for GET recovery.
+    if (error instanceof StudioRequestError) {
+      const latest = await readWorkbench(projectId);
+      if (latest.job?.jobId === requestId) await changeWorkbench(projectId, latest.revision, next => { next.job = null; next.error = error.message; });
+    }
     throw error;
   }
 }
 
 export async function pollStudioJob(projectId: string, state: WorkbenchState) {
   if (!state.job) return state;
-  const job = studioJobViewSchema.parse(await localJson(`/api/studio/status?jobId=${encodeURIComponent(state.job.jobId)}`));
+  let job;
+  try { job = studioJobViewSchema.parse(await localJson(`/api/studio/status?jobId=${encodeURIComponent(state.job.jobId)}`)); }
+  catch (error) {
+    if (!(error instanceof StudioRequestError) || error.code !== "JOB_NOT_FOUND") throw error;
+    // A concurrent GET can arrive before the initial POST. Allow submission to settle first.
+    if (state.job.submittedAt && Date.now() - state.job.submittedAt < 30000) return state;
+    return changeWorkbench(projectId, state.revision, next => {
+      if (next.job?.jobId !== state.job?.jobId) return;
+      next.job = null;
+      next.error = "上次任务记录未找到，已结束等待，材料和已有成果均保留。没有自动重试模型；请手动重新拆解（可能产生新的模型费用）。";
+    });
+  }
   if (job.status === "running") return { ...state, job: { ...state.job, phase: job.phase } };
   return changeWorkbench(projectId, state.revision, next => {
     if (next.job?.jobId !== job.jobId) throw new Error("任务已变化，请重新读取。");

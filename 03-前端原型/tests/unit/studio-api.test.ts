@@ -1,5 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { GET, POST } from "@/app/api/studio/[operation]/route";
+vi.mock("@/server/studio-settings", () => ({ studioSettingsStore: { config: () => null } }));
+vi.mock("@/server/studio-job-store", async importOriginal => {
+  const original = await importOriginal<typeof import("@/server/studio-job-store")>();
+  return { StudioJobStore: class extends original.StudioJobStore { constructor() { super(":memory:"); } } };
+});
 const address = "http://127.0.0.1:3107";
 const context = (operation: string) => ({ params: Promise.resolve({ operation }) });
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });

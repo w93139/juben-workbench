@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, chmod, lstat, mkdir, open, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { access, chmod, lstat, mkdir, open, readFile, realpath, rename, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { LocalApiError } from "./local-security";
@@ -61,12 +61,40 @@ async function selectedDirectory(id: unknown): Promise<Directory> {
   return record;
 }
 export async function getLocalDirectory(id: unknown) { const directory = await selectedDirectory(id); return { name: directory.name, kind: "directory" as const }; }
+/** Creates a fresh child in the chosen parent. Existing folders/files are never reused. */
+export async function createChosenOutputDirectory(parentPath: string, signal?: AbortSignal) {
+  const parent = await realpath(parentPath);
+  if (!(await stat(parent)).isDirectory()) throw new LocalApiError(400, "所选位置不是文件夹。");
+  for (let suffix = 1; suffix <= 1000; suffix += 1) {
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    const name = suffix === 1 ? "剧本工作台成果" : `剧本工作台成果（${suffix}）`;
+    const target = join(parent, name);
+    try { await mkdir(target, { mode: 0o700 }); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
+      throw new LocalApiError(503, "无法在所选文件夹中新建成果文件夹，请检查写入权限和可用空间。原输出设置已保留。");
+    }
+    const created = await lstat(target);
+    try {
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      return await registerChosenDirectory(target);
+    } catch (error) {
+      // Remove only our still-empty directory; never delete user files added meanwhile.
+      try {
+        const current = await lstat(target);
+        if (current.isDirectory() && current.dev === created.dev && current.ino === created.ino) await rmdir(target);
+      } catch { /* A changed or nonempty folder must be preserved. */ }
+      throw error;
+    }
+  }
+  throw new LocalApiError(409, "成果文件夹重名过多，请选择其他位置。原输出设置已保留。");
+}
 export async function chooseLocalDirectory(signal?: AbortSignal) {
   if (!await hasNativeDirectoryPicker()) throw new LocalApiError(501, "当前系统不支持本机文件夹选择。");
   try {
-    const answer = await runLocalTool("/usr/bin/osascript", ["-e", 'POSIX path of (choose folder with prompt "选择剧本工作台的输出文件夹")'], { timeout: 180000, maxBuffer: 16384, signal });
+    const answer = await runLocalTool("/usr/bin/osascript", ["-e", 'POSIX path of (choose folder with prompt "选择保存位置，将在其中新建剧本工作台成果文件夹")'], { timeout: 180000, maxBuffer: 16384, signal });
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-    return await registerChosenDirectory(answer.trim());
+    return await createChosenOutputDirectory(answer.trim(), signal);
   } catch (error) {
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
     if (error instanceof Error && /\(-128\)/.test(String((error as Error & { toolStderr?: string }).toolStderr))) return null;

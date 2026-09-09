@@ -10,8 +10,24 @@ test("非本机浏览器fallback在第一次await之前打开picker，保留点�
   const directory = new BrowserOutputDirectories();
   const result = directory.pick();
   expect(picker).toHaveBeenCalledOnce();
-  expect(picker).toHaveBeenCalledWith({ startIn: "desktop", mode: "read" });
+  expect(picker).toHaveBeenCalledWith({ startIn: "desktop", mode: "readwrite" });
   expect(await result).toBeNull();
+});
+test("浏览器新建成果子目录并保存子目录引用，权限失败不会登记成功", async () => {
+  const child = { name: "", kind: "directory" };
+  const createChild = vi.fn(async (name: string) => { child.name = name; return child; });
+  const picker = vi.fn(async () => ({ name: "父目录", kind: "directory", getDirectoryHandle: createChild }));
+  vi.stubGlobal("window", { location: { hostname: "example.com" }, isSecureContext: true, showDirectoryPicker: picker });
+  const directory = new BrowserOutputDirectories();
+  const transaction = vi.spyOn(directory as unknown as { transaction: () => Promise<unknown> }, "transaction").mockResolvedValue(undefined);
+  const result = await directory.pick();
+  expect(picker).toHaveBeenCalledWith({ startIn: "desktop", mode: "readwrite" });
+  expect(result?.name).toMatch(/^剧本工作台成果-[0-9a-f-]{36}$/);
+  expect(createChild).toHaveBeenCalledWith(result?.name, { create: true });
+  expect(transaction).toHaveBeenCalledOnce();
+  createChild.mockRejectedValueOnce(new DOMException("denied", "NotAllowedError"));
+  await expect(directory.pick()).rejects.toThrow("新建成果文件夹");
+  expect(transaction).toHaveBeenCalledOnce();
 });
 test("本机预先探测不支持原生后，浏览器fallback仍同步触发", async () => {
   const picker = page("127.0.0.1");
