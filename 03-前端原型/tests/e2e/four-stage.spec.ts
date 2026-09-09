@@ -34,10 +34,11 @@ test("实际读取TXT并刷新保留正文，未配置模型不伪造分析", as
   await page.route("**/api/studio/capability", route => route.fulfill({ json: { configured: false, message: "模型尚未连接，请配置主模型与两路审查模型后使用。" } }));
   await seedProject(page,"实际读取");
   await page.getByLabel("上传原剧本文件",{exact:true}).filter({hasNot:page.locator("h2")}).setInputFiles(txt);
+  await page.getByText("查看文件明细",{exact:true}).click();
   await expect(page.getByText(/已读取 · .*字/)).toBeVisible();
   await expect(page.getByRole("button",{name:"拆解大纲"})).toBeDisabled();
   await expect(page.getByText("模型尚未连接，请配置主模型与两路审查模型后使用。")).toBeVisible();
-  await page.reload(); await expect(page.getByText("完整剧本.txt",{exact:true})).toBeVisible();
+  await page.reload(); await page.getByText("查看文件明细",{exact:true}).click(); await expect(page.getByText("完整剧本.txt",{exact:true})).toBeVisible();
   const saved = await page.evaluate(async () => new Promise<unknown>(resolve => { const request = indexedDB.open("juben-workbench:authoring:v1"); request.onsuccess = () => {const db=request.result;const r=db.transaction("projects").objectStore("projects").getAll();r.onsuccess=()=>{resolve(r.result);db.close();};};}));
   expect(JSON.stringify(saved)).toContain("灯塔中有两份潮汐记录");
 });
@@ -46,10 +47,16 @@ test("不支持的音频不可伪装读取成功，明确排除后才能继续",
   await page.route("**/api/studio/capability",r=>r.fulfill({json:{configured:true,message:"测试连接"}}));
   await seedProject(page,"音频边界");
   await page.locator('input[aria-label="上传原剧本文件"]').setInputFiles([txt,{name:"访谈.mp3",mimeType:"audio/mpeg",buffer:Buffer.from("test only")}]);
+  await expect(page.locator(".material-details > summary")).toContainText("1 份待处理");
+  await expect(page.getByText(/尚未读取/)).not.toBeVisible();
+  await page.getByText("查看文件明细",{exact:true}).click();
   await expect(page.getByText(/尚未读取/)).toBeVisible();
   await expect(page.getByRole("button",{name:"拆解大纲"})).toBeDisabled();
   await page.getByRole("listitem").filter({hasText:"访谈.mp3"}).getByRole("button",{name:"本轮不使用"}).click();
   await expect(page.getByRole("button",{name:"拆解大纲"})).toBeEnabled();
+  await page.getByText("查看文件明细",{exact:true}).click();
+  await expect(page.locator(".material-details > summary")).toContainText("已排除 1 份");
+  await expect(page.locator(".studio-files")).not.toBeVisible();
 });
 
 test("拆解与蓝图使用任务结果，失败不能导出",async({page})=>{

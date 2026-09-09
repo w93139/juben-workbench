@@ -513,3 +513,10 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: 3px solid
 @media(max-width:700px) { .folder-dropzone { padding:30px 18px; } .folder-dropzone h2 { font-size:21px; } }
 .studio-connection-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; }
 .studio-connection-actions > div { max-width:450px; }
+
+.material-details { margin-top:20px; border-top:1px solid #ded8d1; }
+.material-details > summary { cursor:pointer; padding:16px 0; color:#81786f; font-size:14px; }
+.material-details-label { margin-left:16px; color:#333; }
+.material-attention { color:#9b5b40; }
+.material-details .studio-files { margin-top:0; font-size:14px; }
+.material-details .studio-files li { padding:10px 0; }

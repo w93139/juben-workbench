@@ -17,21 +17,21 @@ test("首页红框成为整块拖拽区，拖入文件直接读取并建项目",
   await page.getByRole("region",{name:"剧本文件夹拖拽区"}).dispatchEvent("dragenter",{dataTransfer:transfer});
   await expect(page.getByText("松开，读取这个文件夹")).toBeVisible();
   await page.getByRole("region",{name:"剧本文件夹拖拽区"}).dispatchEvent("drop",{dataTransfer:transfer});
-  await expect(page).toHaveURL(/\/stages\/materials$/);await expect(page.getByText("拖拽剧本.txt",{exact:true})).toBeVisible();
+  await expect(page).toHaveURL(/\/stages\/materials$/);await page.getByText("查看文件明细",{exact:true}).click();await expect(page.getByText("拖拽剧本.txt",{exact:true})).toBeVisible();
   await expect(page.getByRole("button",{name:"更改文件夹",exact:true})).toBeVisible();
 });
 
 test("更改文件夹整批替换，取消或读取失败保留旧材料，刷新不混入旧文件",async({page})=>{
   await seedProject(page,"更换验收");const original=await makeFolder("旧剧本","旧角色.txt"),replacement=await makeFolder("新剧本","新角色.txt");
   const input=page.locator('input[aria-label="上传原剧本文件夹"]');
-  await input.setInputFiles(original);await expect(page.getByText("旧剧本/旧角色.txt",{exact:true})).toBeVisible();
+  await input.setInputFiles(original);await page.getByText("查看文件明细",{exact:true}).click();await expect(page.getByText("旧剧本/旧角色.txt",{exact:true})).toBeVisible();
   await expect(page.getByRole("button",{name:"更改文件夹",exact:true})).toBeVisible();
   await input.dispatchEvent("cancel");await expect(page.getByText("旧剧本/旧角色.txt",{exact:true})).toBeVisible();
   await page.route("**/api/local/materials/read",r=>r.fulfill({status:503,json:{error:"读取暂时失败"}}));
   await input.setInputFiles(replacement);await expect(page.getByText("读取暂时失败")).toBeVisible();await expect(page.getByText("旧剧本/旧角色.txt",{exact:true})).toBeVisible();
   await page.unroute("**/api/local/materials/read");await page.getByRole("button",{name:"重试读取"}).click();
   await expect(page.getByText("新剧本/新角色.txt",{exact:true})).toBeVisible();await expect(page.getByText("旧剧本/旧角色.txt",{exact:true})).toHaveCount(0);
-  await page.reload();await expect(page.getByRole("heading",{name:"新剧本",exact:true})).toBeVisible();await expect(page.getByText("旧剧本/旧角色.txt",{exact:true})).toHaveCount(0);
+  await page.reload();await page.getByText("查看文件明细",{exact:true}).click();await expect(page.getByRole("heading",{name:"新剧本",exact:true})).toBeVisible();await expect(page.getByText("旧剧本/旧角色.txt",{exact:true})).toHaveCount(0);
   await page.screenshot({path:"test-results/replaced-folder.png"});
   const mixed=await makeFolder("混合失败", "good.txt");await writeFile(join(mixed,"broken.txt"),"broken");
   await page.route("**/api/local/materials/read", r=>r.request().postData()?.includes("broken.txt") ? r.fulfill({json:{status:"error",text:"",method:"ocr",warnings:["识别失败"]}}) : r.continue());
@@ -48,7 +48,7 @@ test("首页桌面与窄屏拖拽入口可用",async({page})=>{
 
 test("更改文件夹读取阶段可取消；进入保存阶段后禁用取消直到提交",async({page})=>{
   await seedProject(page,"保存边界");const original=await makeFolder("原材料","a.txt"),replacement=await makeFolder("替换材料","b.txt");const input=page.locator('input[aria-label="上传原剧本文件夹"]');
-  await input.setInputFiles(original);await expect(page.getByText("原材料/a.txt",{exact:true})).toBeVisible();
+  await input.setInputFiles(original);await page.getByText("查看文件明细",{exact:true}).click();await expect(page.getByText("原材料/a.txt",{exact:true})).toBeVisible();
   await page.route("**/api/local/materials/read",async r=>{await new Promise(resolve=>setTimeout(resolve,1200));await r.continue().catch(()=>{});});
   await input.setInputFiles(replacement);await page.getByRole("button",{name:"取消",exact:true}).click();await expect(page.getByRole("button",{name:"取消",exact:true})).toHaveCount(0);await expect(page.getByText("原材料/a.txt",{exact:true})).toBeVisible();
   await page.unroute("**/api/local/materials/read");

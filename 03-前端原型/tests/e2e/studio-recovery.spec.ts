@@ -48,11 +48,17 @@ test("首页直接上传真实TXT只读取一次，进入首阶段并刷新保�
   await page.locator('input[aria-label="选择剧本文件"]').setInputFiles({ name: "首页完整剧本.txt", mimeType: "text/plain", buffer: Buffer.from(text) });
   await expect(page).toHaveURL(/\/projects\/project-[^/]+\/stages\/materials$/);
   const base = page.url().replace(/\/stages\/materials$/, "");
+  await expect(page.getByText("首页完整剧本.txt", { exact: true })).not.toBeVisible();
+  await expect(page.locator(".material-details > summary")).toContainText("共 1 份 · 已读取 1 份");
+  await page.getByText("查看文件明细", { exact: true }).click();
   await expect(page.getByText("首页完整剧本.txt", { exact: true })).toBeVisible();
   await expect(page.getByText(/已读取 · .* 字/)).toBeVisible();
   await expect(page.getByRole("button", { name: "拆解大纲", exact: true })).toBeEnabled();
   expect((await readState(page, base)).documents[0].text).toBe(text);
   await page.reload();
+  await expect(page.getByText("首页完整剧本.txt", { exact: true })).not.toBeVisible();
+  await expect(page.locator(".material-details > summary")).toContainText("共 1 份 · 已读取 1 份");
+  await page.getByText("查看文件明细", { exact: true }).click();
   await expect(page.getByText("首页完整剧本.txt", { exact: true })).toBeVisible();
   expect((await readState(page, base)).documents[0].text).toBe(text);
   expect(reads).toBe(1);
@@ -125,6 +131,7 @@ test("更换整本后旧分析与蓝图失效，新文件不会混入旧材料",
   await offlineCapability(page); const base=await seedProject(page,"换本失效检查"); const state=prepared(); await writeState(page,base,state);
   await page.goto(`${base}/stages/materials`);
   await page.locator('input[aria-label="上传原剧本文件"]').setInputFiles({name:"新的参考本.txt",mimeType:"text/plain",buffer:Buffer.from("全新参考本的正文")});
+  await page.getByText("查看文件明细", { exact: true }).click();
   await expect(page.getByText("新的参考本.txt",{exact:true})).toBeVisible();
   const after=await readState(page,base);expect(after.documents).toHaveLength(1);expect(after.documents[0].name).toBe("新的参考本.txt");expect(after.sourceRevision).toBe(2);expect(after.blueprint).toEqual(state.blueprint);
   await page.goto(`${base}/stages/analysis`);await expect(page.getByRole("button",{name:"生成蓝图",exact:true})).toBeDisabled();
