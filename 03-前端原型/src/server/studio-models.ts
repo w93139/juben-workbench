@@ -26,7 +26,7 @@ export function readStudioConfig(env: Record<string, string | undefined> = proce
   if (url.username || url.password || url.search || url.hash || (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)))) throw unavailable();
   return { baseUrl: baseUrl!.replace(/\/+$/, ""), apiKey: apiKey!, mainModel: mainModel!, reviewA: reviewA!, reviewB: reviewB! };
 }
-function context(value: unknown) { const serialized = JSON.stringify(value); if (Buffer.byteLength(serialized) > CONTEXT_BYTES) throw new StudioError("CONTEXT_TOO_LARGE", "当前材料超出单次完整上下文限制，请拆分项目后处理；没有截断材料或发起模型请求。", 413); return serialized; }
+function context(value: unknown) { const serialized = JSON.stringify(value); if (Buffer.byteLength(serialized) > CONTEXT_BYTES) throw new StudioError("CONTEXT_TOO_LARGE", "当前步骤超出单次上下文容量，本次超限请求未发起，已有资料保留。此前步骤可能已产生模型费用；后续生成与审查尚不支持自动分段。", 413); return serialized; }
 async function responseText(response: Response, signal: AbortSignal) {
   if (!response.body) throw new StudioError("MODEL_RESPONSE_INVALID", "模型未返回可读取的内容。", 502);
   const reader = response.body.getReader(); let bytes = 0; const chunks: Uint8Array[] = [];

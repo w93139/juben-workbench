@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { emptyWorkbench, type WorkbenchState } from "@/domain/workbench";
+import { emptyBlueprintData } from "@/domain/blueprint";
 import { pollStudioJob, startStudioJob } from "@/services/studio-client";
 let saved: WorkbenchState;
 vi.mock("@/services/workbench-store", () => ({
@@ -11,6 +12,22 @@ vi.mock("@/services/workbench-store", () => ({
 }));
 beforeEach(() => { saved = emptyWorkbench(); saved.documents = [{ id: "d", name: "测试.txt", size: 10, text: "自有测试文本", status: "read", excluded: false, method: "text", warnings: [] }]; });
 afterEach(() => { vi.unstubAllGlobals(); });
+it.each([19, 20])("蓝图历史%d份时在提交前检查容量，满额不调用模型且保留全部版本", async (count) => {
+  saved.analysis = { outline: "测试原文拆解", directions: [{ id: "one", title: "选择", summary: "重建动机", outline: "发现与决定", risk: "体验待测" }, { id: "two", title: "调查", summary: "重建证据", outline: "线索与还原", risk: "难度待测" }], sourceRefs: [{ documentId: "d", location: "正文", quote: "自有测试文本" }], unknowns: [] };
+  saved.choiceId = "one"; saved.blueprint = emptyBlueprintData();
+  saved.versions = Array.from({ length: count }, (_, revision) => ({ revision, data: emptyBlueprintData() }));
+  const before = structuredClone(saved);
+  const fetcher = vi.fn(async (_url: string, init: RequestInit) => Response.json({ jobId: (init.headers as Record<string, string>)["X-Studio-Request-Id"], status: "running", phase: "正在生成蓝图" }));
+  vi.stubGlobal("fetch", fetcher);
+  if (count === 20) {
+    await expect(startStudioJob("p", saved, "blueprint")).rejects.toThrow("本次未调用模型");
+    expect(fetcher).not.toHaveBeenCalled(); expect(saved).toEqual(before);
+  } else {
+    await startStudioJob("p", saved, "blueprint");
+    expect(fetcher).toHaveBeenCalledTimes(1); expect(saved.job?.operation).toBe("blueprint");
+    expect(saved.versions).toEqual(before.versions); expect(saved.blueprint).toEqual(before.blueprint);
+  }
+});
 it("HTTP拒绝显示原始错误并清除预留任务，正文不丢失", async () => {
   const fetcher = vi.fn(async () => Response.json({ error: { code: "BUSY", message: "服务繁忙，请稍候" } }, { status: 429 })); vi.stubGlobal("fetch", fetcher);
   await expect(startStudioJob("project", saved, "analyze")).rejects.toThrow("服务繁忙");
