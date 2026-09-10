@@ -18,7 +18,7 @@ it("保护建立前零外呼，建立失败保留任务失败信息", async () =
 });
 it("13/15批后暂停，查询先恢复仍保存准确诊断；迟到响应无效，续跑只补两批及汇总", async () => {
   vi.useFakeTimers(); let now = 1000000; const store = new StudioJobStore(":memory:", () => now);
-  const input = { documents: Array.from({ length: 15 }, (_, i) => ({ id: `d${i}`, name: `角色${i}`, text: `角色${i}。` + "自有测试原文".repeat(1700) })) };
+  const input = { documents: Array.from({ length: 15 }, (_, i) => ({ id: `d${i}`, name: `角色${i}`, text: `角色${i}。` + "自有测试原文".repeat(800) })) };
   expect(analysisBatches(input.documents)).toHaveLength(15);
   let hang = true; let late!: (value: unknown) => void; let lateValue: unknown; let aborted = false;
   const sources: string[] = []; const release = vi.fn(async () => {}); const power = vi.fn(async () => ({ assertActive: () => {}, release }));
