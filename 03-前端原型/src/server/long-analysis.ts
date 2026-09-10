@@ -12,11 +12,11 @@ type Document = { id: string; name: string; text: string };
 export type Segment = { documentId: string; name: string; start: number; end: number; text: string };
 export const sourceNoteSchema = z.object({
   summary: z.string().trim().min(1).max(2500),
-  sourceRefs: z.array(z.object({ documentId: z.string().min(1).max(120), location: z.string().min(1).max(100), quote: z.string().trim().min(1).max(160) }).strict()).min(1).max(4),
-  unknowns: z.array(z.string().min(1).max(160)).max(4),
-}).strict();
-export const sourceSelectionSchema = sourceNoteSchema.omit({ sourceRefs: true }).extend({ sourceRefIds: z.array(z.string().min(1).max(40)).min(1).max(4) }).strict();
-export const analysisSelectionSchema = studioAnalysisSchema.omit({ sourceRefs: true, coverage: true }).extend({ sourceRefIds: z.array(z.string().min(1).max(40)).min(1).max(100) }).strict();
+  sourceRefs: z.array(z.object({ documentId: z.string().min(1).max(120), location: z.string().min(1).max(100), quote: z.string().trim().min(1).max(160) }).strip()).min(1).max(4),
+  unknowns: z.array(z.string().min(1).max(160)).max(8),
+}).strip();
+export const sourceSelectionSchema = sourceNoteSchema.omit({ sourceRefs: true }).extend({ sourceRefIds: z.array(z.string().min(1).max(40)).min(1).max(4) }).strip();
+export const analysisSelectionSchema = studioAnalysisSchema.omit({ sourceRefs: true, coverage: true }).extend({ sourceRefIds: z.array(z.string().min(1).max(40)).min(1).max(100) }).strip();
 type Note = z.infer<typeof sourceNoteSchema>;
 type Reference = Note["sourceRefs"][number];
 export type CitationSegment = Omit<Segment, "text"> & { passages: { citationId: string; text: string }[] };

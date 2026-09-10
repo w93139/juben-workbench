@@ -167,7 +167,7 @@ export class StudioEngine {
       const raw = await Promise.race([this.transport(config, model, instructions, payload, schema, controller.signal, maxTokens != null ? { maxTokens } : undefined), timeout, ...(job?.execution ? [job.execution.interrupted] : [])]);
       job?.execution?.check();
       if (Buffer.byteLength(JSON.stringify(raw)) > RESPONSE_BYTES) throw new StudioError("MODEL_RESPONSE_TOO_LARGE", "模型响应超过限制，本次结果未采纳。", 502);
-      const result = schema.safeParse(raw); if (!result.success) throw new StudioError("MODEL_RESPONSE_INVALID", "模型结果未满足数据契约，本次结果未采纳。", 502);
+      const result = schema.safeParse(raw); if (!result.success) { console.error("[契约校验失败] model=", model, "issues=", JSON.stringify(result.error.issues.slice(0, 5).map(i => ({ path: i.path, code: i.code }))), "raw_keys=", raw && typeof raw === "object" ? Object.keys(raw as object) : typeof raw); throw new StudioError("MODEL_RESPONSE_INVALID", "模型结果未满足数据契约，本次结果未采纳。", 502); }
       diagnostic.status = "completed"; diagnostic.elapsedMs = Math.max(0, this.now() - diagnostic.startedAt); record();
       return result.data;
     } catch (error) {
