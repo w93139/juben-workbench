@@ -56,11 +56,11 @@ describe("真实模型编排服务（只用假transport，不访问网络）", (
       const engine = new StudioEngine(() => config, call, Date.now, store);
       const started = await engine.start("analyze", input);
       await vi.advanceTimersByTimeAsync(0); expect(sourceCalls).toHaveLength(2);
-      await vi.advanceTimersByTimeAsync(240001);
+      await vi.advanceTimersByTimeAsync(90001);
       const failed = engine.get(started.jobId);
       expect(failed.status).toBe("failed"); expect(failed.error?.code).toBe("MODEL_TIMEOUT");
       expect(failed.error?.message).toContain("已完成 1 批"); expect(aborted).toBe(true);
-      expect(failed.lastCall).toMatchObject({ model: "main", status: "failed", timeoutMs: 240000, elapsedMs: 240000, errorCode: "MODEL_TIMEOUT" });
+      expect(failed.lastCall).toMatchObject({ model: "main", status: "failed", timeoutMs: 90000, elapsedMs: 90000, errorCode: "MODEL_TIMEOUT" });
       expect(JSON.stringify(failed)).not.toContain(input.documents[0].text);
       expect(JSON.stringify(failed)).not.toContain(config.apiKey);
       expect(sourceCalls).toHaveLength(2);
@@ -81,7 +81,7 @@ describe("真实模型编排服务（只用假transport，不访问网络）", (
     vi.useFakeTimers(); const store = new StudioJobStore(":memory:");
     const input = { documents: [0, 1, 2].map(i => ({ id: `d${i}`, name: `角色${i}`, text: `原文${i}` + "中".repeat(15000) })) };
     const call: ModelTransport = async (_config, _model, _prompt, payload, schema) => {
-      await new Promise(resolve => setTimeout(resolve, 200000));
+      await new Promise(resolve => setTimeout(resolve, 50000));
       const data = payload as { segments?: CitationSegment[]; notes?: { sourceRefs: { citationId: string }[] }[] };
       const citationId = data.segments ? data.segments[0].passages.find(p => p.text.trim())!.citationId : data.notes![0].sourceRefs[0].citationId;
       return schema === sourceSelectionSchema ? { summary: "测试摘要", sourceRefIds: [citationId], unknowns: [] } : selectedAnalysis(citationId);

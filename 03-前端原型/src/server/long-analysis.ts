@@ -123,7 +123,7 @@ export async function analyzeLongSource(data: { documents: Document[]; instructi
     const prompt = kind === "part"
       ? "这是完整原剧本的一批原文片段，不是全部故事。每个segment的passages按顺序拼接就是原文，必须读完全部passages。summary保留真相/时间因果、角色关系与私人认知、关键线索、轮次机制和跨片段待核对关系，区分明确事实与推断。不要提出原创方向。unknowns保留矛盾、缺失和暂不能确定的事项。"
       : "合并以下全部分段研究摘要，不是重新阅读全部原文。保留人物同一性、事件先后与因果、信息差、线索到结论、轮次节奏及跨片段矛盾；不能用后出现的断言静默覆盖旧矛盾。区分原文事实与推断，丢失细节或冲突写unknowns。不要提出原创方向。";
-    const selected = await boundedCall(prompt + " sourceRefIds只选择本次输入明确列出的citationId，不能自己写编号、摘录或位置；摘录由程序从所选编号对应的原文精确回填。摘要不超过2500字，最多4个来源编号与4条待定事项；未能保留的关键关系列为待核对。", { ...payload as object, instructions: data.instructions }, sourceSelectionSchema);
+    const selected = await boundedCall(prompt + " sourceRefIds只选择本次输入明确列出的citationId，不能自己写编号、摘录或位置；摘录由程序从所选编号对应的原文精确回填。摘要不超过2500字，最多4个来源编号与4条待定事项；未能保留的关键关系列为待核对。", { ...payload as object, instructions: data.instructions }, sourceSelectionSchema, 2048);
     const { sourceRefIds, ...content } = selected;
     const note: Note = { ...content, sourceRefs: selectedReferences(sourceRefIds, catalog) };
     validateNote(note, ref => validRefs.has(refKey(ref)));

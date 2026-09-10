@@ -159,11 +159,12 @@ export class StudioEngine {
     const abort = () => controller.abort(job?.execution?.signal.reason);
     job?.execution?.signal.addEventListener("abort", abort, { once: true });
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const diagnostic: StudioCallDiagnostic = { model, phase: job?.view.phase ?? "", inputBytes: Buffer.byteLength(JSON.stringify(payload)), startedAt: this.now(), elapsedMs: 0, timeoutMs: CALL_TIMEOUT, maxOutputTokens: maxTokens ?? evaluationResponseProfile(model).maxTokens, status: "running" };
+    const callTimeout = evaluationResponseProfile(model).timeoutMs ?? CALL_TIMEOUT;
+    const diagnostic: StudioCallDiagnostic = { model, phase: job?.view.phase ?? "", inputBytes: Buffer.byteLength(JSON.stringify(payload)), startedAt: this.now(), elapsedMs: 0, timeoutMs: callTimeout, maxOutputTokens: maxTokens ?? evaluationResponseProfile(model).maxTokens, status: "running" };
     const record = () => { if (job && job.operation !== "review" && job.view.status === "running") { job.view.lastCall = { ...diagnostic }; this.store?.save(job.view); } };
     record();
     try {
-      const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { try { job?.execution?.check(); } catch (error) { reject(error); return; } controller.abort(); reject(new StudioError("MODEL_TIMEOUT", "本次模型请求等待达到240秒，未取得完整结果。材料已保留，没有自动重试；已发出的请求可能产生费用。", 504)); }, CALL_TIMEOUT); });
+      const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { try { job?.execution?.check(); } catch (error) { reject(error); return; } controller.abort(); reject(new StudioError("MODEL_TIMEOUT", `本次模型请求等待达到${Math.round(callTimeout / 1000)}秒，未取得完整结果。材料已保留，没有自动重试；已发出的请求可能产生费用。`, 504)); }, callTimeout); });
       const raw = await Promise.race([this.transport(config, model, instructions, payload, schema, controller.signal, maxTokens != null ? { maxTokens } : undefined), timeout, ...(job?.execution ? [job.execution.interrupted] : [])]);
       job?.execution?.check();
       if (Buffer.byteLength(JSON.stringify(raw)) > RESPONSE_BYTES) throw new StudioError("MODEL_RESPONSE_TOO_LARGE", "模型响应超过限制，本次结果未采纳。", 502);
