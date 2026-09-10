@@ -76,7 +76,7 @@ export function analysisBatches(documents: Document[]): Segment[][] {
   return batches;
 }
 
-type Call = <T>(instructions: string, payload: unknown, schema: z.ZodType<T>) => Promise<T>;
+type Call = <T>(instructions: string, payload: unknown, schema: z.ZodType<T>, maxTokens?: number) => Promise<T>;
 export interface LongAnalysisOptions {
   call: Call;
   phase: (message: string) => void;
@@ -107,9 +107,9 @@ export async function analyzeLongSource(data: { documents: Document[]; instructi
     return catalog;
   }
   const payloadSize = (items: Note[]) => size({ notes: noteInput(items), instructions: data.instructions });
-  const boundedCall: Call = (instructions, payload, schema) => {
+  const boundedCall: Call = (instructions, payload, schema, maxTokens) => {
     if (size(payload) > ANALYSIS_CALL_BYTES) throw new LongAnalysisError("当前分段或汇总超过处理预算，未发起本次请求；已完成摘要保留。");
-    return options.call(instructions, payload, schema);
+    return options.call(instructions, payload, schema, maxTokens);
   };
   async function extract(kind: "part" | "merge", payload: unknown, catalog: Map<string, Reference>) {
     const key = createHash("sha256").update(JSON.stringify({ version: VERSION, model: options.modelIdentity, kind, instructions: data.instructions, payload })).digest("hex");
@@ -160,7 +160,7 @@ export async function analyzeLongSource(data: { documents: Document[]; instructi
   }
   options.phase(`已完成 ${batches.length}/${batches.length} 批原文读取 · 正在生成统一大纲与方向`);
   const finalCatalog = noteCatalog(notes);
-  const selected = await boundedCall("根据全部分段提取并逐层合并的研究摘要形成统一拆解大纲和2至5个原创方向。你看到的是摘要，不得声称自己直接逐字读过全部原文。outline包括真相、因果时间线、人物关系、信息分配、证据链、轮次节奏，区分明确事实、分析推断与待定事项。跨片段矛盾保留为unknowns，方向重建人物、动机、事件因果和线索，不只换名。sourceRefIds只选择本次输入摘要已有的citationId；不输出摘录与位置，程序将精确回填。", { notes: noteInput(notes), instructions: data.instructions }, analysisSelectionSchema);
+  const selected = await boundedCall("根据全部分段提取并逐层合并的研究摘要形成统一拆解大纲和2至5个原创方向。你看到的是摘要，不得声称自己直接逐字读过全部原文。outline包括真相、因果时间线、人物关系、信息分配、证据链、轮次节奏，区分明确事实、分析推断与待定事项。跨片段矛盾保留为unknowns，方向重建人物、动机、事件因果和线索，不只换名。sourceRefIds只选择本次输入摘要已有的citationId；不输出摘录与位置，程序将精确回填。", { notes: noteInput(notes), instructions: data.instructions }, analysisSelectionSchema, 8192);
   const { sourceRefIds, ...content } = selected;
   const analysis: StudioAnalysis = { ...content, sourceRefs: selectedReferences(sourceRefIds, finalCatalog) };
   // Coverage describes submitted source coverage, never semantic correctness or playtest validation.
