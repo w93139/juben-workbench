@@ -1,3 +1,4 @@
+import { HOST_PAUSE_MESSAGE } from "./task-execution";
 import { chmodSync, existsSync, lstatSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -35,13 +36,16 @@ export class StudioJobStore {
   }
   private recover() {
     const now = this.now();
-    const rows = this.db.prepare("SELECT id, owner_pid, lease_until FROM studio_jobs WHERE status = 'running'").all() as { id: string; owner_pid: number; lease_until: number }[];
+    const rows = this.db.prepare("SELECT id, owner_pid, lease_until, view_json FROM studio_jobs WHERE status = 'running'").all() as { id: string; owner_pid: number; lease_until: number; view_json: string }[];
     for (const row of rows) {
       let alive = true;
       try { process.kill(row.owner_pid, 0); } catch (error) { alive = (error as NodeJS.ErrnoException).code !== "ESRCH"; }
       if (alive && row.lease_until > now) continue;
-      const view: StudioJobView = { jobId: row.id, status: "failed", phase: "上次处理已中断", error: { code: "JOB_INTERRUPTED", message: "上次处理因服务重启或超时而中断，材料已保留。没有自动重试；重新拆解可能产生新的模型费用。" } };
-      this.db.prepare("UPDATE studio_jobs SET view_json = ?, status = 'failed', expires_at = ? WHERE id = ? AND status = 'running'").run(JSON.stringify(view), now + RETENTION, row.id);
+      const previous = studioJobViewSchema.parse(JSON.parse(row.view_json));
+      const code = alive ? "HOST_EXECUTION_PAUSED" : "JOB_INTERRUPTED";
+      const lastCall = previous.lastCall && { ...previous.lastCall, ...(previous.lastCall.status === "running" ? { status: "failed" as const, errorCode: code, elapsedMs: Math.max(0, now - previous.lastCall.startedAt) } : {}) };
+      const view: StudioJobView = { jobId: row.id, status: "failed", phase: "上次处理已中断", error: { code, message: `${previous.phase}。${alive ? HOST_PAUSE_MESSAGE : "上次处理因服务退出而中断，材料已保留。没有自动重试；手动继续可能产生新的模型费用。"}` }, ...(lastCall ? { lastCall } : {}) };
+      this.db.prepare("UPDATE studio_jobs SET view_json = ?, status = 'failed', expires_at = ? WHERE id = ? AND status = 'running' AND owner_pid = ? AND lease_until = ?").run(JSON.stringify(view), now + RETENTION, row.id, row.owner_pid, row.lease_until);
     }
     this.db.prepare("DELETE FROM studio_jobs WHERE status != 'running' AND expires_at < ?").run(now);
   }
@@ -60,6 +64,10 @@ export class StudioJobStore {
       this.db.prepare("INSERT INTO studio_jobs(id, fingerprint, view_json, status, owner_pid, lease_until, expires_at) VALUES (?, ?, ?, 'running', ?, ?, ?)").run(view.jobId, fingerprint, JSON.stringify(studioJobViewSchema.parse(view)), process.pid, this.now() + LEASE, this.now() + RETENTION);
       this.db.exec("COMMIT"); return { created: true, fingerprint, view };
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+  heartbeat(id: string) {
+    const result = this.db.prepare("UPDATE studio_jobs SET lease_until = ? WHERE id = ? AND status = 'running' AND owner_pid = ?").run(this.now() + LEASE, id, process.pid);
+    if (result.changes !== 1) throw new LocalApiError(409, "任务已停止，不能继续刷新运行状态。");
   }
   save(view: StudioJobView) {
     const valid = studioJobViewSchema.parse(view);

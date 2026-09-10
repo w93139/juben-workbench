@@ -12,7 +12,7 @@ import * as research from "./research-operations";
 import snapshot from "@/mocks/names-beyond.json";
 import { workflow } from "@/mocks/workflow";
 import { blankDecisions, createProjectSchema, decisionStatusSchema, demoContentSchema, envelopeSchema, legacyEnvelopeSchema, projectSchema, updateProjectSchema, type CreateProjectInput, type DecisionStatus, type Project, type ProjectEnvelope, type UpdateProjectInput } from "@/domain/models";
-import { ServiceError, type ProjectService, type StoragePort, type SourceImportOptions, type OutputDirectoryPort } from "./contracts";
+import { ServiceError, type ProjectDeletionPort, type ProjectService, type StoragePort, type SourceImportOptions, type OutputDirectoryPort } from "./contracts";
 
 const demo = demoContentSchema.parse(snapshot);
 const baseline: Project = projectSchema.parse({
@@ -33,6 +33,7 @@ export class MockProjectService implements ProjectService {
     private now: () => string = () => new Date().toISOString(),
     private uuid: () => string = () => crypto.randomUUID(),
     private outputDirectories?: OutputDirectoryPort,
+    private deletion?: ProjectDeletionPort,
   ) {}
 
   private readEnvelope(): ProjectEnvelope {
@@ -63,6 +64,28 @@ export class MockProjectService implements ProjectService {
   async list() {
     const { projects } = this.readEnvelope();
     return structuredClone([...projects].sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "")).concat(baseline));
+  }
+
+  async remove(id: string, revision: number) {
+    if (id === baseline.id) throw new ServiceError("READ_ONLY", "原始样例不能删除。");
+    if (!this.deletion) throw new ServiceError("STORAGE_UNAVAILABLE", "当前环境不支持安全删除项目。");
+    const deletion = this.deletion;
+    return this.storage.exclusive(async () => {
+      const envelope = this.readEnvelope();
+      const project = envelope.projects.find(item => item.id === id);
+      if (!project) throw new ServiceError("NOT_FOUND", "项目已不存在，请刷新列表。");
+      if (project.readOnly) throw new ServiceError("READ_ONLY", "只读项目不能删除。");
+      if (project.revision !== revision) throw new ServiceError("CONFLICT", "项目已在其他页面更新，请关闭对话框并刷新后再删除。");
+      await deletion.prepare(id);
+      try { this.writeEnvelope({ ...envelope, projects: envelope.projects.filter(item => item.id !== id) }); }
+      catch (failure) {
+        try { await deletion.restore(id); }
+        catch { throw new ServiceError("STORAGE_UNAVAILABLE", "删除未完成，项目与正文备份仍保留；请重试删除或检查浏览器存储。"); }
+        throw failure;
+      }
+      try { await deletion.finish(id); return { cleanupPending: false }; }
+      catch { return { cleanupPending: true }; }
+    });
   }
 
   async get(id: string) {

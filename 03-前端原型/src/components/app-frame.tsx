@@ -8,6 +8,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { UploadProjectButton } from "./create-project";
 import { useService } from "./providers";
+import { DeleteProjectButton } from "./delete-project";
 import { StudioConnection } from "./studio/connection";
 
 export function AppFrame({ children, title, projectId, workspace = false }: { children: React.ReactNode; title: string; projectId?: string; workspace?: boolean }) {
@@ -22,7 +23,7 @@ export function AppFrame({ children, title, projectId, workspace = false }: { ch
     <Link href="/" className="brand" onClick={() => setOpen(false)} aria-label="本间工作台首页"><span className="brand-mark">本</span><span><strong>本间工作台</strong><small>SCRIPT ATELIER</small></span></Link>
     <div className="project-nav-heading"><Link href="/projects" onClick={() => setOpen(false)}>我的项目</Link><UploadProjectButton compact /></div>
     <nav aria-label="主导航">
-      {projects.data?.filter((project) => !project.readOnly).map((project) => nav(`/projects/${project.id}`, project.title, <FolderClosed size={15} />, project.id === projectId))}
+      {projects.data?.filter((project) => !project.readOnly).map((project) => <div key={project.id} className="project-nav-row">{nav(`/projects/${project.id}`, project.title, <FolderClosed size={15} />, project.id === projectId)}<DeleteProjectButton project={project} /></div>)}
       {projects.isPending && <p className="field-hint px-3">正在读取项目…</p>}
       {projects.error && <button className="nav-item" onClick={() => void projects.refetch()}>项目读取失败，点击重试</button>}
       {projects.isSuccess && !projects.data.some((project) => !project.readOnly) && <p className="field-hint px-3">当前浏览器和地址下暂无项目。之前上传过？请用原浏览器和相同网址打开。</p>}

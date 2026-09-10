@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowUpRight, FolderOpen, FileText, Search } from "lucide-react";
+import { DeleteProjectButton } from "./delete-project";
 import { AppFrame } from "./app-frame";
 import { UploadProjectButton } from "./create-project";
 import { Input } from "./ui/input";
@@ -18,7 +19,7 @@ function downloadHistory(project: Project) {
   const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = "旧版项目记录.json"; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 function ProjectTable({ projects }: { projects: Project[] }) {
-  return <div className="table-wrap"><table className="project-table"><thead><tr><th>项目名称</th><th>最近修改</th><th>打开</th></tr></thead><tbody>{projects.map(project => <tr key={project.id}><td><Link href={`/projects/${project.id}`} className="project-name"><FileText size={17} /><strong>{project.title}</strong></Link></td><td>{formatDate(project.updatedAt)}{(project.blueprint || project.production || project.research.documents.length > 0) && <button className="text-link block mt-2" onClick={() => downloadHistory(project)}>下载旧版记录</button>}</td><td><Link href={`/projects/${project.id}`} aria-label={`打开${project.title}`}><ArrowUpRight size={15} /></Link></td></tr>)}</tbody></table></div>;
+  return <div className="table-wrap"><table className="project-table"><thead><tr><th>项目名称</th><th>最近修改</th><th>打开</th></tr></thead><tbody>{projects.map(project => <tr key={project.id}><td><div className="project-name-actions"><Link href={`/projects/${project.id}`} className="project-name"><FileText size={17} /><strong>{project.title}</strong></Link><DeleteProjectButton project={project} /></div></td><td>{formatDate(project.updatedAt)}{(project.blueprint || project.production || project.research.documents.length > 0) && <button className="text-link block mt-2" onClick={() => downloadHistory(project)}>下载旧版记录</button>}</td><td><Link href={`/projects/${project.id}`} aria-label={`打开${project.title}`}><ArrowUpRight size={15} /></Link></td></tr>)}</tbody></table></div>;
 }
 
 export function ProjectListPage({ home = false }: { home?: boolean }) {

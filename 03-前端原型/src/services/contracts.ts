@@ -30,7 +30,14 @@ export class ServiceError extends Error {
   }
 }
 
+export interface ProjectDeletionPort {
+  prepare(id: string): Promise<void>;
+  restore(id: string): Promise<void>;
+  finish(id: string): Promise<void>;
+}
+
 export interface ProjectService {
+  remove(id: string, revision: number): Promise<{ cleanupPending: boolean }>;
   list(): Promise<Project[]>;
   get(id: string): Promise<Project>;
   create(input: CreateProjectInput, initialOutput?: OutputSettingsInput): Promise<Project>;

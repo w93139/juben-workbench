@@ -88,7 +88,7 @@ test("蓝图本地草稿不会覆盖另一个标签页保存的新版本", async
   await other.close();
 });
 
-test("修改创作要求后重新选择原方向也不会恢复旧审查的导出资格", async ({ page }) => {
+for (const trigger of ["修改创作要求", "同源重新拆解"]) test(`${trigger}后重新选择原方向也不会恢复旧审查的导出资格`, async ({ page }) => {
   await offlineCapability(page);
   const base = await seedProject(page, "创作要求失效检查"); const state = prepared();
   const report: StudioAudit = { summary: "隔离UI测试快照，不是服务端通过记录", blocking: [], warnings: [], evidence: [{ location: "蓝图简介", quote: state.blueprint!.premise, conclusion: "固定引用" }], contentComplete: true, playerHostIsolation: true, findingsAddressed: true, humanPlaytest: "not-run" };
@@ -98,11 +98,20 @@ test("修改创作要求后重新选择原方向也不会恢复旧审查的导�
   await writeState(page, base, state);
   await page.goto(`${base}/stages/generation`);
   await expect(page.getByRole("button", { name: "导出完整档案", exact: true })).toBeEnabled();
+  if (trigger === "同源重新拆解") {
+    const jobId = randomUUID();
+    await page.route("**/api/studio/analyze", route => route.fulfill({ json: { jobId: route.request().headers()["x-studio-request-id"], status: "running", phase: "重拆" } }));
+    await page.route("**/api/studio/status?*", route => route.fulfill({ json: { jobId: new URL(route.request().url()).searchParams.get("jobId") || jobId, status: "completed", phase: "已完成", result: { kind: "analysis", analysis: { ...analysis, outline: "同一材料重新产生的拆解" } } } }));
+    await page.goto(`${base}/stages/materials`);
+    await page.getByRole("button", { name: "拆解大纲", exact: true }).click();
+    await expect(page.getByText("同一材料重新产生的拆解", { exact: true })).toBeVisible();
+  } else {
   await page.goto(`${base}/stages/analysis`);
   await page.getByText("补充你的创作要求", { exact: true }).click();
   await page.getByRole("textbox", { name: "补充创作要求", exact: true }).fill("将主题改为互相信任，保留两轮调查。");
   await page.getByRole("heading", { name: "选择改写方向", exact: true }).click();
   await expect.poll(async () => (await readState(page, base)).instructions).toBe("将主题改为互相信任，保留两轮调查。");
+  }
   const direction = page.getByRole("button", { name: /责任与选择/ }); await direction.click();
   await expect(direction).toHaveAttribute("aria-pressed", "true");
   await page.goto(`${base}/stages/generation`); await page.reload();
@@ -134,7 +143,7 @@ test("更换整本后旧分析与蓝图失效，新文件不会混入旧材料",
   await page.getByText("查看文件明细", { exact: true }).click();
   await expect(page.getByText("新的参考本.txt",{exact:true})).toBeVisible();
   const after=await readState(page,base);expect(after.documents).toHaveLength(1);expect(after.documents[0].name).toBe("新的参考本.txt");expect(after.sourceRevision).toBe(2);expect(after.blueprint).toEqual(state.blueprint);
-  await page.goto(`${base}/stages/analysis`);await expect(page.getByRole("button",{name:"生成蓝图",exact:true})).toBeDisabled();
+  await page.goto(`${base}/stages/analysis`);await expect(page.getByRole("button",{name:"生成蓝图",exact:true})).toHaveCount(0);await expect(page.getByRole("button",{name:"拆解大纲",exact:true})).toBeEnabled();
   await page.goto(`${base}/stages/blueprint`);await expect(page.getByText(/这份蓝图对应旧的材料或创作要求/)).toBeVisible();await expect(page.getByRole("button",{name:"开始交叉验证",exact:true})).toBeDisabled();
 });
 
@@ -189,4 +198,74 @@ test("旧任务404自动结束等待并解锁更改文件夹，刷新不重发�
   await expect(page.getByRole("button", { name: "更改文件夹", exact: true })).toBeEnabled();
   await expect(page.getByRole("button", { name: "拆解大纲", exact: true })).toBeEnabled();
   expect((await readState(page, base)).documents).toEqual(state.documents); expect(posts).toBe(0);
+});
+
+test("拆解超时后在本页保留材料并手动重试，刷新不会自动调用或要求重新上传", async ({ page }) => {
+  await offlineCapability(page); const base = await seedProject(page, "拆解超时恢复"); const state = prepared();
+  state.analysis = null; state.analysisSourceRevision = null; state.choiceId = null;
+  const oldId = randomUUID();
+  state.job = { jobId: oldId, operation: "analyze", phase: "正在分段读取 2/4 · 已完成 1 批", sourceRevision: state.sourceRevision, blueprintRevision: state.blueprintRevision };
+  await writeState(page, base, state);
+  let posts = 0; let newId = "";
+  await page.route("**/api/studio/status?*", route => route.fulfill({ json: newId ? { jobId: newId, status: "completed", phase: "完成", result: { kind: "analysis", analysis } } : { jobId: oldId, status: "failed", phase: "未完成", error: { code: "MODEL_TIMEOUT", message: "正在分段读取 2/4 · 已完成 1 批。本次模型请求等待达到240秒，材料已保留，没有自动重试。" } } }));
+  await page.route("**/api/studio/analyze", route => {
+    posts++; newId = route.request().headers()["x-studio-request-id"];
+    expect(route.request().postDataJSON().documents.map((d: { text: string }) => d.text)).toEqual(state.documents.map(d => d.text));
+    return route.fulfill({ status: 202, json: { jobId: newId, status: "running", phase: "复用已完成分段" } });
+  });
+  await page.goto(`${base}/stages/analysis`);
+  await expect(page.getByRole("button", { name: "重试拆解", exact: true })).toBeEnabled();
+  await expect(page.getByText(/原剧本材料已保留，无需重新上传/)).toBeVisible();
+  expect(posts).toBe(0);
+  await page.reload();
+  await expect(page.getByRole("button", { name: "重试拆解", exact: true })).toBeEnabled();
+  expect(posts).toBe(0); expect((await readState(page, base)).documents).toEqual(state.documents);
+  await page.getByRole("button", { name: "重试拆解", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "原剧本拆解大纲", exact: true })).toBeVisible();
+  expect(posts).toBe(1); expect(newId).not.toBe(oldId);
+  expect((await readState(page, base)).documents).toEqual(state.documents);
+});
+
+
+test("进度查询失败保留原任务，手动恢复只查询、不允许重新提交", async ({ page }) => {
+  await offlineCapability(page); const base = await seedProject(page, "查询恢复"); const state = prepared();
+  const jobId = randomUUID(); state.job = { jobId, operation: "analyze", phase: "已有任务正在处理", sourceRevision: 1, blueprintRevision: 1 };
+  await writeState(page, base, state);
+  let fail = true; let queries = 0; let posts = 0; let activeQueries = 0; let maximumQueries = 0;
+  page.on("request", request => { if (request.method() === "POST" && request.url().includes("/api/studio/")) posts++; });
+  await page.route("**/api/studio/status?*", async route => {
+    queries++; expect(new URL(route.request().url()).searchParams.get("jobId")).toBe(jobId);
+    activeQueries++; maximumQueries = Math.max(maximumQueries, activeQueries);
+    try {
+      if (!fail) await new Promise(resolve => setTimeout(resolve, 1600));
+      await route.fulfill(fail ? { status: 503, json: { error: { code: "TEMPORARY", message: "临时查询失败" } } } : { json: { jobId, status: "running", phase: "原任务继续处理" } });
+    } finally { activeQueries--; }
+  });
+  await page.goto(`${base}/stages/analysis`);
+  await expect(page.getByRole("button", { name: "重新查询任务状态", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "停止等待并保留已有内容", exact: true })).toHaveCount(0);
+  expect((await readState(page, base)).job?.jobId).toBe(jobId);
+  fail = false;
+  await page.getByRole("button", { name: "重新查询任务状态", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "原任务继续处理", exact: true })).toBeVisible();
+  expect(maximumQueries).toBe(1);
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "原任务继续处理", exact: true })).toBeVisible();
+  expect((await readState(page, base)).job?.jobId).toBe(jobId); expect(queries).toBeGreaterThan(1); expect(posts).toBe(0);
+  await expect(page.getByRole("button", { name: "生成蓝图", exact: true })).toBeDisabled();
+});
+
+
+test("本机暂停后刷新不自动重试，手动继续保留材料并使用新任务编号", async ({ page }) => {
+  await offlineCapability(page); const base = await seedProject(page, "休眠恢复检查"); const state = prepared();
+  state.analysis = null; state.analysisSourceRevision = null; state.choiceId = null;
+  const oldId = randomUUID(); state.job = { jobId: oldId, operation: "analyze", phase: "正在分段读取 14/15 · 已完成 13 批", sourceRevision: 1, blueprintRevision: 1 };
+  await writeState(page, base, state); let posts = 0; let newId = "";
+  await page.route("**/api/studio/status?*", route => route.fulfill({ json: newId ? { jobId: newId, status: "completed", phase: "完成", result: { kind: "analysis", analysis } } : { jobId: oldId, status: "failed", phase: "本机执行已中断", error: { code: "HOST_EXECUTION_PAUSED", message: "正在分段读取 14/15 · 已完成 13 批。检测到本机休眠或执行暂停，材料和已完成分段已保留，没有自动重试。" } } }));
+  await page.route("**/api/studio/analyze", route => { posts++; newId = route.request().headers()["x-studio-request-id"]; expect(newId).not.toBe(oldId); expect(route.request().postDataJSON().documents[0].text).toBe(state.documents[0].text); return route.fulfill({ json: { jobId: newId, status: "running", phase: "继续处理" } }); });
+  await page.goto(`${base}/stages/analysis`);
+  await expect(page.getByText(/已完成 13 批。检测到本机休眠/)).toBeVisible();
+  await page.reload(); await expect(page.getByRole("button", { name: "重试拆解", exact: true })).toBeEnabled(); expect(posts).toBe(0);
+  await page.getByRole("button", { name: "重试拆解", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "原剧本拆解大纲", exact: true })).toBeVisible(); expect(posts).toBe(1);
 });

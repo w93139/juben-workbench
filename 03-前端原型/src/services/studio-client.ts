@@ -99,7 +99,7 @@ export async function pollStudioJob(projectId: string, state: WorkbenchState) {
     const operation = next.job.operation; next.job = null;
     if (job.status === "failed") { next.error = job.error?.message || "处理失败，请重试。"; return; }
     const result = job.result;
-    if (result?.kind === "analysis" && operation === "analyze") { next.analysis = result.analysis; next.analysisSourceRevision = next.sourceRevision; next.choiceId = null; }
+    if (result?.kind === "analysis" && operation === "analyze") { next.analysis = result.analysis; next.analysisSourceRevision = next.sourceRevision; next.choiceId = null; next.blueprintSourceRevision = null; }
     else if (result?.kind === "blueprint" && operation === "blueprint") {
       if (next.blueprint) { if (next.versions.length >= 20) { next.error = "蓝图历史已达20份，新蓝图未替换旧稿；现有内容保留。当前尚无历史整理入口，请勿反复重新生成，待版本管理完善后再处理。"; return; } next.versions.push({ revision: next.blueprintRevision, data: next.blueprint }); }
       next.blueprint = result.blueprint; next.blueprintRevision++; next.blueprintSourceRevision = next.sourceRevision; next.blueprintChoiceId = next.choiceId;

@@ -1,10 +1,12 @@
+vi.mock("@/server/task-power", async importOriginal => ({ ...await importOriginal<typeof import("@/server/task-power")>(), acquireTaskPower: async () => ({ assertActive: () => {}, release: async () => {} }) }));
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { emptyBlueprintData, checkBlueprint, blueprintDataSchema } from "@/domain/blueprint";
 import { studioJobViewSchema, studioReviewResultSchema, studioAuditSchema, type StudioArtifact, type StudioAudit } from "@/domain/studio";
 import { StudioEngine, StudioError, readStudioConfig, openAITransport, type ModelTransport, type StudioConfig } from "@/server/studio-models";
 import { StudioJobStore } from "@/server/studio-job-store";
-import { sourceNoteSchema, type Segment } from "@/server/long-analysis";
+import { sourceSelectionSchema, type CitationSegment } from "@/server/long-analysis";
+import { ANALYSIS_BATCH_BYTES, ANALYSIS_DIRECT_BYTES } from "@/domain/analysis-limits";
 
 const config: StudioConfig = { baseUrl: "https://model.invalid/v1", apiKey: "test-only-no-real-credential", mainModel: "main", reviewA: "review-a", reviewB: "review-b" };
 function blueprint() {
@@ -22,6 +24,7 @@ function blueprint() {
 }
 const audit = (): StudioAudit => ({ summary: "已逐项核对文本，体验仍待试玩", blocking: [], warnings: ["真实体验待真人试玩"], evidence: [{ location: "蓝图/简介", quote: blueprint().premise, conclusion: "以此内容为固定输入" }], contentComplete: true, playerHostIsolation: true, findingsAddressed: true, humanPlaytest: "not-run" });
 const analysis = () => ({ outline: "参考结构说明", directions: [{ id: "one", title: "群像", summary: "原创方向", outline: "起因—对照—选择", risk: "参与度待试玩" }, { id: "two", title: "推理", summary: "原创方向二", outline: "发现—验证—揭示", risk: "核对证据" }], sourceRefs: [{ documentId: "doc", location: "正文开头", quote: "原始全文" }], unknowns: [] });
+const selectedAnalysis = (citationId: string) => { const value = analysis(); return { outline: value.outline, directions: value.directions, unknowns: value.unknowns, sourceRefIds: [citationId] }; };
 function artifacts(): StudioArtifact[] {
   const result: StudioArtifact[] = ["a", "b"].flatMap((role) => (["character", "private", "updates"] as const).map((module) => ({ id: `${role}-${module}`, module, audience: "player" as const, characterId: role, roundId: module === "updates" ? "r1" : null, title: `${role}材料`, content: `这是${role}的完整自有测试叙事段落，不是真实模型输出。`, sourceIds: [role] })));
   result.push({ id: "clue", module: "clues", audience: "player", characterId: null, roundId: "r1", title: "旧表", content: "测试公开线索", sourceIds: ["c1"] }, { id: "host", module: "host", audience: "host", characterId: null, roundId: null, title: "主持手册", content: "完整主持测试资料", sourceIds: ["t1"] }, { id: "ending", module: "ending", audience: "host", characterId: null, roundId: null, title: "终局", content: "完整终局测试资料", sourceIds: ["end"] });
@@ -32,6 +35,68 @@ const transport = (calls: string[] = []): ModelTransport => async (_config, mode
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("真实模型编排服务（只用假transport，不访问网络）", () => {
+  it("不足600KB的十文件中文整本也分段，第二批超时保留首批，重启后只补未完成", async () => {
+    vi.useFakeTimers();
+    const store = new StudioJobStore(":memory:");
+    const input = { documents: Array.from({ length: 10 }, (_, i) => ({ id: `d${i}`, name: `角色${i}.txt`, text: `角色${i}开头。` + "自有事件线索。".repeat(1600) + `角色${i}结尾。` })) };
+    expect(Buffer.byteLength(JSON.stringify(input))).toBeGreaterThan(ANALYSIS_DIRECT_BYTES);
+    expect(Buffer.byteLength(JSON.stringify(input))).toBeLessThan(600000);
+    let hang = true; const sourceCalls: string[] = []; let aborted = false;
+    const call: ModelTransport = async (_config, _model, _prompt, payload, schema, signal) => {
+      const data = payload as { segments?: CitationSegment[]; notes?: { sourceRefs: { citationId: string }[] }[] };
+      if (data.segments) {
+        expect(Buffer.byteLength(JSON.stringify(data.segments))).toBeLessThanOrEqual(ANALYSIS_BATCH_BYTES);
+        sourceCalls.push(data.segments.map(s => `${s.documentId}:${s.start}:${s.end}`).join("|"));
+        if (hang && sourceCalls.length === 2) { signal.addEventListener("abort", () => { aborted = true; }); return new Promise(() => {}); }
+      }
+      const citationId = data.segments ? data.segments[0].passages.find(p => p.text.trim())!.citationId : data.notes![0].sourceRefs[0].citationId;
+      return schema === sourceSelectionSchema ? { summary: "自有测试事实与关系", sourceRefIds: [citationId], unknowns: [] } : selectedAnalysis(citationId);
+    };
+    try {
+      const engine = new StudioEngine(() => config, call, Date.now, store);
+      const started = await engine.start("analyze", input);
+      await vi.advanceTimersByTimeAsync(0); expect(sourceCalls).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(240001);
+      const failed = engine.get(started.jobId);
+      expect(failed.status).toBe("failed"); expect(failed.error?.code).toBe("MODEL_TIMEOUT");
+      expect(failed.error?.message).toContain("已完成 1 批"); expect(aborted).toBe(true);
+      expect(failed.lastCall).toMatchObject({ model: "main", status: "failed", timeoutMs: 240000, elapsedMs: 240000, errorCode: "MODEL_TIMEOUT" });
+      expect(JSON.stringify(failed)).not.toContain(input.documents[0].text);
+      expect(JSON.stringify(failed)).not.toContain(config.apiKey);
+      expect(sourceCalls).toHaveLength(2);
+      hang = false;
+      const restarted = new StudioEngine(() => config, call, Date.now, store);
+      expect(restarted.get(started.jobId)).toEqual(failed);
+      const retry = await restarted.start("analyze", input);
+      await vi.advanceTimersByTimeAsync(0);
+      const done = restarted.get(retry.jobId);
+      expect(done.status).toBe("completed");
+      expect(sourceCalls.filter(value => value === sourceCalls[0])).toHaveLength(1);
+      expect(sourceCalls.filter(value => value === sourceCalls[1])).toHaveLength(2);
+      if (done.result?.kind !== "analysis") throw new Error("拆解未完成");
+      expect(done.result.analysis.coverage?.documents).toBe(10);
+    } finally { store.close(); }
+  });
+  it("多批处理总时长超过5分钟，逐批续租且轮询不会误判为中断", async () => {
+    vi.useFakeTimers(); const store = new StudioJobStore(":memory:");
+    const input = { documents: [0, 1, 2].map(i => ({ id: `d${i}`, name: `角色${i}`, text: `原文${i}` + "中".repeat(15000) })) };
+    const call: ModelTransport = async (_config, _model, _prompt, payload, schema) => {
+      await new Promise(resolve => setTimeout(resolve, 200000));
+      const data = payload as { segments?: CitationSegment[]; notes?: { sourceRefs: { citationId: string }[] }[] };
+      const citationId = data.segments ? data.segments[0].passages.find(p => p.text.trim())!.citationId : data.notes![0].sourceRefs[0].citationId;
+      return schema === sourceSelectionSchema ? { summary: "测试摘要", sourceRefIds: [citationId], unknowns: [] } : selectedAnalysis(citationId);
+    };
+    try {
+      const engine = new StudioEngine(() => config, call, Date.now, store);
+      const started = await engine.start("analyze", input);
+      let elapsed = 0;
+      while (engine.get(started.jobId).status === "running" && elapsed < 2000000) {
+        await vi.advanceTimersByTimeAsync(100000); elapsed += 100000;
+        expect(engine.get(started.jobId).error?.code).not.toBe("JOB_INTERRUPTED");
+      }
+      expect(elapsed).toBeGreaterThan(300000); expect(engine.get(started.jobId).status).toBe("completed");
+    } finally { store.close(); }
+  });
   it("短输入不采用模型自行编造的分段覆盖数量", async () => {
     const engine = new StudioEngine(() => config, async () => ({ ...analysis(), coverage: { method: "segmented", documents: 999, parts: 999 } }));
     const done = await wait(engine, (await engine.start("analyze", { documents: [{ id: "doc", name: "剧本", text: "原始全文" }] })).jobId);
@@ -43,12 +108,12 @@ describe("真实模型编排服务（只用假transport，不访问网络）", (
     const input = { documents: Array.from({ length: 3 }, (_, i) => ({ id: `d${i}`, name: `角色${i}`, text: `原始${i}。` + "中".repeat(90000) })) };
     const call: ModelTransport = async (_config, _model, _prompt, payload, schema) => {
       expect(Buffer.byteLength(JSON.stringify(payload))).toBeLessThan(600000);
-      const data = payload as { segments?: Segment[]; notes?: { sourceRefs: { documentId: string; location: string; quote: string }[] }[] };
-      const ref = data.segments ? { documentId: data.segments[0].documentId, location: "测试模型位置", quote: data.segments[0].text.slice(0, 5) } : data.notes![0].sourceRefs[0];
+      const data = payload as { segments?: CitationSegment[]; notes?: { sourceRefs: { citationId: string }[] }[] };
+      const citationId = data.segments ? data.segments[0].passages.find(p => p.text.trim())!.citationId : data.notes![0].sourceRefs[0].citationId;
       if (data.segments) sourceCalls++;
-      if (schema === sourceNoteSchema) return { summary: "测试分段的事实与关系", sourceRefs: [ref], unknowns: [] };
+      if (schema === sourceSelectionSchema) return { summary: "测试分段的事实与关系", sourceRefIds: [citationId], unknowns: [] };
       if (failFinal) throw new Error("测试最终汇总中断");
-      return { ...analysis(), sourceRefs: [ref] };
+      return selectedAnalysis(citationId);
     };
     try {
       const engine = new StudioEngine(() => config, call, Date.now, store);

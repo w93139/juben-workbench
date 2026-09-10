@@ -1,3 +1,4 @@
+vi.mock("@/server/task-power", async importOriginal => ({ ...await importOriginal<typeof import("@/server/task-power")>(), acquireTaskPower: async () => ({ assertActive: () => {}, release: async () => {} }) }));
 import { afterEach, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,7 +20,7 @@ it("跨服务实例可读进度及完成结果，同一编号不会再次调用�
   const second = new StudioEngine(() => config, transport, Date.now, secondStore);
   const id = randomUUID(); const input = { documents: [{ id: "d", name: "测试.txt", text: "自有原文" }] };
   await first.start("analyze", input, id);
-  expect(second.get(id).phase).toContain("主模型");
+  await vi.waitFor(() => expect(second.get(id).phase).toContain("主模型"));
   await second.start("analyze", input, id); expect(transport).toHaveBeenCalledTimes(1);
   resolve(analysis);
   await vi.waitFor(() => expect(second.get(id).status).toBe("completed"));
@@ -33,7 +34,7 @@ it("中断记录保留为失败而非404，不重发；迟到结果不覆盖中�
   let now = Date.now(); const ledger = store(file(), () => now); const id = randomUUID();
   const view = { jobId: id, status: "running" as const, phase: "等待响应" };
   ledger.claim(view, "hash"); now += 5 * 60 * 1000 + 1;
-  expect(ledger.read(id)?.view.error?.code).toBe("JOB_INTERRUPTED");
+  expect(ledger.read(id)?.view.error?.code).toBe("HOST_EXECUTION_PAUSED");
   expect(() => ledger.save({ jobId: id, status: "completed", phase: "完成", result: { kind: "analysis", analysis } })).toThrow("任务已结束或中断");
   expect(ledger.read(id)?.view.status).toBe("failed");
   expect(ledger.claim(view, "hash").created).toBe(false);
@@ -50,4 +51,13 @@ it("分段检查点跨连接可读并按保留期过期", () => {
   a.saveAnalysisNote(key, note); expect(b.readAnalysisNote(key)).toEqual(note);
   expect(() => a.saveAnalysisNote("invalid", note)).toThrow("保存限制");
   now += 8 * 24 * 60 * 60 * 1000; expect(b.readAnalysisNote(key)).toBeNull();
+});
+
+it("另一连接在恢复探测间续租，旧快照不得中断正常任务", () => {
+  let now = Date.now(); const path = file(); const a = store(path, () => now); const b = store(path, () => now);
+  const id = randomUUID(); a.claim({ jobId: id, status: "running", phase: "等待模型" }, "hash");
+  now += 300001;
+  const probe = vi.spyOn(process, "kill").mockImplementation(() => { b.heartbeat(id); return true; });
+  try { expect(a.read(id)?.view.status).toBe("running"); }
+  finally { probe.mockRestore(); }
 });

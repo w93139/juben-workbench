@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { emptyWorkbench, type WorkbenchState } from "@/domain/workbench";
+import { emptyWorkbench, blueprintCurrent, type WorkbenchState } from "@/domain/workbench";
 import { emptyBlueprintData } from "@/domain/blueprint";
 import { pollStudioJob, startStudioJob } from "@/services/studio-client";
 let saved: WorkbenchState;
@@ -12,6 +12,17 @@ vi.mock("@/services/workbench-store", () => ({
 }));
 beforeEach(() => { saved = emptyWorkbench(); saved.documents = [{ id: "d", name: "测试.txt", size: 10, text: "自有测试文本", status: "read", excluded: false, method: "text", warnings: [] }]; });
 afterEach(() => { vi.unstubAllGlobals(); });
+it("同源重拆后选择相同方向ID不能重新启用旧蓝图，旧稿仍保留", async () => {
+  const analysis = { outline: "新的拆解", directions: ["one", "two"].map(id => ({ id, title: id, summary: "新故事方向", outline: "新结构", risk: "待测试" })), sourceRefs: [{ documentId: "d", location: "正文", quote: "自有测试文本" }], unknowns: [] };
+  saved.analysis = analysis; saved.analysisSourceRevision = 0; saved.choiceId = "one";
+  saved.blueprint = emptyBlueprintData(); saved.blueprintSourceRevision = 0; saved.blueprintChoiceId = "one";
+  const oldBlueprint = structuredClone(saved.blueprint);
+  expect(blueprintCurrent(saved)).toBe(true);
+  saved.job = { jobId: "11111111-1111-4111-8111-111111111111", operation: "analyze", phase: "重拆", sourceRevision: 0, blueprintRevision: 0 };
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ jobId: "11111111-1111-4111-8111-111111111111", status: "completed", phase: "完成", result: { kind: "analysis", analysis } })));
+  const next = await pollStudioJob("p", saved); next.choiceId = "one";
+  expect(blueprintCurrent(next)).toBe(false); expect(next.blueprint).toEqual(oldBlueprint);
+});
 it.each([19, 20])("蓝图历史%d份时在提交前检查容量，满额不调用模型且保留全部版本", async (count) => {
   saved.analysis = { outline: "测试原文拆解", directions: [{ id: "one", title: "选择", summary: "重建动机", outline: "发现与决定", risk: "体验待测" }, { id: "two", title: "调查", summary: "重建证据", outline: "线索与还原", risk: "难度待测" }], sourceRefs: [{ documentId: "d", location: "正文", quote: "自有测试文本" }], unknowns: [] };
   saved.choiceId = "one"; saved.blueprint = emptyBlueprintData();

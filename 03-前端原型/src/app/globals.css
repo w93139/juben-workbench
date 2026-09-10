@@ -520,3 +520,11 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: 3px solid
 .material-attention { color:#9b5b40; }
 .material-details .studio-files { margin-top:0; font-size:14px; }
 .material-details .studio-files li { padding:10px 0; }
+
+.project-name-actions, .project-nav-row { display: flex; align-items: center; gap: 6px; }
+.project-nav-row .nav-item { flex: 1; min-width: 0; }
+.project-delete { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 30px; height: 32px; border-radius: 6px; color: #92877f; transition: color 150ms ease, background-color 150ms ease, transform 150ms ease; cursor: pointer; }
+.project-delete:hover, .project-delete:focus-visible { background: #faeae4; color: #aa503a; }
+.project-delete:hover { transform: translateY(-1px); }
+.project-delete:focus-visible { outline: 2px solid #aa503a; outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .project-delete { transition: none; } .project-delete:hover { transform: none; } }

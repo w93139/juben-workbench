@@ -5,13 +5,14 @@ import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-quer
 import { BrowserStorage, STORAGE_KEY } from "@/services/browser-storage";
 import { MockProjectService } from "@/services/mock-project-service";
 import { BrowserOutputDirectories } from "@/services/browser-output-directories";
+import { browserProjectDeletion } from "@/services/workbench-store";
 import type { ProjectService } from "@/services/contracts";
 
 const ServiceContext = createContext<ProjectService | null>(null);
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [client] = useState(() => new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 0 } } }));
-  const [service] = useState(() => new MockProjectService(new BrowserStorage(), undefined, undefined, new BrowserOutputDirectories()));
+  const [service] = useState(() => new MockProjectService(new BrowserStorage(), undefined, undefined, new BrowserOutputDirectories(), browserProjectDeletion));
   useEffect(() => {
     const refresh = (event: StorageEvent) => {
       if (event.key === STORAGE_KEY || event.key === null) void client.invalidateQueries();

@@ -74,7 +74,7 @@ export function UploadProjectButton({ compact = false, fallback = false }: { com
     const selected = Array.from(list).filter((file) => !(file.webkitRelativePath || file.name).split("/").some((part) => part.startsWith(".") || part === "__MACOSX"));
     if (!selected.length || selected.length > sourceImportPolicy.batchFiles) {
       pending.current = null; setBatch([]); setCreated(false); setOpen(true);
-      setError(new ServiceError("INVALID_INPUT", !selected.length ? "这个文件夹中只有隐藏或系统文件，请选择剧本文件夹。" : `选择了${selected.length}份文件，超过单批${sourceImportPolicy.batchFiles}份。请按子文件夹分批导入；本次未创建项目。`)); return;
+      setError(new ServiceError("INVALID_INPUT", !selected.length ? "这个文件夹中只有隐藏或系统文件，请选择剧本文件夹。" : `选择了${selected.length}份文件，超过单批${sourceImportPolicy.batchFiles}份。请整理到单批上限内再导入；本次未创建项目。`)); return;
     }
     await start(selected);
   }
@@ -83,7 +83,7 @@ export function UploadProjectButton({ compact = false, fallback = false }: { com
     {compact ? <Button variant="outline" size="icon" aria-label="上传剧本文件夹" title="上传剧本文件夹，建立项目" disabled={busy} onClick={() => folder.current?.click()}><Plus size={17} /></Button> : <FolderDropzone large disabled={busy} onPick={() => folder.current?.click()} onFiles={receive} />}
     <input className="sr-only" ref={(node) => { folder.current = node; node?.setAttribute("webkitdirectory", ""); }} type="file" multiple aria-label={compact ? "从侧栏选择剧本文件夹" : "选择剧本文件夹"} disabled={busy} onChange={(event) => { receive(event.target.files); event.target.value = ""; }} />
     <input className="sr-only" ref={files} type="file" multiple accept={sourceFileAccept} aria-label={compact ? "从侧栏选择剧本文件" : "选择剧本文件"} disabled={busy} onChange={(event) => { receive(event.target.files); event.target.value = ""; }} />
-    {fallback && !compact && <details className="mt-4"><summary className="field-hint">无法选择文件夹？</summary><Button className="mt-3" variant="outline" disabled={busy} onClick={() => files.current?.click()}>选择剧本文件</Button><p className="field-hint mt-2">可以批量选择文件，进入项目后继续补充。空文件夹不会创建项目。</p></details>}
+    {fallback && !compact && <details className="mt-4"><summary className="field-hint">无法选择文件夹？</summary><Button className="mt-3" variant="outline" disabled={busy} onClick={() => files.current?.click()}>选择剧本文件</Button><p className="field-hint mt-2">请一次选择当前剧本的全部必要文件。进入项目后更改文件夹会整批替换材料；空文件夹不会创建项目。</p></details>}
     <Dialog open={open} onOpenChange={(value) => { if (!value && busy) return; setOpen(value); }}><DialogContent><DialogTitle>{busy ? label : "导入未完成"}</DialogTitle><DialogDescription>文件交给此电脑的本地服务提取文字或识别扫描内容，原文件不会改动。读取结果保存到浏览器，完成后自动进入材料中心。</DialogDescription>
       <progress aria-label="文件读取进度" max={Math.max(1, progress.total)} value={phase === "reading" ? progress.done : undefined} className="w-full" />
       <p role="status">{busy ? phase === "reading" ? `已处理 ${progress.done} / ${progress.total} 份 · ${progress.name}` : "正在保存已读取的正文，请稍候…" : created ? "项目已建立，正文保存尚未完成。重试会继续保存到同一项目。" : "本次没有创建项目，已选文件保留，可重试。"}</p>
