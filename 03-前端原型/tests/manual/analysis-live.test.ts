@@ -11,7 +11,7 @@ import { openAnalysisCacheReadOnly } from "@/server/studio-job-store";
 import { planAnalysis } from "@/server/analysis-plan";
 import { analysisBatches, citationSegments, extractionPrompt, selectedReferences, sourceSelectionSchema } from "@/server/long-analysis";
 import { analysisParameters, emptyUsage, hash, safeIssues } from "@/server/analysis-observation";
-import { guardedVerificationFetch, singleCallApprovalSchema, VerificationGuardError } from "./live-analysis-guard";
+import { guardedVerificationFetch, preflightVerificationApproval, readApprovedVerificationConfig, verificationCostSummary, estimateRequestFen, ANT_PRICE_SOURCE, VerificationGuardError } from "./live-analysis-guard";
 
 it("拆解计划 dry-run；显式授权后只诊断指定一批，不继续合并或整本", async () => {
   const network = globalThis.fetch;
@@ -19,14 +19,19 @@ it("拆解计划 dry-run；显式授权后只诊断指定一批，不继续合�
   globalThis.fetch = async () => { throw new Error("dry-run 禁止网络"); };
   let cache: ReturnType<typeof openAnalysisCacheReadOnly> | undefined;
   try {
+    const liveRequested = process.env.STUDIO_LIVE_VERIFY === "1";
+    const approvalPath = process.env.STUDIO_VERIFY_APPROVAL;
+    // An unconfirmed rotation must stop before opening a settings file, not just before fetch.
+    const approval = liveRequested ? preflightVerificationApproval(approvalPath ? JSON.parse(readFileSync(approvalPath, "utf8")) : null) : null;
     const inputPath = process.env.STUDIO_ANALYSIS_INPUT;
     const raw = inputPath ? readFileSync(inputPath, "utf8") : null;
     if (raw && Buffer.byteLength(raw) > 12000000) throw new Error("输入超出检查容量。");
     const data = studioInputs.analyze.parse(raw ? JSON.parse(raw) : {
       documents: Array.from({ length: 10 }, (_, i) => ({ id: `fixture-${i}`, name: `自有样例${i}.txt`, text: `自有验证角色${i}，记录只证明顺序，不能单独证明动机。`.repeat(120) })), instructions: "自有合成样例，不代表原始失败输入。",
     });
-    const configured = process.env.STUDIO_LIVE_SETTINGS_ROOT ? new StudioSettingsStore(process.env.STUDIO_LIVE_SETTINGS_ROOT).config({}) : null;
-    const model = configured?.mainModel ?? "deepseek-v4-pro-0813", baseUrl = configured?.baseUrl ?? "https://maas-api.antdigital.com/v1";
+    // Dry-run only accepts nonsecret parameters. It never opens STUDIO_LIVE_SETTINGS_ROOT.
+    const model = process.env.STUDIO_ANALYSIS_MODEL ?? "deepseek-v4-pro-0813", baseUrl = process.env.STUDIO_ANALYSIS_BASE_URL ?? "https://maas-api.antdigital.com/v1";
+    if (baseUrl !== "https://maas-api.antdigital.com/v1" || model !== "deepseek-v4-pro-0813") throw new Error("本次验证只准备已审核的蚂蚁接口和模型，零外呼。");
     if (process.env.STUDIO_ANALYSIS_CACHE) cache = openAnalysisCacheReadOnly(process.env.STUDIO_ANALYSIS_CACHE);
     const plan = planAnalysis(data, { baseUrl, model, readCheckpoint: cache?.read });
     const batches = analysisBatches(data.documents);
@@ -38,20 +43,21 @@ it("拆解计划 dry-run；显式授权后只诊断指定一批，不继续合�
     const request = modelRequest(model, prompt, payload, sourceSelectionSchema, 4096);
     const requestHash = hash({ baseUrl, request });
     const preview = {
-      inputSource: inputPath ? "explicit-input-file; original-identity-requires-comparison" : "synthetic-fixture; NOT-original-failure",
-      configurationSource: configured ? "explicit-settings-directory" : "documented-default; NOT-live-configuration",
+      inputSource: inputPath ? process.env.STUDIO_ANALYSIS_INPUT_KIND === "synthetic-substitute" ? "synthetic-substitute; NOT-original-failure" : "explicit-input-file; original-identity-requires-comparison" : "synthetic-fixture; NOT-original-failure",
+      configurationSource: process.env.STUDIO_ANALYSIS_MODEL || process.env.STUDIO_ANALYSIS_BASE_URL ? "explicit-nonsecret-parameters" : "documented-default; NOT-live-configuration",
       documents: data.documents.map(d => ({ identity: hash({ id: d.id, name: d.name, text: d.text }), characters: d.text.length, bytes: Buffer.byteLength(d.text) })),
       plan, singleBatch: { batch, of: batches.length, requestHash, inputFingerprint: plan.fingerprint,
         sourceRanges: batches[batch - 1].map(s => ({ documentIdentity: hash(s.documentId), start: s.start, end: s.end })),
-        parameters: analysisParameters(model, 4096), requestBytes: Buffer.byteLength(JSON.stringify(request)), timeoutMs: 240000, maximumCalls: 1,
-        stop: "一次发送后无论成功失败都结束；不合并、不自动重试。供应商内部执行次数未知。", cost: "unknown; provider-side verified cap required" },
+        parameters: analysisParameters(model, 4096), payloadBytes: Buffer.byteLength(JSON.stringify(payload)), requestBytes: Buffer.byteLength(JSON.stringify(request)), timeoutMs: 240000, maximumCalls: 1,
+        stop: "一次发送后无论成功失败都结束；不合并、不自动重试。供应商内部执行次数未知。", cost: { actualFen: null, estimateFen: estimateRequestFen(Buffer.byteLength(JSON.stringify(request)), 4096, 9, 27), hardMoneyCap: false, priceSource: ANT_PRICE_SOURCE, basis: "9/27 CNY per million; bytes+2048;20% margin; fresh quote required before approval" } },
     };
     console.info(JSON.stringify(preview, null, 2));
-    if (process.env.STUDIO_LIVE_VERIFY !== "1") return;
-    if (!inputPath || !configured || baseUrl !== "https://maas-api.antdigital.com/v1" || model !== "deepseek-v4-pro-0813") throw new Error("真实验证要求明确输入和本次蚂蚁模型连接；未调用模型。");
-    const approvalPath = process.env.STUDIO_VERIFY_APPROVAL;
-    const approval = singleCallApprovalSchema.safeParse(approvalPath ? JSON.parse(readFileSync(approvalPath, "utf8")) : null);
-    if (!approval.success) throw new Error("真实验证关闭：尚无经审核的单次授权与供应商金额限额证据。");
+    if (!liveRequested || !approval) return;
+    const settingsRoot = process.env.STUDIO_LIVE_SETTINGS_ROOT;
+    if (!inputPath || !settingsRoot || !isAbsolute(settingsRoot)) throw new Error("真实验证要求明确输入和新密钥配置的绝对目录，未读取密钥。");
+    if (approval.requestHash !== requestHash || approval.inputFingerprint !== plan.fingerprint || approval.model !== model) throw new VerificationGuardError("REQUEST_MISMATCH");
+    const configured = readApprovedVerificationConfig(approval, () => new StudioSettingsStore(settingsRoot).config({}));
+    if (!configured || configured.baseUrl !== baseUrl || configured.mainModel !== model) throw new Error("新凭据配置与本次计划不符，未调用模型。");
     const folder = process.env.STUDIO_VERIFY_RECORD_DIR;
     if (!folder || !isAbsolute(folder)) throw new Error("必须指定独立、绝对路径的受限验证记录目录。");
     const diagnostic: AnalysisCallDiagnostic = {
@@ -61,9 +67,9 @@ it("拆解计划 dry-run；显式授权后只诊断指定一批，不继续合�
       finishReason: null, responseBodyBytes: null, contentCharacters: null, usage: emptyUsage(), failure: null, issues: [],
     };
     const file = join(resolve(folder), requestHash + ".json"); let reserved = false;
-    const report = () => JSON.stringify({ inputFingerprint: plan.fingerprint, diagnostic: analysisCallSchema.parse(diagnostic), cost: { actualFen: null, estimateFen: null, providerCapFen: approval.data.providerCap.limitFen } }, null, 2);
+    const report = () => JSON.stringify({ inputFingerprint: plan.fingerprint, diagnostic: analysisCallSchema.parse(diagnostic), cost: verificationCostSummary(approval) }, null, 2);
     globalThis.fetch = guardedVerificationFetch({ network, baseUrl, model, requestHash, inputFingerprint: plan.fingerprint,
-      connectionHash: hash({ baseUrl, apiKey: configured.apiKey }), approval: approval.data,
+      connectionHash: hash({ baseUrl, apiKey: configured.apiKey }), approval,
       reserve() {
         mkdirSync(folder, { recursive: true, mode: 0o700 }); const dir = lstatSync(folder);
         if (!dir.isDirectory() || dir.isSymbolicLink() || (dir.mode & 0o077)) throw new Error("验证目录权限不安全。");

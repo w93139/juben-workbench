@@ -85,9 +85,11 @@ v1.1 明示三道题的数组条数、字数与唯一性要求，引用允许保
 
 每任务默认最多 64 次模型调用，可用服务端 `STUDIO_ANALYSIS_MAX_CALLS` 配置为 1–1024。分段、合并、最终汇总都计入，下一次发送前检查；失败不自动重试。`studio_analysis_attempts` 保存发送前的持久预留，阻止相同参数和载荷在新任务或进程重启后盲目重复；已有成功摘要仍按原 `source-analysis/3-citation-selection` 身份复用，不清空缓存。历史调用没有完整请求哈希，不能追溯声称已受新保护。新证据后的复测应先使用下面的单批入口，普通“重试拆解”按钮不能解除该保护。
 
-`npm run analysis:plan` 强制离线模式，即使环境遗留 `STUDIO_LIVE_VERIFY=1` 也不外呼。默认输入是明确标记的自有合成样例。可通过 `STUDIO_ANALYSIS_INPUT` 指向 `{documents:[{id,name,text}], instructions}` JSON、`STUDIO_ANALYSIS_BATCH` 指定从 1 开始的原批次；`STUDIO_LIVE_SETTINGS_ROOT` 仅只读现有连接设置；`STUDIO_ANALYSIS_CACHE` 可选指定 SQLite 一致性备份，只 SELECT 有效缓存，不实例化任务存储、不清理过期记录。输出输入身份/范围、分段和合并计划、缓存命中、实际参数和调用数量区间。未来摘要大小及合并缓存未知，计划不是确定账单。
+`npm run analysis:plan` 强制离线模式，即使环境遗留 `STUDIO_LIVE_VERIFY=1` 也不外呼。默认输入是明确标记的自有合成样例。可通过 `STUDIO_ANALYSIS_INPUT` 指向 `{documents:[{id,name,text}], instructions}` JSON、`STUDIO_ANALYSIS_BATCH` 指定从 1 开始的原批次；`STUDIO_ANALYSIS_MODEL` / `STUDIO_ANALYSIS_BASE_URL` 仅提供无密钥参数，dry-run 不读取 `STUDIO_LIVE_SETTINGS_ROOT`；替代样本用 `STUDIO_ANALYSIS_INPUT_KIND=synthetic-substitute` 明确标识；`STUDIO_ANALYSIS_CACHE` 可选指定 SQLite 一致性备份，只 SELECT 有效缓存，不实例化任务存储、不清理过期记录。输出输入身份/范围、分段和合并计划、缓存命中、实际参数和调用数量区间。未来摘要大小及合并缓存未知，计划不是确定账单。
 
-`npm run analysis:verify` 仍默认 dry-run。真实单批模式必须同时提供 `STUDIO_LIVE_VERIFY=1`、明确输入和配置、`STUDIO_VERIFY_APPROVAL` 及独立的 `STUDIO_VERIFY_RECORD_DIR`。授权文件契约见 `tests/manual/live-analysis-guard.ts`：绑定请求哈希、输入身份、当前模型、4096 输出、240 秒、单次请求，10 分钟内有效；必须有经核对的供应商账户金额限额及连接身份。代码能限制应用发送次数，不能独立验证外部账户限额是否真实生效。**该证据未取得前保持关闭，字节估算不能作为金额硬保护。** 本阶段没有生成真实授权文件。
+`npm run analysis:verify` 仍默认 dry-run。真实单批模式必须同时提供 `STUDIO_LIVE_VERIFY=1`、明确输入、已确认新密钥的配置绝对目录 `STUDIO_LIVE_SETTINGS_ROOT`、`STUDIO_VERIFY_APPROVAL` 及独立的 `STUDIO_VERIFY_RECORD_DIR`。读取配置文件前先检查授权与凭据轮换确认；缺失或过期即零读取、零发送。授权绑定请求哈希、输入身份、连接身份、4096输出、240秒及一次请求，10分钟内有效。
+
+费用方式必须明确选择一种：`provider-cap` 保留经核对的供应商硬限额；或 `accepted-uncertainty` 记录新鲜官方报价、与实际请求字节相符的估算，并由用户明确接受“没有金额硬上限、推理/内部重试/失败超时计费未知”。后者只保证应用一次发送，绝不把估算或用户接受风险表述为精确金额保护。详见 `tests/manual/live-analysis-guard.ts`。程序能核对授权字段，不能独立证明凭据已在供应商撤销或外部额度已生效。本轮未生成已批准文件、未读取旧密钥。
 
 验证记录按请求哈希以独占方式建立并落盘后才发请求，首次成功或失败都停止；不汇总、不整本继续，不因改任务编号再次发送。同一请求已有记录会拒绝运行。限额证据、输入、账户或参数不符时零发送。安全诊断更新失败保留原预留以阻止重复请求。单批成功只证明该批当前请求，不代表原整本、正文或试玩通过。完整范围、回退与本轮验证见 [PHASE1.md](PHASE1.md)。
 
