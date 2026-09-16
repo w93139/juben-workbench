@@ -38,10 +38,11 @@ it("13/15批后暂停，查询先恢复仍保存准确诊断；迟到响应无�
     now += 328956;
     const failed = first.get(task.jobId);
     expect(failed.error?.code).toBe("HOST_EXECUTION_PAUSED"); expect(failed.error?.message).toContain("已完成 13 批");
+    expect(failed.analysis?.calls.at(-1)).toMatchObject({ status: "failed", failure: "host" });
     expect(failed.lastCall).toMatchObject({ status: "failed", errorCode: "HOST_EXECUTION_PAUSED", elapsedMs: 328956, pauseGapMs: 328956 });
     late(lateValue); await flush(); expect(aborted).toBe(true); expect(release).toHaveBeenCalledTimes(1);
     expect(first.get(task.jobId)).toEqual(failed); expect(store.read(task.jobId)?.view).toEqual(failed);
-    hang = false; const restarted = new StudioEngine(() => config, transport, () => now, store, power);
+    hang = false; const restarted = new StudioEngine(() => config, transport, () => now, store, power, { evidenceId: "test-host-resumed-reviewed" });
     const retry = await restarted.start("analyze", input); await flush();
     const done = restarted.get(retry.jobId); expect(done.status).toBe("completed"); expect(sources).toHaveLength(16);
     for (let i = 0; i < 13; i++) expect(sources.filter(id => id === `d${i}`)).toHaveLength(1);
@@ -76,6 +77,7 @@ it("另一个实例先读到过期租约，原实例迟到响应不能覆盖暂�
   try {
     const task = await first.start("analyze", shortInput); await flush(); now += 306000;
     expect(other.get(task.jobId).error?.code).toBe("HOST_EXECUTION_PAUSED");
+    expect(store.read(task.jobId)?.view.analysis?.calls.at(-1)).toMatchObject({ status: "failed", failure: "host" });
     finish(directResult); await flush();
     expect(first.get(task.jobId).error?.code).toBe("HOST_EXECUTION_PAUSED"); expect(first.get(task.jobId).result).toBeUndefined(); expect(release).toHaveBeenCalledTimes(1);
   } finally { store.close(); }

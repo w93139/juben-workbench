@@ -65,7 +65,7 @@ describe("真实模型编排服务（只用假transport，不访问网络）", (
       expect(JSON.stringify(failed)).not.toContain(config.apiKey);
       expect(sourceCalls).toHaveLength(2);
       hang = false;
-      const restarted = new StudioEngine(() => config, call, Date.now, store);
+      const restarted = new StudioEngine(() => config, call, Date.now, store, undefined, { evidenceId: "test-timeout-reviewed" });
       expect(restarted.get(started.jobId)).toEqual(failed);
       const retry = await restarted.start("analyze", input);
       await vi.advanceTimersByTimeAsync(0);
@@ -120,7 +120,7 @@ describe("真实模型编排服务（只用假transport，不访问网络）", (
       const failed = await wait(engine, (await engine.start("analyze", input)).jobId);
       expect(failed.status).toBe("failed"); expect(failed.error?.message).toContain("正在生成统一大纲"); expect(sourceCalls).toBeGreaterThan(1);
       const before = sourceCalls; failFinal = false;
-      const restarted = new StudioEngine(() => config, call, Date.now, store);
+      const restarted = new StudioEngine(() => config, call, Date.now, store, undefined, { evidenceId: "test-timeout-reviewed" });
       const done = await wait(restarted, (await restarted.start("analyze", input)).jobId);
       expect(done.status).toBe("completed"); expect(sourceCalls).toBe(before);
       if (done.result?.kind !== "analysis") throw new Error("结果类型错误");

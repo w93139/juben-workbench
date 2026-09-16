@@ -9,7 +9,9 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "analysis:plan": "STUDIO_LIVE_VERIFY=0 vitest run --config vitest.live.config.ts --disableConsoleIntercept",
+    "analysis:verify": "vitest run --config vitest.live.config.ts --disableConsoleIntercept"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.90.0",
