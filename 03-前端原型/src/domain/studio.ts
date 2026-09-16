@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { analysisDiagnosticsSchema } from "./analysis-diagnostics";
 import { blueprintDataSchema } from "./blueprint";
 import { moduleIds } from "./production";
 import { ANALYSIS_DOCUMENT_LIMIT } from "./analysis-limits";
@@ -45,5 +46,5 @@ export const studioCallDiagnosticSchema = z.object({
   maxOutputTokens: z.number().int().positive(), pauseGapMs: z.number().int().nonnegative().optional(), status: z.enum(["running", "completed", "failed"]), errorCode: z.string().max(100).optional(),
 }).strict();
 export type StudioCallDiagnostic = z.infer<typeof studioCallDiagnosticSchema>;
-export const studioJobViewSchema = z.object({ jobId: z.string().uuid(), status: z.enum(["running", "completed", "failed"]), phase: z.string().max(1000), result: studioResultSchema.optional(), lastCall: studioCallDiagnosticSchema.optional(), error: z.object({ code: z.string().max(100), message: z.string().max(3000) }).strict().optional() }).strict().refine((value) => value.status === "completed" ? !!value.result && !value.error : value.status === "failed" ? !!value.error && !value.result : !value.result && !value.error, "任务状态与结果不一致");
+export const studioJobViewSchema = z.object({ jobId: z.string().uuid(), status: z.enum(["running", "completed", "failed"]), phase: z.string().max(1000), result: studioResultSchema.optional(), lastCall: studioCallDiagnosticSchema.optional(), analysis: analysisDiagnosticsSchema.optional(), error: z.object({ code: z.string().max(100), message: z.string().max(3000) }).strict().optional() }).strict().refine((value) => value.status === "completed" ? !!value.result && !value.error : value.status === "failed" ? !!value.error && !value.result : !value.result && !value.error, "任务状态与结果不一致");
 export type StudioJobView = z.infer<typeof studioJobViewSchema>;

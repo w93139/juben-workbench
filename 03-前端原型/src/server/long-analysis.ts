@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import type { AnalysisStep } from "@/domain/analysis-diagnostics";
+import { PART_OUTPUT_TOKENS, FINAL_OUTPUT_TOKENS } from "./analysis-observation";
 import { z } from "zod";
 import { studioAnalysisSchema, type StudioAnalysis } from "@/domain/studio";
 import { ANALYSIS_BATCH_BYTES, ANALYSIS_SEGMENT_BYTES, ANALYSIS_MAX_BATCHES, ANALYSIS_CALL_BYTES } from "@/domain/analysis-limits";
@@ -21,7 +23,7 @@ type Note = z.infer<typeof sourceNoteSchema>;
 type Reference = Note["sourceRefs"][number];
 export type CitationSegment = Omit<Segment, "text"> & { passages: { citationId: string; text: string }[] };
 const refKey = (ref: Reference) => JSON.stringify([ref.documentId, ref.location, ref.quote]);
-function citationSegments(segments: Segment[], documentNumbers: Map<string, number>) {
+export function citationSegments(segments: Segment[], documentNumbers: Map<string, number>) {
   const catalog = new Map<string, Reference>();
   const input: CitationSegment[] = segments.map(({ text, ...segment }) => {
     const passages: CitationSegment["passages"] = [];
@@ -42,11 +44,11 @@ function citationSegments(segments: Segment[], documentNumbers: Map<string, numb
   });
   return { input, catalog };
 }
-function selectedReferences(ids: string[], catalog: Map<string, Reference>): Reference[] {
-  if (ids.some(id => !catalog.has(id))) throw new LongAnalysisError("模型选择了不在本次输入中的来源编号，结果未采纳；材料和已完成分段保留，没有自动重试。");
+export function selectedReferences(ids: string[], catalog: Map<string, Reference>): Reference[] {
+  if (ids.some(id => !catalog.has(id))) throw new LongAnalysisError("模型选择了不在本次输入中的来源编号，结果未采纳；材料和已完成分段保留，没有自动重试。", "reference");
   return [...new Set(ids)].map(id => ({ ...catalog.get(id)! }));
 }
-export class LongAnalysisError extends Error {}
+export class LongAnalysisError extends Error { constructor(message: string, public category: "reference" | "other" = "other") { super(message); } }
 
 /** Exact UTF-16 source ranges; never split a surrogate pair or remove whitespace. */
 export function analysisBatches(documents: Document[]): Segment[][] {
@@ -80,12 +82,24 @@ type Call = <T>(instructions: string, payload: unknown, schema: z.ZodType<T>, ma
 export interface LongAnalysisOptions {
   call: Call;
   phase: (message: string) => void;
+  step?: (step: AnalysisStep) => void;
+  cacheHit?: () => void;
   modelIdentity: string;
   readCheckpoint?: (key: string) => unknown;
   writeCheckpoint?: (key: string, note: Note) => void;
 }
-function validateNote(note: Note, refs: (ref: Note["sourceRefs"][number]) => boolean) {
-  if (size(note) > NOTE_BYTES || !note.sourceRefs.every(refs)) throw new LongAnalysisError("分段摘要的引用无法在对应原文核对，已停止汇总；已有材料和完成的分段保留。");
+export function validateNote(note: Note, refs: (ref: Note["sourceRefs"][number]) => boolean) {
+  if (size(note) > NOTE_BYTES || !note.sourceRefs.every(refs)) throw new LongAnalysisError("分段摘要的引用无法在对应原文核对，已停止汇总；已有材料和完成的分段保留。", "reference");
+}
+
+export function analysisCacheKey(modelIdentity: string, kind: "part" | "merge", instructions: string, payload: unknown) {
+  return createHash("sha256").update(JSON.stringify({ version: VERSION, model: modelIdentity, kind, instructions, payload })).digest("hex");
+}
+export function extractionPrompt(kind: "part" | "merge") {
+  const prompt = kind === "part"
+      ? "这是完整原剧本的一批原文片段，不是全部故事。每个segment的passages按顺序拼接就是原文，必须读完全部passages。summary保留真相/时间因果、角色关系与私人认知、关键线索、轮次机制和跨片段待核对关系，区分明确事实与推断。不要提出原创方向。unknowns保留矛盾、缺失和暂不能确定的事项。"
+      : "合并以下全部分段研究摘要，不是重新阅读全部原文。保留人物同一性、事件先后与因果、信息差、线索到结论、轮次节奏及跨片段矛盾；不能用后出现的断言静默覆盖旧矛盾。区分原文事实与推断，丢失细节或冲突写unknowns。不要提出原创方向。";
+  return prompt + " sourceRefIds只选择本次输入明确列出的citationId，不能自己写编号、摘录或位置；摘录由程序从所选编号对应的原文精确回填。摘要不超过2500字，最多4个来源编号与4条待定事项；未能保留的关键关系列为待核对。";
 }
 
 export async function analyzeLongSource(data: { documents: Document[]; instructions: string }, options: LongAnalysisOptions): Promise<StudioAnalysis> {
@@ -112,18 +126,15 @@ export async function analyzeLongSource(data: { documents: Document[]; instructi
     return options.call(instructions, payload, schema, maxTokens);
   };
   async function extract(kind: "part" | "merge", payload: unknown, catalog: Map<string, Reference>) {
-    const key = createHash("sha256").update(JSON.stringify({ version: VERSION, model: options.modelIdentity, kind, instructions: data.instructions, payload })).digest("hex");
+    const key = analysisCacheKey(options.modelIdentity, kind, data.instructions, payload);
     const validRefs = new Set([...catalog.values()].map(refKey));
     const cached = options.readCheckpoint?.(key);
     if (cached != null) {
       const parsed = sourceNoteSchema.safeParse(cached);
       if (!parsed.success) throw new LongAnalysisError("已保存的分段摘要无法读取，未重复调用模型。请检查本机任务记录。");
-      validateNote(parsed.data, ref => validRefs.has(refKey(ref))); return parsed.data;
+      validateNote(parsed.data, ref => validRefs.has(refKey(ref))); options.cacheHit?.(); return parsed.data;
     }
-    const prompt = kind === "part"
-      ? "这是完整原剧本的一批原文片段，不是全部故事。每个segment的passages按顺序拼接就是原文，必须读完全部passages。summary保留真相/时间因果、角色关系与私人认知、关键线索、轮次机制和跨片段待核对关系，区分明确事实与推断。不要提出原创方向。unknowns保留矛盾、缺失和暂不能确定的事项。"
-      : "合并以下全部分段研究摘要，不是重新阅读全部原文。保留人物同一性、事件先后与因果、信息差、线索到结论、轮次节奏及跨片段矛盾；不能用后出现的断言静默覆盖旧矛盾。区分原文事实与推断，丢失细节或冲突写unknowns。不要提出原创方向。";
-    const selected = await boundedCall(prompt + " sourceRefIds只选择本次输入明确列出的citationId，不能自己写编号、摘录或位置；摘录由程序从所选编号对应的原文精确回填。摘要不超过2500字，最多4个来源编号与4条待定事项；未能保留的关键关系列为待核对。", { ...payload as object, instructions: data.instructions }, sourceSelectionSchema, 4096);
+    const selected = await boundedCall(extractionPrompt(kind), { ...payload as object, instructions: data.instructions }, sourceSelectionSchema, PART_OUTPUT_TOKENS);
     const { sourceRefIds, ...content } = selected;
     const note: Note = { ...content, sourceRefs: selectedReferences(sourceRefIds, catalog) };
     validateNote(note, ref => validRefs.has(refKey(ref)));
@@ -131,6 +142,7 @@ export async function analyzeLongSource(data: { documents: Document[]; instructi
     return note;
   }
   for (let index = 0; index < batches.length; index++) {
+    options.step?.({ stage: "part", index: index + 1, total: batches.length, level: 0 });
     options.phase(`正在分段读取 ${index + 1}/${batches.length} · 已完成 ${index} 批`);
     const source = citationSegments(batches[index], documentNumbers);
     if (!source.catalog.size) { sourceUnknowns.add("仅含空白的原文批次已由程序核对，没有为该批调用模型；覆盖数量包含这类空白批次。"); continue; }
@@ -149,6 +161,7 @@ export async function analyzeLongSource(data: { documents: Document[]; instructi
     if (groups.length >= notes.length) throw new LongAnalysisError("摘要无法在处理预算内继续合并，已停止且保留完成摘要。");
     const merged: Note[] = [];
     for (let index = 0; index < groups.length; index++) {
+      options.step?.({ stage: "merge", index: index + 1, total: groups.length, level });
       options.phase(`原文分段已完成 · 正在汇总第 ${level} 层 ${index + 1}/${groups.length}`);
       const group = groups[index];
       if (group.length === 1) { merged.push(group[0]); continue; }
@@ -158,9 +171,10 @@ export async function analyzeLongSource(data: { documents: Document[]; instructi
     }
     notes = merged; level++;
   }
+  options.step?.({ stage: "final", index: 1, total: 1, level });
   options.phase(`已完成 ${batches.length}/${batches.length} 批原文读取 · 正在生成统一大纲与方向`);
   const finalCatalog = noteCatalog(notes);
-  const selected = await boundedCall("根据全部分段提取并逐层合并的研究摘要形成统一拆解大纲和2至5个原创方向。你看到的是摘要，不得声称自己直接逐字读过全部原文。outline包括真相、因果时间线、人物关系、信息分配、证据链、轮次节奏，区分明确事实、分析推断与待定事项。跨片段矛盾保留为unknowns，方向重建人物、动机、事件因果和线索，不只换名。sourceRefIds只选择本次输入摘要已有的citationId；不输出摘录与位置，程序将精确回填。", { notes: noteInput(notes), instructions: data.instructions }, analysisSelectionSchema, 8192);
+  const selected = await boundedCall("根据全部分段提取并逐层合并的研究摘要形成统一拆解大纲和2至5个原创方向。你看到的是摘要，不得声称自己直接逐字读过全部原文。outline包括真相、因果时间线、人物关系、信息分配、证据链、轮次节奏，区分明确事实、分析推断与待定事项。跨片段矛盾保留为unknowns，方向重建人物、动机、事件因果和线索，不只换名。sourceRefIds只选择本次输入摘要已有的citationId；不输出摘录与位置，程序将精确回填。", { notes: noteInput(notes), instructions: data.instructions }, analysisSelectionSchema, FINAL_OUTPUT_TOKENS);
   const { sourceRefIds, ...content } = selected;
   const analysis: StudioAnalysis = { ...content, sourceRefs: selectedReferences(sourceRefIds, finalCatalog) };
   // Coverage describes submitted source coverage, never semantic correctness or playtest validation.

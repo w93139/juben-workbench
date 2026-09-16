@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { studioJobViewSchema, type StudioJobView } from "@/domain/studio";
 import { LocalApiError } from "./local-security";
+import { analysisCallSchema, type AnalysisCallDiagnostic } from "@/domain/analysis-diagnostics";
 
 // Only validated results and request hashes are retained: never credentials or input files.
 const RETENTION = 7 * 24 * 60 * 60 * 1000;
@@ -22,8 +23,22 @@ export class StudioJobStore {
     this.db = new DatabaseSync(file); if (file !== ":memory:") chmodSync(file, 0o600);
     this.db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS studio_jobs (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, view_json TEXT NOT NULL, status TEXT NOT NULL, owner_pid INTEGER NOT NULL, lease_until INTEGER NOT NULL, expires_at INTEGER NOT NULL, validation_id TEXT UNIQUE)");
     this.db.exec("CREATE TABLE IF NOT EXISTS studio_analysis_notes (cache_key TEXT PRIMARY KEY, note_json TEXT NOT NULL, expires_at INTEGER NOT NULL)");
+    this.db.exec("CREATE TABLE IF NOT EXISTS studio_analysis_attempts (request_key TEXT PRIMARY KEY, diagnostic_json TEXT NOT NULL)");
   }
   close() { this.db.close(); }
+  // Reservations deliberately do not expire: an unknown/failed attempt must not be blindly repeated.
+  reserveAnalysisCall(key: string, diagnostic: AnalysisCallDiagnostic) {
+    const valid = analysisCallSchema.parse(diagnostic);
+    return this.db.prepare("INSERT OR IGNORE INTO studio_analysis_attempts(request_key, diagnostic_json) VALUES (?, ?)").run(key, JSON.stringify(valid)).changes === 1;
+  }
+  saveAnalysisCall(key: string, diagnostic: AnalysisCallDiagnostic) {
+    const valid = analysisCallSchema.parse(diagnostic);
+    if (this.db.prepare("UPDATE studio_analysis_attempts SET diagnostic_json = ? WHERE request_key = ?").run(JSON.stringify(valid), key).changes !== 1) throw new Error("拆解调用记录不存在。");
+  }
+  peekAnalysisNote(key: string): unknown {
+    const row = this.db.prepare("SELECT note_json FROM studio_analysis_notes WHERE cache_key = ? AND expires_at >= ?").get(key, this.now()) as { note_json: string } | undefined;
+    return row ? JSON.parse(row.note_json) : null;
+  }
   readAnalysisNote(key: string): unknown {
     this.db.prepare("DELETE FROM studio_analysis_notes WHERE expires_at < ?").run(this.now());
     const row = this.db.prepare("SELECT note_json FROM studio_analysis_notes WHERE cache_key = ?").get(key) as { note_json: string } | undefined;
@@ -43,8 +58,14 @@ export class StudioJobStore {
       if (alive && row.lease_until > now) continue;
       const previous = studioJobViewSchema.parse(JSON.parse(row.view_json));
       const code = alive ? "HOST_EXECUTION_PAUSED" : "JOB_INTERRUPTED";
+      const call = previous.analysis?.calls.at(-1);
+      if (call?.status === "reserved") {
+        call.status = "failed"; call.failure = "host"; call.elapsedMs = Math.max(0, now - call.startedAt);
+        try { this.db.prepare("UPDATE studio_analysis_attempts SET diagnostic_json = ? WHERE json_extract(diagnostic_json, '$.jobId') = ? AND json_extract(diagnostic_json, '$.sequence') = ?").run(JSON.stringify(analysisCallSchema.parse(call)), row.id, call.sequence); }
+        catch { previous.analysis!.persistenceWarning = true; }
+      }
       const lastCall = previous.lastCall && { ...previous.lastCall, ...(previous.lastCall.status === "running" ? { status: "failed" as const, errorCode: code, elapsedMs: Math.max(0, now - previous.lastCall.startedAt) } : {}) };
-      const view: StudioJobView = { jobId: row.id, status: "failed", phase: "上次处理已中断", error: { code, message: `${previous.phase}。${alive ? HOST_PAUSE_MESSAGE : "上次处理因服务退出而中断，材料已保留。没有自动重试；手动继续可能产生新的模型费用。"}` }, ...(lastCall ? { lastCall } : {}) };
+      const view: StudioJobView = { jobId: row.id, status: "failed", phase: "上次处理已中断", error: { code, message: `${previous.phase}。${alive ? HOST_PAUSE_MESSAGE : "上次处理因服务退出而中断，材料已保留。没有自动重试；手动继续可能产生新的模型费用。"}` }, ...(lastCall ? { lastCall } : {}), ...(previous.analysis ? { analysis: previous.analysis } : {}) };
       this.db.prepare("UPDATE studio_jobs SET view_json = ?, status = 'failed', expires_at = ? WHERE id = ? AND status = 'running' AND owner_pid = ? AND lease_until = ?").run(JSON.stringify(view), now + RETENTION, row.id, row.owner_pid, row.lease_until);
     }
     this.db.prepare("DELETE FROM studio_jobs WHERE status != 'running' AND expires_at < ?").run(now);
@@ -82,4 +103,16 @@ export class StudioJobStore {
     const view = studioJobViewSchema.parse(JSON.parse(row.view_json));
     return view.result?.kind === "review" && view.result.passed ? view.result : null;
   }
+}
+
+/** Standalone readonly reader. Never constructs StudioJobStore, recovers jobs or deletes rows. */
+export function openAnalysisCacheReadOnly(file: string, now = Date.now) {
+  const db = new DatabaseSync(file, { readOnly: true });
+  return {
+    read(key: string): unknown {
+      const row = db.prepare("SELECT note_json FROM studio_analysis_notes WHERE cache_key = ? AND expires_at >= ?").get(key, now()) as { note_json: string } | undefined;
+      return row ? JSON.parse(row.note_json) : null;
+    },
+    close: () => db.close(),
+  };
 }
