@@ -4,6 +4,8 @@ import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { studioJobViewSchema, type StudioJobView } from "@/domain/studio";
 import { LocalApiError } from "./local-security";
+import { StudioBudgetLedger } from "./studio-budget";
+import type { StudioBudgetClaim } from "@/domain/studio-budget";
 
 // Only validated results and request hashes are retained: never credentials or input files.
 const RETENTION = 7 * 24 * 60 * 60 * 1000;
@@ -11,6 +13,7 @@ const LEASE = 5 * 60 * 1000;
 type Row = { fingerprint: string; view_json: string; owner_pid: number; lease_until: number };
 export class StudioJobStore {
   private db: DatabaseSync;
+  readonly budget: StudioBudgetLedger;
   constructor(file = resolve(process.cwd(), "runtime-data/studio-jobs.sqlite"), private now = Date.now) {
     if (file !== ":memory:") {
       mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
@@ -22,6 +25,7 @@ export class StudioJobStore {
     this.db = new DatabaseSync(file); if (file !== ":memory:") chmodSync(file, 0o600);
     this.db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS studio_jobs (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, view_json TEXT NOT NULL, status TEXT NOT NULL, owner_pid INTEGER NOT NULL, lease_until INTEGER NOT NULL, expires_at INTEGER NOT NULL, validation_id TEXT UNIQUE)");
     this.db.exec("CREATE TABLE IF NOT EXISTS studio_analysis_notes (cache_key TEXT PRIMARY KEY, note_json TEXT NOT NULL, expires_at INTEGER NOT NULL)");
+    this.budget = new StudioBudgetLedger(this.db, this.now);
   }
   close() { this.db.close(); }
   readAnalysisNote(key: string): unknown {
@@ -54,13 +58,14 @@ export class StudioJobStore {
     const row = this.db.prepare("SELECT fingerprint, view_json FROM studio_jobs WHERE id = ?").get(id) as Row | undefined;
     return row ? { fingerprint: row.fingerprint, view: studioJobViewSchema.parse(JSON.parse(row.view_json)) } : null;
   }
-  claim(view: StudioJobView, fingerprint: string): { created: boolean; fingerprint: string; view: StudioJobView } {
+  claim(view: StudioJobView, fingerprint: string, budget?: StudioBudgetClaim, configHash?: string): { created: boolean; fingerprint: string; view: StudioJobView } {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const prior = this.read(view.jobId);
       if (prior) { this.db.exec("COMMIT"); return { ...prior, created: false }; }
       const count = this.db.prepare("SELECT COUNT(*) AS count FROM studio_jobs WHERE status = 'running'").get() as { count: number };
       if (count.count >= 2) throw new LocalApiError(429, "当前已有两个创作任务，请等待完成后再试。");
+      if (budget) this.budget.admitInTransaction(budget, view.jobId, fingerprint, configHash);
       this.db.prepare("INSERT INTO studio_jobs(id, fingerprint, view_json, status, owner_pid, lease_until, expires_at) VALUES (?, ?, ?, 'running', ?, ?, ?)").run(view.jobId, fingerprint, JSON.stringify(studioJobViewSchema.parse(view)), process.pid, this.now() + LEASE, this.now() + RETENTION);
       this.db.exec("COMMIT"); return { created: true, fingerprint, view };
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }

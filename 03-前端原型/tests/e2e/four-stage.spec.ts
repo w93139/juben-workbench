@@ -1,8 +1,11 @@
+import { installBudgetFixture, confirmStudioCost } from "./budget-fixture";
 import { test, expect } from "@playwright/test";
 import { seedProject } from "./project-fixture";
 import { emptyWorkbench, workbenchSchema } from "../../src/domain/workbench";
 import { emptyBlueprintData } from "../../src/domain/blueprint";
 import { randomUUID } from "node:crypto";
+
+test.beforeEach(async ({ page }) => { await installBudgetFixture(page); });
 
 const txt = { name: "完整剧本.txt", mimeType: "text/plain", buffer: Buffer.from("自有测试剧本。灯塔中有两份潮汐记录。") };
 const analysis = { outline: "灯塔故事按发现、核对、选择展开。", directions: [{ id: "one", title: "记忆与责任", summary: "让角色承担不同的责任", outline: "发现记录到共同选择", risk: "时长待试玩" }, { id: "two", title: "潮汐谜案", summary: "侧重信息推理", outline: "两条线索交叉验证", risk: "参与度待试玩" }], sourceRefs: [{ documentId: "doc", location: "开头", quote: "潮汐记录" }], unknowns: [] };
@@ -68,17 +71,17 @@ test("拆解与蓝图使用任务结果，失败不能导出",async({page})=>{
   await page.route("**/api/studio/analyze", async r=> {requestId=r.request().headers()["x-studio-request-id"]; await r.fulfill({status:202,json:{jobId:requestId,status:"running",phase:"正在拆解"}});});
   let polls=0;
   await page.route("**/api/studio/status?**",r=>{polls++;return r.fulfill({json:polls<3?{jobId:requestId,status:"running",phase:"正在拆解"}:{jobId:requestId,status:"completed",phase:"已完成",result:{kind:"analysis",analysis}}});});
-  await page.getByRole("button",{name:"拆解大纲"}).click();
+  await page.getByRole("button",{name:"拆解大纲"}).click(); await confirmStudioCost(page);
   await expect(page.getByRole("heading",{name:"原剧本拆解大纲"})).toBeVisible();
   await page.getByRole("button",{name:/记忆与责任/}).click();
   await expect(page.getByRole("button",{name:"生成蓝图"})).toBeEnabled();
   const blueprint=emptyBlueprintData();blueprint.premise="原创灯塔蓝图";blueprint.truth="记录被替换";
   await page.route("**/api/studio/blueprint",async r=>{requestId=r.request().headers()["x-studio-request-id"];await r.fulfill({status:202,json:{jobId:requestId,status:"running",phase:"生成蓝图"}});});
   await page.route("**/api/studio/status?**",r=>r.fulfill({json:{jobId:requestId,status:"completed",phase:"已完成",result:{kind:"blueprint",blueprint}}}));
-  await page.getByRole("button",{name:"生成蓝图"}).click();await expect(page.getByRole("textbox",{name:"大纲",exact:true})).toHaveValue("原创灯塔蓝图");
+  await page.getByRole("button",{name:"生成蓝图"}).click(); await confirmStudioCost(page);await expect(page.getByRole("textbox",{name:"大纲",exact:true})).toHaveValue("原创灯塔蓝图");
   await page.route("**/api/studio/review",async r=>{requestId=r.request().headers()["x-studio-request-id"];await r.fulfill({status:202,json:{jobId:requestId,status:"running",phase:"主模型正在核对"}});});
   await page.route("**/api/studio/status?**",r=>r.fulfill({json:{jobId:requestId,status:"failed",phase:"未完成",error:{code:"MODEL_TIMEOUT",message:"模型请求超时，请重试。"}}}));
-  await page.getByRole("button",{name:"开始交叉验证"}).click();
+  await page.getByRole("button",{name:"开始交叉验证"}).click(); await confirmStudioCost(page);
   await expect(page.getByText("模型请求超时，请重试。")).toBeVisible();
   await expect(page.getByRole("button",{name:"导出完整档案"})).toHaveCount(0);
 });
@@ -95,6 +98,6 @@ test("存储失败时不得先调用模型",async({page})=>{
   const base=await seedProject(page,"任务先保存");const state=emptyWorkbench();state.documents=[{id:"doc",name:"剧本.txt",size:10,text:"完整文本",status:"read",method:"text",warnings:[],excluded:false}];await seedState(page,base,state);
   let calls=0;await page.route("**/api/studio/analyze",r=>{calls++;return r.abort();});
   await page.evaluate(()=>{IDBObjectStore.prototype.put=function(){throw new DOMException("测试存储配额不足","QuotaExceededError");};});
-  await page.getByRole("button",{name:"拆解大纲"}).click();
+  await page.getByRole("button",{name:"拆解大纲"}).click(); await confirmStudioCost(page);
   await expect(page.getByRole("alert").filter({hasText:"存储配额不足"})).toBeVisible();expect(calls).toBe(0);
 });

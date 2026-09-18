@@ -1,3 +1,4 @@
+import { installBudgetFixture, confirmStudioCost } from "./budget-fixture";
 import { test, expect, type Page } from "@playwright/test";
 import { createHash, randomUUID } from "node:crypto";
 import { seedProject } from "./project-fixture";
@@ -32,6 +33,7 @@ async function readState(page: Page, base: string): Promise<WorkbenchState> {
   }), { id, dbName });
 }
 async function offlineCapability(page: Page) {
+  await installBudgetFixture(page);
   await page.route("**/api/studio/capability", route => route.fulfill({ json: { configured: true, message: "自动化测试连接状态，不调用模型" } }));
   await page.route("**/api/studio/analyze", route => route.abort());
   await page.route("**/api/studio/blueprint", route => route.abort());
@@ -103,7 +105,7 @@ for (const trigger of ["修改创作要求", "同源重新拆解"]) test(`${trig
     await page.route("**/api/studio/analyze", route => route.fulfill({ json: { jobId: route.request().headers()["x-studio-request-id"], status: "running", phase: "重拆" } }));
     await page.route("**/api/studio/status?*", route => route.fulfill({ json: { jobId: new URL(route.request().url()).searchParams.get("jobId") || jobId, status: "completed", phase: "已完成", result: { kind: "analysis", analysis: { ...analysis, outline: "同一材料重新产生的拆解" } } } }));
     await page.goto(`${base}/stages/materials`);
-    await page.getByRole("button", { name: "拆解大纲", exact: true }).click();
+    await page.getByRole("button", { name: "拆解大纲", exact: true }).click(); await confirmStudioCost(page);
     await expect(page.getByText("同一材料重新产生的拆解", { exact: true })).toBeVisible();
   } else {
   await page.goto(`${base}/stages/analysis`);
@@ -152,7 +154,7 @@ test("拆解POST被拒绝时显示具体原因、恢复按钮且刷新保留材�
   let posts = 0;
   await page.route("**/api/studio/analyze", route => { posts++; return route.fulfill({ status: 413, json: { error: { code: "CONTEXT_TOO_LARGE", message: "当前材料超过单次完整上下文限制，未发起模型调用。" } } }); });
   await page.goto(`${base}/stages/materials`);
-  await page.getByRole("button", { name: "拆解大纲", exact: true }).click();
+  await page.getByRole("button", { name: "拆解大纲", exact: true }).click(); await confirmStudioCost(page);
   await expect(page.getByText("当前材料超过单次完整上下文限制，未发起模型调用。", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "拆解大纲", exact: true })).toBeEnabled();
   expect((await readState(page, base)).job).toBeNull();
@@ -175,7 +177,7 @@ test("超过600KB原剧本进入分段处理，完成后显示覆盖数量且刷
     ? { jobId, status: "completed", phase: "已完成", result: { kind: "analysis", analysis: completedAnalysis } }
     : { jobId, status: "running", phase: "正在分段读取 1/3" } }));
   await page.goto(`${base}/stages/materials`);
-  await page.getByRole("button", { name: "拆解大纲", exact: true }).click();
+  await page.getByRole("button", { name: "拆解大纲", exact: true }).click(); await confirmStudioCost(page);
   await expect(page).toHaveURL(`${base}/stages/analysis`);
   await expect(page.getByRole("heading", { name: "正在分段读取 1/3", exact: true })).toBeVisible();
   expect(Buffer.byteLength(submitted)).toBeGreaterThan(600000);
@@ -191,7 +193,7 @@ test("超过600KB原剧本进入分段处理，完成后显示覆盖数量且刷
 test("旧任务404自动结束等待并解锁更改文件夹，刷新不重发模型", async ({ page }) => {
   await offlineCapability(page); const base = await seedProject(page, "旧拆解恢复"); const state = prepared();
   state.job = { jobId: randomUUID(), operation: "analyze", phase: "正在提交资料", sourceRevision: state.sourceRevision, blueprintRevision: state.blueprintRevision };
-  await writeState(page, base, state); let posts = 0; page.on("request", req => { if (req.url().includes("/api/studio/") && req.method() === "POST") posts++; });
+  await writeState(page, base, state); let posts = 0; page.on("request", req => { if (/\/api\/studio\/(analyze|blueprint|review)$/.test(req.url()) && req.method() === "POST") posts++; });
   await page.route("**/api/studio/status?*", route => route.fulfill({ status: 404, json: { error: { code: "JOB_NOT_FOUND", message: "任务不存在" } } }));
   await page.goto(`${base}/stages/materials`);
   await expect(page.getByText(/上次任务记录未找到，已结束等待/)).toBeVisible();
@@ -220,7 +222,7 @@ test("拆解超时后在本页保留材料并手动重试，刷新不会自动�
   await page.reload();
   await expect(page.getByRole("button", { name: "重试拆解", exact: true })).toBeEnabled();
   expect(posts).toBe(0); expect((await readState(page, base)).documents).toEqual(state.documents);
-  await page.getByRole("button", { name: "重试拆解", exact: true }).click();
+  await page.getByRole("button", { name: "重试拆解", exact: true }).click(); await confirmStudioCost(page);
   await expect(page.getByRole("heading", { name: "原剧本拆解大纲", exact: true })).toBeVisible();
   expect(posts).toBe(1); expect(newId).not.toBe(oldId);
   expect((await readState(page, base)).documents).toEqual(state.documents);
@@ -232,7 +234,7 @@ test("进度查询失败保留原任务，手动恢复只查询、不允许重�
   const jobId = randomUUID(); state.job = { jobId, operation: "analyze", phase: "已有任务正在处理", sourceRevision: 1, blueprintRevision: 1 };
   await writeState(page, base, state);
   let fail = true; let queries = 0; let posts = 0; let activeQueries = 0; let maximumQueries = 0;
-  page.on("request", request => { if (request.method() === "POST" && request.url().includes("/api/studio/")) posts++; });
+  page.on("request", request => { if (request.method() === "POST" && /\/api\/studio\/(analyze|blueprint|review)$/.test(request.url())) posts++; });
   await page.route("**/api/studio/status?*", async route => {
     queries++; expect(new URL(route.request().url()).searchParams.get("jobId")).toBe(jobId);
     activeQueries++; maximumQueries = Math.max(maximumQueries, activeQueries);
@@ -266,7 +268,7 @@ test("本机暂停后刷新不自动重试，手动继续保留材料并使用�
   await page.goto(`${base}/stages/analysis`);
   await expect(page.getByText(/已完成 13 批。检测到本机休眠/)).toBeVisible();
   await page.reload(); await expect(page.getByRole("button", { name: "重试拆解", exact: true })).toBeEnabled(); expect(posts).toBe(0);
-  await page.getByRole("button", { name: "重试拆解", exact: true }).click();
+  await page.getByRole("button", { name: "重试拆解", exact: true }).click(); await confirmStudioCost(page);
   await expect(page.getByRole("heading", { name: "原剧本拆解大纲", exact: true })).toBeVisible(); expect(posts).toBe(1);
 });
 

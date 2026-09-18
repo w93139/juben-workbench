@@ -44,10 +44,13 @@ export function replaceMaterials(id: string, revision: number, documents: Materi
     state.documents = documents; state.sourceRevision++; state.error = null;
   });
 }
-export async function startStudioJob(projectId: string, state: WorkbenchState, operation: StudioOperation) {
-  const body = operation === "analyze" ? { documents: state.documents.filter(d => !d.excluded).map(({ id, name, text }) => ({ id, name, text })), instructions: state.instructions }
+export function studioJobInput(state: WorkbenchState, operation: StudioOperation) {
+  return operation === "analyze" ? { documents: state.documents.filter(d => !d.excluded).map(({ id, name, text }) => ({ id, name, text })), instructions: state.instructions }
     : operation === "blueprint" ? { analysis: state.analysis, choiceId: state.choiceId, instructions: state.instructions }
     : { blueprint: state.blueprint };
+}
+export async function startStudioJob(projectId: string, state: WorkbenchState, operation: StudioOperation, budgetRevision?: number, previewId?: string) {
+  const body = studioJobInput(state, operation);
   const parsed = studioInputs[operation].safeParse(body);
   if (!parsed.success) {
     const count = operation === "analyze" ? state.documents.filter(d => !d.excluded).length : 0;
@@ -65,7 +68,7 @@ export async function startStudioJob(projectId: string, state: WorkbenchState, o
     next.error = null;
   });
   try {
-    const job = studioJobViewSchema.parse(await localJson(`/api/studio/${operation}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Studio-Request-Id": requestId }, body: JSON.stringify(body) }));
+    const job = studioJobViewSchema.parse(await localJson(`/api/studio/${operation}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Studio-Request-Id": requestId, "X-Studio-Project-Id": projectId, ...(budgetRevision != null ? { "X-Studio-Budget-Revision": String(budgetRevision) } : {}), ...(previewId ? { "X-Studio-Budget-Preview": previewId } : {}) }, body: JSON.stringify(body) }));
     if (job.jobId !== requestId) throw new Error("任务编号不一致，请停止等待后重试。");
     return reserved;
   } catch (error) {

@@ -18,8 +18,8 @@ afterEach(() => vi.unstubAllGlobals());
 
 it("拆解入口接收超过旧700KB请求上限的完整正文", async () => {
   const body = { documents: [{ id: "d", name: "原本.txt", text: "文".repeat(250000) }] };
-  const response = await POST(request("analyze", JSON.stringify(body)), context("analyze"));
-  expect(response.status).toBe(202); expect(start).toHaveBeenCalledWith("analyze", body, undefined);
+  const response = await POST(request("analyze", JSON.stringify(body), { "x-studio-project-id": "project-a", "x-studio-budget-revision": "7" }), context("analyze"));
+  expect(response.status).toBe(202); expect(start).toHaveBeenCalledWith("analyze", body, undefined, { projectId: "project-a", revision: 7 });
 });
 it("长剧本入口分别按Content-Length与实际字节拒绝过量请求，不发起任务或外呼", async () => {
   const fetcher = vi.fn(); vi.stubGlobal("fetch", fetcher);
