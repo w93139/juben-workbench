@@ -36,11 +36,21 @@ export interface ProjectDeletionPort {
   finish(id: string): Promise<void>;
 }
 
-export interface ProjectService {
+export interface LocalProjectPort {
   remove(id: string, revision: number): Promise<{ cleanupPending: boolean }>;
   list(): Promise<Project[]>;
   get(id: string): Promise<Project>;
   create(input: CreateProjectInput, initialOutput?: OutputSettingsInput): Promise<Project>;
+  update(id: string, expectedRevision: number, input: UpdateProjectInput): Promise<Project>;
+  saveOutputSettings(id: string, revision: number, input: OutputSettingsInput): Promise<Project>;
+  pickOutputDirectory(): Promise<PickedOutputDirectory | null>;
+  getOutputDirectoryCapability(): OutputDirectoryCapability;
+  getBackup(): Promise<string | null>;
+  resetLocalProjects(expectedBackup: string): Promise<void>;
+}
+
+/** Historical simulated workflow contract. */
+export interface ProjectService extends LocalProjectPort {
   createFromSources(files: SourceFileInput[], options?: SourceImportOptions): Promise<SourceImportResult>;
   startFolderPlan(id: string, revision: number): Promise<Project>;
   advanceFolderPlan(id: string, revision: number): Promise<Project>;
@@ -49,7 +59,6 @@ export interface ProjectService {
   sendFolderMessage(id: string, revision: number, message: string): Promise<Project>;
   saveFolderProposal(id: string, revision: number, input: BlueprintData): Promise<Project>;
   initializeFolderBlueprint(id: string, revision: number): Promise<Project>;
-  update(id: string, expectedRevision: number, input: UpdateProjectInput): Promise<Project>;
   setDecision(id: string, expectedRevision: number, decisionId: string, status: DecisionStatus): Promise<Project>;
   getContent(id: string): Promise<DemoContent | null>;
   getBlueprint(id: string): Promise<BlueprintWorkspace | null>;
@@ -76,9 +85,6 @@ export interface ProjectService {
   previewSourceFiles(id: string, files: SourceFileInput[]): Promise<SourceImportPreview>;
   registerSourceFiles(id: string, revision: number, files: SourceFileInput[]): Promise<Project>;
   importSourceFiles(id: string, revision: number, files: SourceFileInput[], options?: SourceImportOptions): Promise<SourceImportResult>;
-  saveOutputSettings(id: string, revision: number, input: OutputSettingsInput): Promise<Project>;
-  pickOutputDirectory(): Promise<PickedOutputDirectory | null>;
-  getOutputDirectoryCapability(): OutputDirectoryCapability;
   startResearchJob(id: string, revision: number, kind: "ocr" | "analysis", fail?: boolean): Promise<Project>;
   advanceResearchJob(id: string, jobId: string): Promise<Project>;
   cancelResearchJob(id: string, revision: number): Promise<Project>;
@@ -87,8 +93,6 @@ export interface ProjectService {
   chooseMechanism(id: string, revision: number, input: MechanismChoice): Promise<Project>;
   saveDirection(id: string, revision: number, input: OriginalDirection): Promise<Project>;
   saveCreativePlan(id: string, revision: number, input: CreativePlanInput): Promise<Project>;
-  getBackup(): Promise<string | null>;
-  resetLocalProjects(expectedBackup: string): Promise<void>;
 }
 
 export interface StoragePort {

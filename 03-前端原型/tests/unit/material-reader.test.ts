@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { deflateSync } from "node:zlib";
-import { crc32 } from "../../src/services/export-service";
+import { crc32 } from "../../src/services/zip";
 import { readMaterialBytes, readMaterialUpload } from "../../src/server/material-reader";
 const encode = (text: string) => new TextEncoder().encode(text);
 function pdf() {

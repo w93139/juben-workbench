@@ -697,3 +697,13 @@
 - 独立审查及从当前17个App入口的静态import遍历均确认22个文件不可达、无保留源码/测试直接导入：旧blueprint三文件、production三文件、research十文件、旧export、stage-content、workspace-actions、development-progress组件，以及blueprint-editor/development-progress领域辅助。
 - 仅删除上述22项；保留仍活跃的research/common、workspace-panels、export-service、Mock服务、全部历史数据schema与旧URL映射。CSS混合规则和共用模块在下一批处理，历史E2E保留为档案。
 - Fresh：281项单元、ESLint、独立typecheck、Webpack构建通过。并行E2E再次出现3个不同场景的浏览器会话超时，未修改代码或放宽断言，改为单worker完整重跑40/40通过（51.8秒）；后续本机回归采用单worker降低并发干扰。独立删除范围复审无Blocker/Important。净移除1083行旧源码。
+
+### 批次3 · 分离真实服务与旧模拟流程
+
+- 新增LocalProjectService与窄接口LocalProjectPort，生产Provider使用真实本机项目服务；原14个核心方法原样迁出（存储、CAS、删除回滚、输出目录、v1/v2/v3读取迁移），MockProjectService继承并仅保留历史模拟业务。只读样例元数据继续来自应用自有快照，不声称移除所有Mock数据。
+- 提取useSavedDraft、useProjectAction与独立ZIP/CRC工具；删除旧research/common、混合面板中的无调用导出与downloadExport。实际导出路由直接使用ZIP工具，保留旧导出格式单元回归。清理确认失效的旧UI专属CSS，混合选择器逐项保留活跃分支，保留旧URL映射及全部数据schema。
+- 新增真实Local服务测试：v1/v2/v3读取不落盘、失败修改保留原始数据、成功修改保留旧字段/特殊文件名及另一项目、缺省字段、并发与恢复；删除和目录测试同时跑Local/Mock。新增App所有入口传递依赖测试，禁止生产加载模拟执行模块。
+- Fresh：37文件308项单元、ESLint、独立typecheck及Webpack构建通过；最终CSS清理后构建/typecheck再次通过，完整单worker E2E40/40通过（46.5秒）；15项同步保护测试通过。前后端独立只读审查均无Blocker/Important；建议的旧锚点/旧类及EOF空行已处理，git diff --check通过。
+- Preview：只读核对创作0运行、测评0运行后，保留旧构建并更新原127.0.0.1:3107。/projects HTTP200，14个实际返回的静态脚本与本轮构建一致，包含新创作要求恢复入口；buildId=5EyDRXiS6pl1oiKSs8yqi。没有读写用户原文、浏览器项目或模型配置，也没有真实模型调用。
+- 文档同步到9月18日工程状态，并将拆解参数说明校正为现有代码的20KB直接门槛、20KB片段、30KB合批；本轮没有改变拆解策略/模型参数。完整备份恢复、蓝图草稿持久化、正式创作费用保护、分段正文及整本真实验收仍待后续，不以此次瘦身宣称阶段B就绪。
+- 后续数据清理前置条件：先具备包含LocalStorage/IndexedDB与必要成果的完整备份、可验证恢复以及迁移保护，再决定是否删除旧字段；目前仅保留兼容代码，不删除用户数据。

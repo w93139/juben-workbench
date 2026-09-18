@@ -1,7 +1,7 @@
 import { assertLocalRequest, LocalApiError, localErrorResponse, localJson, readLocalJson } from "@/server/local-security";
 import { writeSelectedZip } from "@/server/local-directories";
 import { getValidatedStudioReview } from "@/server/studio-models";
-import { createZip } from "@/services/export-service";
+import { createZip } from "@/services/zip";
 import { safeExportName } from "@/domain/export";
 import { moduleLabels } from "@/domain/production";
 export const runtime = "nodejs";

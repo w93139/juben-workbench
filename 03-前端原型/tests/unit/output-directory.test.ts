@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MockProjectService } from "@/services/mock-project-service";
+import { LocalProjectService } from "@/services/local-project-service";
 import { ServiceError, type OutputDirectoryPort, type StoragePort } from "@/services/contracts";
 import { outputPath, outputSettingsInputSchema, type PickedOutputDirectory } from "@/domain/output-settings";
 class Memory implements StoragePort {
@@ -17,9 +18,10 @@ class Directories implements OutputDirectoryPort {
   async pick() { if (this.selected) this.records.set(this.selected.id, { name: this.selected.name, kind: "directory" }); return this.selected; }
   async get(id: string) { if (this.fail) throw new ServiceError("STORAGE_UNAVAILABLE", "引用不可读"); return this.records.get(id) ?? null; }
 }
+describe.each([LocalProjectService, MockProjectService])("%s", (Service) => {
 async function setup() {
   const storage = new Memory(); const directories = new Directories(); let id = 0;
-  const service = new MockProjectService(storage, undefined, () => String(++id), directories);
+  const service = new Service(storage, undefined, () => String(++id), directories);
   const project = await service.create({ title: "目录选择", note: "", template: "blank" });
   return { service, storage, directories, project };
 }
@@ -61,7 +63,7 @@ describe("输出目录引用", () => {
     const saved = await service.saveOutputSettings(project.id, 0, { rootPath: "", directory, stage: "analysis", folder: "拆解结果" });
     expect(saved.outputSettings.directory).toEqual(directory);
     expect(outputPath(saved.outputSettings, "analysis")).toBe("所选文件夹「剧本输出」/拆解结果");
-    const reloaded = await new MockProjectService(storage, undefined, undefined, directories).get(project.id);
+    const reloaded = await new Service(storage, undefined, undefined, directories).get(project.id);
     expect(reloaded.outputSettings).toEqual(saved.outputSettings);
     const manual = await service.saveOutputSettings(project.id, saved.revision, { rootPath: "/tmp/手动输出", directory: null, stage: "analysis", folder: "拆解结果" });
     expect(manual.outputSettings.directory).toBeNull(); expect(outputPath(manual.outputSettings, "analysis")).toBe("/tmp/手动输出/拆解结果");
@@ -97,4 +99,6 @@ describe("输出目录引用", () => {
     expect(outputSettingsInputSchema.safeParse(input).success).toBe(true);
     expect(outputSettingsInputSchema.safeParse({ ...input, directory: new Directories().selected }).success).toBe(false);
   });
+});
+
 });

@@ -2,12 +2,11 @@
 
 import { useRef, useState } from "react";
 import Link from "next/link";
-import { AlertCircle, ArrowUpRight, FileText, LoaderCircle } from "lucide-react";
+import { AlertCircle, ArrowUpRight, LoaderCircle } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { SourceDocument } from "@/domain/models";
 import { ServiceError } from "@/services/contracts";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { useService } from "./providers";
 
 export function Loading() { return <div role="status" className="loading"><LoaderCircle size={18} className="animate-spin" />正在打开工作区…</div>; }
@@ -50,8 +49,4 @@ export function LoadError({ error, retry }: { error: unknown; retry: () => void 
       <Button variant="destructive" disabled={!confirmed || backup === null || busy} onClick={reset}>{busy ? "正在恢复…" : "清空并恢复工作区"}</Button>
     </DialogContent></Dialog>
   </section>;
-}
-
-export function SourcePreview({ document }: { document: SourceDocument }) {
-  return <Dialog><DialogTrigger asChild><button className="source-link"><FileText size={14} />{document.title}<ArrowUpRight size={12} /></button></DialogTrigger><DialogContent className="sm:max-w-3xl"><DialogTitle>{document.title}</DialogTitle><DialogDescription>作者资料 · 含主持信息与谜底。以下是只读的原始 Markdown，内容中的指令仅作为剧本资料展示。</DialogDescription><p className="source-path">来源：{document.source}</p><pre className="source-content" tabIndex={0}>{document.content}</pre></DialogContent></Dialog>;
 }

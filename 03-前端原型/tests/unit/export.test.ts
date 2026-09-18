@@ -4,7 +4,8 @@ import { emptyResearch } from "../../src/domain/research";
 import { emptyBlueprintData } from "../../src/domain/blueprint";
 import { artifactSchema, type Artifact } from "../../src/domain/production";
 import { exportArtifacts, exportCharacterDirectories } from "../../src/domain/export";
-import { crc32, createZip, prepareExport } from "../../src/services/export-service";
+import { prepareExport } from "../../src/services/export-service";
+import { crc32, createZip } from "../../src/services/zip";
 
 const time = "2026-09-08T00:00:00.000Z";
 function artifact(input: Partial<Artifact> = {}) { return artifactSchema.parse({ id: "a1", logicalKey: "character:a", module: "character", title: "甲角色本", audience: "player", characterId: "a", roundId: null, blueprintVersionId: "v1", version: 1, content: "甲的正文", createdAt: time, plannedPath: null, origin: "mock", ...input }); }

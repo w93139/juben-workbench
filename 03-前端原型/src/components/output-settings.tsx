@@ -3,14 +3,14 @@ import { useEffect, useRef, useState } from "react";
 import { FolderOpen } from "lucide-react";
 import type { Project } from "@/domain/models";
 import type { OutputStage, PickedOutputDirectory } from "@/domain/output-settings";
-import { useResearchAction } from "./research/common";
+import { useProjectAction } from "./hooks/use-project-action";
 import { useService } from "./providers";
 import { Button } from "./ui/button";
 import { ErrorMessage } from "./shared";
 
 export function OutputLocation({ project, stage }: { project: Project; stage: OutputStage }) {
   const mounted = useRef(true); useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const service = useService(); const action = useResearchAction(project);
+  const service = useService(); const action = useProjectAction(project);
   const [pending, setPending] = useState<PickedOutputDirectory | null>(null);
   const [picking, setPicking] = useState(false); const [error, setError] = useState<unknown>(null);
   const [note, setNote] = useState(""); const lock = useRef(false);
@@ -33,4 +33,3 @@ export function OutputLocation({ project, stage }: { project: Project; stage: Ou
     {error != null && <ErrorMessage error={error} />}{action.error && action.feedback}
   </div>;
 }
-export const OutputSettingsPanel = OutputLocation;

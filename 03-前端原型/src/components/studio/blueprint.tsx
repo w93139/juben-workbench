@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { checkBlueprint, type BlueprintData } from "@/domain/blueprint";
 import type { WorkbenchState } from "@/domain/workbench";
 import { changeWorkbench } from "@/services/workbench-store";
-import { useResearchDraft } from "../research/common";
+import { useSavedDraft } from "../hooks/use-saved-draft";
 import { Textarea } from "../ui/textarea";
 import { Input } from "../ui/input";
 import { Button } from "../ui/button";
@@ -11,7 +11,7 @@ import { ErrorMessage } from "../shared";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "../ui/dialog";
 
 export function StudioBlueprint({ id, state, update, onDirty }: { id: string; state: WorkbenchState; update: (state: WorkbenchState) => void; onDirty: (value: boolean) => void }) {
-  const { draft, change: changeDraft, saved } = useResearchDraft(state.blueprint!);
+  const { draft, change: changeDraft, saved } = useSavedDraft(state.blueprint!);
   const originRevision = useRef<number | null>(null);
   function change(next: BlueprintData) { originRevision.current ??= state.revision; changeDraft(next); }
   const [error, setError] = useState<unknown>(null); const [busy, setBusy] = useState(false); const [preview, setPreview] = useState(false);

@@ -1,13 +1,15 @@
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MockProjectService } from "@/services/mock-project-service";
+import { LocalProjectService } from "@/services/local-project-service";
 import type { ProjectDeletionPort, StoragePort } from "@/services/contracts";
 
+describe.each([LocalProjectService, MockProjectService])("%s", (Service) => {
 function setup() {
   let raw: string | null = null; let fail = false;
   const storage: StoragePort = { read: () => raw, write: value => { if (fail) throw new Error("索引写入失败"); raw = value; }, exclusive: action => action() };
   const deletion: ProjectDeletionPort = { prepare: vi.fn(async () => {}), restore: vi.fn(async () => {}), finish: vi.fn(async () => {}) };
   let id = 0;
-  const service = new MockProjectService(storage, undefined, () => String(++id), undefined, deletion);
+  const service = new Service(storage, undefined, () => String(++id), undefined, deletion);
   return { service, deletion, fail: () => { fail = true; } };
 }
 const input = { title: "自有删除测试", note: "", template: "blank" as const };
@@ -42,4 +44,6 @@ it("清理正文失败如实返回待清理状态，索引已移除", async () =
   vi.mocked(deletion.finish).mockRejectedValue(new Error("存储故障"));
   expect(await service.remove(p.id, 0)).toEqual({ cleanupPending: true });
   await expect(service.get(p.id)).rejects.toThrow();
+});
+
 });
