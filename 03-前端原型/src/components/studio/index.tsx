@@ -96,12 +96,12 @@ export function Studio({ project, step }: { project: Project; step: number }) {
     <StudioBudgetPanel key={project.id} projectId={project.id} open={budgetOpen} onOpenChange={setBudgetOpen} />
     <Dialog open={!!costPreview} onOpenChange={open => { if (!open && !busy) setCostPreview(null); }}><DialogContent><DialogTitle>本次创作费用</DialogTitle><DialogDescription>确认后开始当前步骤；刷新页面、查询预算和取消此窗口都不会生成内容。</DialogDescription>{costPreview && <>
       <p>{({ analyze: "原剧本拆解", blueprint: "生成蓝图", review: "正文生成与交叉审查" })[costPreview.data.operation]}最多 {costPreview.data.callsMax} 次调用，保守估算 {yuan(costPreview.data.estimateFen)}。缓存命中、提前停止会减少实际调用；后续正文长度会影响实际费用。</p>
-      {costPreview.data.checkpoint && <p role="status">{costPreview.data.checkpoint.savedUnits > 0 ? `本次可复用 ${costPreview.data.checkpoint.savedUnits}/7 个已保存阶段。上述金额仍按完整七次保守计算，不是剩余调用的精确费用。` : state.reviewProgress?.checkpoint.runId ? "当前蓝图或模型配置没有可复用的已保存阶段，本次将从头执行。请先备份需要保留的旧成果。" : "本次从蓝图检查开始，完成的阶段会逐项保存。"}{costPreview.data.checkpoint.interruptedUnits > 0 && `有 ${costPreview.data.checkpoint.interruptedUnits} 个阶段结果尚未保存，之前可能已收费；继续会重新调用未保存项。`}</p>}
+      {costPreview.data.checkpoint && <p role="status">{costPreview.data.checkpoint.savedUnits > 0 ? `本次可复用 ${costPreview.data.checkpoint.savedUnits}/${costPreview.data.checkpoint.totalUnits} 个已保存调用单元。上述金额仍按完整 ${costPreview.data.callsMax} 次保守计算，不是剩余调用的精确费用。` : state.reviewProgress?.checkpoint.runId ? "当前蓝图或模型配置没有可复用的已保存阶段，本次将从头执行。请先备份需要保留的旧成果。" : "本次从蓝图检查开始，完成的阶段会逐项保存。"}{costPreview.data.checkpoint.interruptedUnits > 0 && `有 ${costPreview.data.checkpoint.interruptedUnits} 个阶段结果尚未保存，之前可能已收费；继续会重新调用未保存项。`}</p>}
       <p>项目累计额度 {yuan(costPreview.data.budget.capFen)}，剩余 {yuan(costPreview.data.budget.remainingFen)}。</p>
       {costPreview.data.estimateFen > costPreview.data.budget.remainingFen && <p>余额低于本步保守估算，可能中途停止。每次请求前单独预留，不会自动增加额度。</p>}
       <QuoteList quotes={costPreview.data.quotes} />
       <p className="text-sm">生成失败仍可能收费；无法核对用量时会保留待核对金额。过期报价会免费更新，后续请求按新报价预留。</p>
-      <Button disabled={busy || locked || costPreview.data.budget.remainingFen <= 0 && costPreview.data.checkpoint?.savedUnits !== 7} onClick={() => void confirmStart()}>按项目额度开始</Button><Button variant="outline" disabled={busy} onClick={() => setCostPreview(null)}>取消</Button>
+      <Button disabled={busy || locked || costPreview.data.budget.remainingFen <= 0 && !costPreview.data.checkpoint?.allCached} onClick={() => void confirmStart()}>按项目额度开始</Button><Button variant="outline" disabled={busy} onClick={() => setCostPreview(null)}>取消</Button>
     </>}</DialogContent></Dialog>
     <section className="workspace-details" aria-label="具体功能内容">
       {error != null && <ErrorMessage error={error} />}{query.error && <ErrorMessage error={query.error} />}{state.error && <ErrorMessage error={new Error(state.error)} />}

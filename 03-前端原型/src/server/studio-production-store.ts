@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
-import { reviewUnits, type ReviewUnitId } from "@/domain/studio-production";
+import { reviewUnits } from "@/domain/studio-production";
+import { artifactPlanSchema, artifactPlanDigest, type ArtifactPlan } from "./artifact-plan";
 import { LocalApiError } from "./local-security";
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 type Run = { id: string; revision: number; active_job_id: string };
-type Unit = { unit_id: ReviewUnitId; request_hash: string; value_json: string | null; job_id: string; call_id: string | null };
+type Unit = { unit_id: string; request_hash: string; value_json: string | null; job_id: string; call_id: string | null };
 /** Shares the job database. Checkpoints have no TTL and cannot be uploaded by clients. */
 export class StudioProductionStore {
   constructor(private db: DatabaseSync, private now = Date.now) {
@@ -19,7 +20,7 @@ export class StudioProductionStore {
       run_id TEXT NOT NULL, unit_id TEXT NOT NULL, job_id TEXT NOT NULL, call_id TEXT,
       response_json TEXT, issues_json TEXT,
       PRIMARY KEY(run_id, unit_id, job_id)
-    )`);
+    ); CREATE TABLE IF NOT EXISTS studio_production_plans (run_id TEXT PRIMARY KEY, plan_hash TEXT NOT NULL, plan_json TEXT NOT NULL)`);
   }
   private transaction<T>(action: () => T): T {
     this.db.exec("BEGIN IMMEDIATE");
@@ -27,7 +28,7 @@ export class StudioProductionStore {
     catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
   /** Called inside the same transaction as job admission and budget preview consumption. */
-  claim(runKey: string, jobId: string) {
+  claim(runKey: string, jobId: string, plan?: ArtifactPlan) {
     if (!this.db.isTransaction) throw new Error("Production claim requires job transaction");
     hash.parse(runKey); z.uuid().parse(jobId);
     let row = this.db.prepare("SELECT id, revision, active_job_id FROM studio_production_runs WHERE run_key = ?").get(runKey) as Run | undefined;
@@ -39,6 +40,14 @@ export class StudioProductionStore {
       row = { id: randomUUID(), revision: 0, active_job_id: jobId };
       this.db.prepare("INSERT INTO studio_production_runs(id, run_key, revision, active_job_id) VALUES (?, ?, 0, ?)").run(row.id, runKey, jobId);
     }
+    const priorPlan = this.plan(row.id);
+    if (priorPlan && (!plan || artifactPlanDigest(priorPlan) !== artifactPlanDigest(plan))) throw new LocalApiError(409, "生成计划已变化，不能混用正文批次。");
+    if (plan && !priorPlan) {
+      const existing = this.db.prepare("SELECT 1 FROM studio_production_units WHERE run_id = ? LIMIT 1").get(row.id);
+      if (existing) throw new LocalApiError(409, "旧批次不支持替换生成计划。");
+      const parsed = artifactPlanSchema.parse(plan);
+      this.db.prepare("INSERT INTO studio_production_plans(run_id, plan_hash, plan_json) VALUES (?, ?, ?)").run(row.id, artifactPlanDigest(parsed), JSON.stringify(parsed));
+    }
     return row.id;
   }
   private owner(runId: string, jobId: string) {
@@ -46,8 +55,22 @@ export class StudioProductionStore {
       WHERE r.id = ? AND j.id = ? AND j.status = 'running' AND j.owner_pid = ? AND j.lease_until > ?`).get(runId, jobId, process.pid, this.now());
     if (!row) throw new LocalApiError(409, "正文批次的执行权已失效，未覆盖已保存成果，也没有自动重试。");
   }
-  private unit(runId: string, unitId: ReviewUnitId) {
-    if (!reviewUnits.some(unit => unit.id === unitId)) throw new Error("Unknown production unit");
+  plan(runId: string): ArtifactPlan | null {
+    const row = this.db.prepare("SELECT plan_json, plan_hash FROM studio_production_plans WHERE run_id = ?").get(runId) as { plan_json: string; plan_hash: string } | undefined;
+    if (!row) return null;
+    const plan = artifactPlanSchema.parse(JSON.parse(row.plan_json));
+    if (artifactPlanDigest(plan) !== row.plan_hash) throw new LocalApiError(409, "冻结生成计划校验失败，未继续调用。");
+    return plan;
+  }
+  private definition(runId: string, unitId: string) {
+    const plan = this.plan(runId);
+    if (plan?.targets.some(target => target.id === unitId)) return { id: unitId, dependencies: ["designGate"] };
+    const definition = reviewUnits.find(unit => unit.id === unitId);
+    if (!definition) throw new Error("Unknown production unit");
+    return plan && unitId === "artifacts" ? { ...definition, dependencies: plan.targets.map(target => target.id) } : definition;
+  }
+  private unit(runId: string, unitId: string) {
+    this.definition(runId, unitId);
     return this.db.prepare("SELECT * FROM studio_production_units WHERE run_id = ? AND unit_id = ?").get(runId, unitId) as Unit | undefined;
   }
   find(runKey: string) {
@@ -55,20 +78,20 @@ export class StudioProductionStore {
     const run = this.db.prepare("SELECT id FROM studio_production_runs WHERE run_key = ?").get(runKey) as { id: string } | undefined;
     return run ? this.snapshot(run.id) : null;
   }
-  read(runId: string, unitId: ReviewUnitId, requestHash: string): unknown {
+  read(runId: string, unitId: string, requestHash: string): unknown {
     hash.parse(requestHash);
     const row = this.unit(runId, unitId);
     if (row && row.request_hash !== requestHash) throw new LocalApiError(409, "该阶段的冻结资料已变化，不能混用原检查点。请修改蓝图后重新建立批次。");
     return row?.value_json ? JSON.parse(row.value_json) : undefined;
   }
-  begin(runId: string, unitId: ReviewUnitId, jobId: string, requestHash: string) {
+  begin(runId: string, unitId: string, jobId: string, requestHash: string) {
     hash.parse(requestHash);
     this.transaction(() => {
       this.owner(runId, jobId);
       const prior = this.unit(runId, unitId);
       if (prior?.value_json || prior?.job_id === jobId) throw new LocalApiError(409, "阶段已保存或已发起，本任务不能重复调用。");
       if (prior && prior.request_hash !== requestHash) throw new LocalApiError(409, "阶段输入已变化，不能覆盖原检查点。");
-      const definition = reviewUnits.find(unit => unit.id === unitId)!;
+      const definition = this.definition(runId, unitId);
       for (const dependency of definition.dependencies) if (!this.unit(runId, dependency)?.value_json) throw new LocalApiError(409, "前置阶段尚未保存，未继续调用。");
       this.db.prepare(`INSERT INTO studio_production_units(run_id, unit_id, request_hash, job_id) VALUES (?, ?, ?, ?)
         ON CONFLICT(run_id, unit_id) DO UPDATE SET job_id = excluded.job_id, call_id = NULL`).run(runId, unitId, requestHash, jobId);
@@ -77,7 +100,7 @@ export class StudioProductionStore {
     });
   }
   private bump(runId: string) { this.db.prepare("UPDATE studio_production_runs SET revision = revision + 1 WHERE id = ?").run(runId); }
-  attachCall(runId: string, unitId: ReviewUnitId, jobId: string, callId: string) {
+  attachCall(runId: string, unitId: string, jobId: string, callId: string) {
     z.uuid().parse(callId);
     this.transaction(() => {
       this.owner(runId, jobId);
@@ -86,7 +109,7 @@ export class StudioProductionStore {
       this.db.prepare("UPDATE studio_production_attempts SET call_id = ? WHERE run_id = ? AND unit_id = ? AND job_id = ?").run(callId, runId, unitId, jobId);
     });
   }
-  save(runId: string, unitId: ReviewUnitId, jobId: string, requestHash: string, value: unknown) {
+  save(runId: string, unitId: string, jobId: string, requestHash: string, value: unknown) {
     const serialized = JSON.stringify(value);
     if (Buffer.byteLength(serialized) > 2_000_000) throw new LocalApiError(413, "阶段成果超过保存容量，未继续调用。已有成果保留。");
     this.transaction(() => {
@@ -96,7 +119,7 @@ export class StudioProductionStore {
       this.bump(runId);
     });
   }
-  reject(runId: string, unitId: ReviewUnitId, jobId: string, value: unknown, issues: string[]) {
+  reject(runId: string, unitId: string, jobId: string, value: unknown, issues: string[]) {
     const serialized = JSON.stringify(value);
     if (Buffer.byteLength(serialized) > 2_000_000) throw new LocalApiError(413, "阶段响应超过保存容量，未继续调用。");
     z.array(z.string()).max(2000).parse(issues);
@@ -112,10 +135,10 @@ export class StudioProductionStore {
     const run = this.db.prepare("SELECT id, revision, active_job_id FROM studio_production_runs WHERE id = ?").get(runId) as Run | undefined;
     if (!run) throw new LocalApiError(409, "正文检查点不存在，未自动重试。");
     const units = this.db.prepare("SELECT * FROM studio_production_units WHERE run_id = ?").all(runId) as Unit[];
-    return { runId, revision: run.revision, units: units.map(unit => {
+    return { runId, revision: run.revision, plan: this.plan(runId), units: units.map(unit => {
       const rejected = this.db.prepare("SELECT response_json, issues_json FROM studio_production_attempts WHERE run_id = ? AND unit_id = ? AND job_id = ?").get(runId, unit.unit_id, unit.job_id) as { response_json: string | null; issues_json: string | null } | undefined;
       const value = unit.value_json ?? rejected?.response_json;
-      return { id: unit.unit_id, jobId: unit.job_id, saved: unit.value_json !== null, callId: unit.call_id, value: value ? JSON.parse(value) as unknown : undefined, issues: rejected?.issues_json ? z.array(z.string()).parse(JSON.parse(rejected.issues_json)) : [] };
+      return { id: unit.unit_id, requestHash: unit.request_hash, jobId: unit.job_id, saved: unit.value_json !== null, callId: unit.call_id, value: value ? JSON.parse(value) as unknown : undefined, issues: rejected?.issues_json ? z.array(z.string()).parse(JSON.parse(rejected.issues_json)) : [] };
     }) };
   }
 }

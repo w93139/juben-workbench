@@ -12,3 +12,9 @@ export function reviewArtifacts(): StudioArtifact[] {
 export function reviewCheckpoint(runId = crypto.randomUUID(), revision = 5): StudioReviewProgress {
   return { runId, revision, steps: reviewUnits.map(unit => ({ id: unit.id, state: ["designGate", "artifacts", "independentA"].includes(unit.id) ? "saved" : unit.id === "independentB" ? "interrupted" : "pending" })), review: { kind: "review", passed: false, issues: ["生成与审查尚未完成"], blueprint: completeBlueprint(), blueprintFingerprint: "a".repeat(64), artifacts: reviewArtifacts(), reports: { designGate: reviewAudit(), independentA: reviewAudit() }, humanPlaytest: "not-run" } };
 }
+
+/** Synthetic provider response; production never fills model provenance on its behalf. */
+export function plannedArtifact(payload: { target: { id: string; module: StudioArtifact["module"]; audience: StudioArtifact["audience"]; characterId: string | null; roundId: string | null; label: string; requiredSourceIds: string[] } }): StudioArtifact {
+  const target = payload.target;
+  return { id: target.id, module: target.module, audience: target.audience, characterId: target.characterId, roundId: target.roundId, title: target.label, content: `${target.label}的自造正文。此段用于程序回归，不能作为真实作品或真人试玩结论。`, sourceIds: [...target.requiredSourceIds] };
+}

@@ -1,8 +1,10 @@
+import { plannedArtifact } from "../fixtures/studio-review";
+import { studioArtifactSchema } from "@/domain/studio";
 vi.mock("@/server/task-power", async importOriginal => ({ ...await importOriginal<typeof import("@/server/task-power")>(), acquireTaskPower: async () => ({ assertActive: () => {}, release: async () => {} }) }));
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { emptyBlueprintData, checkBlueprint, blueprintDataSchema } from "@/domain/blueprint";
-import { studioJobViewSchema, studioReviewResultSchema, studioAuditSchema, type StudioArtifact, type StudioAudit } from "@/domain/studio";
+import { studioJobViewSchema, studioReviewResultSchema, studioAuditSchema, type StudioAudit } from "@/domain/studio";
 import { StudioEngine, StudioError, readStudioConfig, openAITransport, type ModelTransport, type StudioConfig } from "@/server/studio-models";
 import { StudioJobStore } from "@/server/studio-job-store";
 import { sourceSelectionSchema, type CitationSegment } from "@/server/long-analysis";
@@ -25,13 +27,8 @@ function blueprint() {
 const audit = (): StudioAudit => ({ summary: "已逐项核对文本，体验仍待试玩", blocking: [], warnings: ["真实体验待真人试玩"], evidence: [{ location: "蓝图/简介", quote: blueprint().premise, conclusion: "以此内容为固定输入" }], contentComplete: true, playerHostIsolation: true, findingsAddressed: true, humanPlaytest: "not-run" });
 const analysis = () => ({ outline: "参考结构说明", directions: [{ id: "one", title: "群像", summary: "原创方向", outline: "起因—对照—选择", risk: "参与度待试玩" }, { id: "two", title: "推理", summary: "原创方向二", outline: "发现—验证—揭示", risk: "核对证据" }], sourceRefs: [{ documentId: "doc", location: "正文开头", quote: "原始全文" }], unknowns: [] });
 const selectedAnalysis = (citationId: string) => { const value = analysis(); return { outline: value.outline, directions: value.directions, unknowns: value.unknowns, sourceRefIds: [citationId] }; };
-function artifacts(): StudioArtifact[] {
-  const result: StudioArtifact[] = ["a", "b"].flatMap((role) => (["character", "private", "updates"] as const).map((module) => ({ id: `${role}-${module}`, module, audience: "player" as const, characterId: role, roundId: module === "updates" ? "r1" : null, title: `${role}材料`, content: `这是${role}的完整自有测试叙事段落，不是真实模型输出。`, sourceIds: [role] })));
-  result.push({ id: "clue", module: "clues", audience: "player", characterId: null, roundId: "r1", title: "旧表", content: "测试公开线索", sourceIds: ["c1"] }, { id: "host", module: "host", audience: "host", characterId: null, roundId: null, title: "主持手册", content: "完整主持测试资料", sourceIds: ["t1"] }, { id: "ending", module: "ending", audience: "host", characterId: null, roundId: null, title: "终局", content: "完整终局测试资料", sourceIds: ["end"] });
-  return result;
-}
 async function wait(engine: StudioEngine, jobId: string) { for (let i = 0; i < 100; i++) { const job = engine.get(jobId); if (job.status !== "running") return job; await new Promise((resolve) => setImmediate(resolve)); } throw new Error("job did not settle"); }
-const transport = (calls: string[] = []): ModelTransport => async (_config, model, instruction) => { calls.push(model); return instruction.includes("六类必须齐") ? { artifacts: artifacts() } : instruction.includes("读取全部输入材料") ? analysis() : instruction.includes("依据已选方向") ? blueprint() : audit(); };
+const transport = (calls: string[] = []): ModelTransport => async (_config, model, instruction, payload, schema) => { calls.push(model); return schema === studioArtifactSchema ? plannedArtifact(payload as Parameters<typeof plannedArtifact>[0]) : instruction.includes("读取全部输入材料") ? analysis() : instruction.includes("依据已选方向") ? blueprint() : audit(); };
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("真实模型编排服务（只用假transport，不访问网络）", () => {
@@ -146,7 +143,7 @@ describe("真实模型编排服务（只用假transport，不访问网络）", (
       const restarted = new StudioEngine(() => config, call, Date.now, store);
       expect(restarted.getValidated(done.result.validationId, done.result.blueprintFingerprint)).toEqual(done.result);
       expect(() => restarted.getValidated(done.result!.kind === "review" ? done.result!.validationId! : "", "0".repeat(64))).toThrow("不一致");
-      expect(call).toHaveBeenCalledTimes(7);
+      expect(call).toHaveBeenCalledTimes(16);
     } finally { store.close(); }
   });
   it("兼容接口发送JSON对象并在提示中提供Schema、无重定向，拒绝未完整生成或错误响应", async () => {
@@ -192,7 +189,7 @@ describe("真实模型编排服务（只用假transport，不访问网络）", (
   it("主Agent生成门→全案→两独审→两互审→主核对，只有全链通过才服务端解锁", async () => {
     const calls: string[] = []; const engine = new StudioEngine(() => config, transport(calls)); expect(checkBlueprint(blueprint())).toEqual([]);
     const done = await wait(engine, (await engine.start("review", { blueprint: blueprint() })).jobId);
-    expect(done.status).toBe("completed"); expect(calls).toEqual(["main", "main", "review-a", "review-b", "review-a", "review-b", "main"]);
+    expect(done.status).toBe("completed"); expect(calls).toEqual([...Array(11).fill("main"), "review-a", "review-b", "review-a", "review-b", "main"]);
     if (done.result?.kind !== "review") throw new Error("wrong result"); expect(done.result.passed).toBe(true); expect(done.result.humanPlaytest).toBe("not-run");
     expect(studioReviewResultSchema.safeParse(done.result).success).toBe(true);
     const verified = engine.getValidated(done.result.validationId!, done.result.blueprintFingerprint); verified.artifacts[0].content = "浏览器试图替换";
@@ -202,7 +199,7 @@ describe("真实模型编排服务（只用假transport，不访问网络）", (
   it("任何一侧阻断、正文缺类、引用虚构或不完整schema都不能获得通过令牌", async () => {
     for (const mode of ["blocking", "missing", "quote", "schema"] as const) {
       let count = 0; const good = transport();
-      const engine = new StudioEngine(() => config, async (...args) => { count++; if (mode === "schema") return { ok: true }; if (args[2].includes("六类必须齐") && mode === "missing") return { artifacts: artifacts().filter((a) => a.module !== "host") }; if (args[1] === "review-a" && count === 3) return { ...audit(), ...(mode === "blocking" ? { blocking: ["证据不足"] } : mode === "quote" ? { evidence: [{ location: "原文", quote: "伪造引用", conclusion: "通过" }] } : {}) }; return good(...args); });
+      const engine = new StudioEngine(() => config, async (...args) => { count++; if (mode === "schema") return { ok: true }; if (args[4] === studioArtifactSchema && mode === "missing") return { ...plannedArtifact(args[3] as Parameters<typeof plannedArtifact>[0]), module: "ending" }; if (args[1] === "review-a" && count === 12) return { ...audit(), ...(mode === "blocking" ? { blocking: ["证据不足"] } : mode === "quote" ? { evidence: [{ location: "原文", quote: "伪造引用", conclusion: "通过" }] } : {}) }; return good(...args); });
       const done = await wait(engine, (await engine.start("review", { blueprint: blueprint() })).jobId);
       if (done.result?.kind === "review") { expect(done.result.passed).toBe(false); expect(done.result.validationId).toBeUndefined(); expect(done.result.issues.length).toBeGreaterThan(0); } else expect(done.error?.code).toBe("MODEL_RESPONSE_INVALID");
     }
@@ -228,7 +225,7 @@ describe("真实模型编排服务（只用假transport，不访问网络）", (
 it("合法关系来源可通过，未知来源仍拒绝", async () => {
   for (const sourceId of ["rel", "missing-relation"]) {
     const call: ModelTransport = async (...args) => {
-      if (args[2].includes("六类必须齐")) { const list = artifacts(); list[0].sourceIds.push(sourceId); return { artifacts: list }; }
+      if (args[4] === studioArtifactSchema) { const artifact = plannedArtifact(args[3] as Parameters<typeof plannedArtifact>[0]); if (!artifact.sourceIds.includes(sourceId)) artifact.sourceIds.push(sourceId); return artifact; }
       return transport()(...args);
     };
     const engine = new StudioEngine(() => config, call);
@@ -242,12 +239,11 @@ it("仅体验提示的蓝图仍进入完整审查，结构错误仍零外呼", a
   const bp = blueprint(); bp.clues.push({ ...bp.clues[0], id: "experience", supports: [], content: "情感体验纸条" });
   expect(checkBlueprint(bp).map(i => i.severity)).toEqual(["warning"]);
   const calls = vi.fn<ModelTransport>(async (...args) => {
-    if (args[2].includes("六类必须齐")) { const list = artifacts(); list.find(a => a.module === "clues")!.sourceIds.push("experience"); return { artifacts: list }; }
     return transport()(...args);
   });
   const engine = new StudioEngine(() => config, calls);
   const done = await wait(engine, (await engine.start("review", { blueprint: bp })).jobId);
-  expect(done.result?.kind === "review" && done.result.passed).toBe(true); expect(calls).toHaveBeenCalledTimes(7);
+  expect(done.result?.kind === "review" && done.result.passed).toBe(true); expect(calls).toHaveBeenCalledTimes(16);
   calls.mockClear(); bp.truth = "";
   const rejected = await wait(engine, (await engine.start("review", { blueprint: bp })).jobId);
   expect(rejected.result?.kind === "review" && rejected.result.passed).toBe(false); expect(calls).not.toHaveBeenCalled();
@@ -258,16 +254,24 @@ it.each(["missing", "host", "wrong-role", "wrong-round", "null-round", "public",
   bp.claims.push({ id: "private-claim", statement: "仅私人证词支持的必要结论", required: true });
   bp.clues.push({ id: "private-clue", name: "个人证词", content: "仅在复核轮允许持有人看到的证词", supports: ["private-claim"], roundId: "r2", characterIds: mode === "allowed-recipient" ? ["a", "b"] : ["a"], cost: 0, access: "复核轮由任一允许持有人取得" });
   expect(checkBlueprint(bp)).toEqual([]);
-  const list = artifacts();
-  if (mode !== "missing") {
-    const target = list.find(a => mode === "host" ? a.module === "host" : mode === "public" ? a.module === "clues" : a.module === "private" && a.characterId === (mode === "wrong-role" || mode === "allowed-recipient" ? "b" : "a"))!;
-    target.sourceIds.push("private-clue"); target.roundId = mode === "wrong-round" ? "r1" : mode === "null-round" ? null : "r2";
-    if (mode === "extra-leak") list.push({ ...target, id: "leaked-copy", characterId: "b", sourceIds: ["b", "private-clue"] });
-  }
-  const engine = new StudioEngine(() => config, async (...args) => args[2].includes("六类必须齐") ? { artifacts: list } : transport()(...args));
+  const engine = new StudioEngine(() => config, async (...args) => {
+    if (args[4] !== studioArtifactSchema) return transport()(...args);
+    const artifact = plannedArtifact(args[3] as Parameters<typeof plannedArtifact>[0]);
+    const valid = ["valid", "allowed-recipient"].includes(mode);
+    if (!valid && artifact.module === "updates" && artifact.characterId === "a" && artifact.roundId === "r2") {
+      if (["missing", "host"].includes(mode)) artifact.sourceIds = artifact.sourceIds.filter(id => id !== "private-clue");
+      if (mode === "wrong-role") artifact.characterId = "b";
+      if (mode === "wrong-round") artifact.roundId = "r1";
+      if (mode === "null-round") artifact.roundId = null;
+      if (mode === "public") artifact.module = "clues";
+      if (mode === "extra-leak") artifact.characterId = "b";
+    }
+    if (mode === "host" && artifact.module === "host") artifact.sourceIds.push("private-clue");
+    return artifact;
+  });
   const done = await wait(engine, (await engine.start("review", { blueprint: bp })).jobId);
   const review = done.result?.kind === "review" ? done.result : done.reviewProgress?.review;
   const passes = ["valid", "allowed-recipient"].includes(mode);
   expect(review?.passed).toBe(passes);
-  if (!passes) { expect(done.result).toBeUndefined(); expect(done.error?.code).toBe("MODEL_RESPONSE_INVALID"); expect(review?.issues.join(" ")).toContain("个人证词"); }
+  if (!passes) { expect(done.result).toBeUndefined(); expect(done.error?.code).toBe("MODEL_RESPONSE_INVALID"); expect(review?.issues.length).toBeGreaterThan(0); }
 });

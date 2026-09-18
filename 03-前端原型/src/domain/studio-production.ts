@@ -1,5 +1,5 @@
 /** Version changes invalidate old paid previews and incompatible checkpoints. */
-export const REVIEW_PROTOCOL = "review-checkpoints/1";
+export const REVIEW_PROTOCOL = "review-artifacts/2";
 export const reviewUnits = [
   { id: "designGate", label: "蓝图检查", role: "main", dependencies: [] },
   { id: "artifacts", label: "正文材料", role: "main", dependencies: ["designGate"] },

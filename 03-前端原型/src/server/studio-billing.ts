@@ -14,9 +14,9 @@ export function studioConfigFingerprint(config: StudioConfig) {
 export function studioInputFingerprint(projectId: string, operation: string, serializedInput: string) {
   return createHash("sha256").update(JSON.stringify([projectId]) + operation + serializedInput).digest("hex");
 }
-export function studioExecutionFingerprint(config: StudioConfig, operation: string) {
+export function studioExecutionFingerprint(config: StudioConfig, operation: string, planHash = "") {
   const configuration = studioConfigFingerprint(config);
-  return operation === "review" ? createHash("sha256").update(configuration + REVIEW_PROTOCOL).digest("hex") : configuration;
+  return operation === "review" ? createHash("sha256").update(configuration + REVIEW_PROTOCOL + planHash).digest("hex") : configuration;
 }
 export function studioProductionKey(inputFingerprint: string, executionFingerprint: string) {
   return createHash("sha256").update(inputFingerprint + executionFingerprint).digest("hex");

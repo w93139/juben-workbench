@@ -44,14 +44,15 @@ it("任务404释放也撤销旧通过资格，迟到404不能释放另一新任�
   expect(applyMissingStudioJob(state, old)).toBe(false); expect(state.job?.jobId).toBe(view.jobId);
   expect(applyMissingStudioJob(state, view.jobId)).toBe(true); expect(state.job).toBeNull(); expect(state.review?.validationId).toBeUndefined(); expect(reviewCurrent(state)).toBe(false); expect(state.error).toContain("继续生成与审查");
 });
-it("v2备份保存阶段全文并剥离执行编号，v1仍可读但不能冒充支持部分成果", () => {
+it("v3备份保存阶段全文并剥离执行编号，v1仍可读但不能冒充支持部分成果", () => {
   const { project, state, view, now } = fixture(); applyStudioJobView(state, { ...view, status: "failed", error: { code: "TEST", message: "中断" } });
-  const backup = createProjectBackup(project, state, true); expect(backup.schemaVersion).toBe(2);
+  const backup = createProjectBackup(project, state, true); expect(backup.schemaVersion).toBe(3);
   expect(backup.workbench.reviewProgress?.jobId).toBeNull(); expect(backup.workbench.reviewProgress?.checkpoint.runId).toBeNull();
   expect(backup.workbench.reviewProgress?.checkpoint.review).toEqual(view.reviewProgress!.review);
   const restored = restoredProject(parseProjectBackup(JSON.stringify(backup)), crypto.randomUUID(), "b".repeat(64), now).workbench;
   expect(restored.reviewProgress?.checkpoint.review.artifacts).toHaveLength(9); expect(restored.reviewProgress?.checkpoint.runId).toBeNull(); expect(restored.job).toBeNull(); expect(reviewCurrent(restored)).toBe(false);
   expect(() => parseProjectBackup(JSON.stringify({ ...backup, schemaVersion: 1 }))).toThrow("版本或内容不完整");
+  expect(parseProjectBackup(JSON.stringify({ ...backup, schemaVersion: 2 })).workbench.reviewProgress?.checkpoint.generation).toBeUndefined();
   const legacy = { ...backup, schemaVersion: 1, workbench: { ...backup.workbench, reviewProgress: undefined } };
   expect(parseProjectBackup(JSON.stringify(legacy)).workbench.reviewProgress).toBeNull();
 });

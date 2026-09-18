@@ -7,6 +7,7 @@ import { LocalApiError } from "./local-security";
 import { StudioBudgetLedger } from "./studio-budget";
 import type { StudioBudgetClaim } from "@/domain/studio-budget";
 import { StudioProductionStore } from "./studio-production-store";
+import type { ArtifactPlan } from "./artifact-plan";
 import { hydrateReviewProgress } from "./studio-review-progress";
 
 // Only validated results and request hashes are retained: never credentials or input files.
@@ -63,14 +64,14 @@ export class StudioJobStore {
     const row = this.db.prepare("SELECT fingerprint, view_json FROM studio_jobs WHERE id = ?").get(id) as Row | undefined;
     return row ? { fingerprint: row.fingerprint, view: studioJobViewSchema.parse(JSON.parse(row.view_json)) } : null;
   }
-  claim(view: StudioJobView, fingerprint: string, budget?: StudioBudgetClaim, configHash?: string, productionKey?: string): { created: boolean; fingerprint: string; view: StudioJobView; productionId?: string } {
+  claim(view: StudioJobView, fingerprint: string, budget?: StudioBudgetClaim, configHash?: string, productionKey?: string, productionPlan?: ArtifactPlan): { created: boolean; fingerprint: string; view: StudioJobView; productionId?: string } {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const prior = this.read(view.jobId);
       if (prior) { this.db.exec("COMMIT"); return { ...prior, created: false }; }
       const count = this.db.prepare("SELECT COUNT(*) AS count FROM studio_jobs WHERE status = 'running'").get() as { count: number };
       if (count.count >= 2) throw new LocalApiError(429, "当前已有两个创作任务，请等待完成后再试。");
-      const productionId = productionKey ? this.production.claim(productionKey, view.jobId) : undefined;
+      const productionId = productionKey ? this.production.claim(productionKey, view.jobId, productionPlan) : undefined;
       if (view.reviewProgress && productionId) view.reviewProgress.runId = productionId;
       if (budget) this.budget.admitInTransaction(budget, view.jobId, fingerprint, configHash);
       this.db.prepare("INSERT INTO studio_jobs(id, fingerprint, view_json, status, owner_pid, lease_until, expires_at) VALUES (?, ?, ?, 'running', ?, ?, ?)").run(view.jobId, fingerprint, JSON.stringify(studioJobViewSchema.parse(view)), process.pid, this.now() + LEASE, this.now() + RETENTION);

@@ -45,10 +45,14 @@ export const archivedStudioReviewSchema = studioReviewContentSchema.refine(value
 export type ArchivedStudioReview = z.infer<typeof archivedStudioReviewSchema>;
 export const studioReviewResultSchema = studioReviewContentSchema.extend({ validationId: z.uuid().optional() }).refine(value => !value.passed || (!!value.validationId && completeReview(value)), "通过状态缺少完整审查链");
 export type StudioReviewResult = z.infer<typeof studioReviewResultSchema>;
+const productionState = z.enum(["pending", "running", "saved", "interrupted"]);
 export const studioReviewProgressSchema = z.object({
   runId: z.uuid().nullable(), revision: z.number().int().nonnegative().safe(),
   steps: z.array(z.object({ id: z.enum(reviewUnits.map(unit => unit.id)), state: z.enum(["pending", "running", "saved", "interrupted"]) }).strict()).length(7)
     .refine(steps => new Set(steps.map(step => step.id)).size === 7, "阶段编号不能重复"),
+  generation: z.object({ planHash: z.string().regex(/^[a-f0-9]{64}$/), units: z.array(z.object({
+    id: text(100), label: text(500), module: z.enum(moduleIds), characterId: text(100).nullable(), roundId: text(100).nullable(), state: productionState,
+  }).strict()).max(240).refine(units => new Set(units.map(unit => unit.id)).size === units.length, "生成单元编号不能重复") }).strict().optional(),
   review: studioReviewContentSchema.extend({ passed: z.literal(false), blueprint: blueprintDataSchema }),
 }).strict();
 export type StudioReviewProgress = z.infer<typeof studioReviewProgressSchema>;

@@ -9,10 +9,10 @@ const portableWorkbenchSchema = workbenchSchema.omit({ review: true, job: true, 
   review: archivedStudioReviewSchema.nullable(), job: z.null(), error: z.null(),
 });
 export const projectBackupSchema = z.object({
-  format: z.literal("juben-workbench/project-backup"), schemaVersion: z.union([z.literal(1), z.literal(2)]),
+  format: z.literal("juben-workbench/project-backup"), schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   id: z.uuid(), exportedAt: z.iso.datetime(),
   project: projectSchema, workbench: portableWorkbenchSchema, authoringRecordExists: z.boolean(),
-}).strict().refine(value => value.schemaVersion === 2 || value.workbench.reviewProgress === null, "阶段成果备份需要版本2");
+}).strict().refine(value => value.schemaVersion >= 2 || value.workbench.reviewProgress === null, "阶段成果备份需要版本2").refine(value => value.schemaVersion === 3 || !value.workbench.reviewProgress?.checkpoint.generation, "分模块成果备份需要版本3");
 export type ProjectBackup = z.infer<typeof projectBackupSchema>;
 
 /** Keep content/relative naming, but never carry local output authority or active work. */
@@ -34,6 +34,14 @@ export function portableProject(input: Project): Project {
   }
   return project;
 }
+function portableReviewProgress(progress: WorkbenchState["reviewProgress"]): WorkbenchState["reviewProgress"] {
+  if (!progress) return null;
+  const checkpoint = progress.checkpoint;
+  const portableState = (state: "pending" | "running" | "saved" | "interrupted") => state === "running" ? "interrupted" as const : state;
+  return { ...progress, jobId: null, checkpoint: { ...checkpoint, runId: null, steps: checkpoint.steps.map(step => ({ ...step, state: portableState(step.state) })),
+    ...(checkpoint.generation ? { generation: { ...checkpoint.generation, units: checkpoint.generation.units.map(unit => ({ ...unit, state: portableState(unit.state) })) } } : {}),
+  } };
+}
 export function createProjectBackup(project: Project, state: WorkbenchState, authoringRecordExists: boolean, now = new Date().toISOString(), id = crypto.randomUUID()): ProjectBackup {
   const valid = workbenchSchema.parse(state);
   if (valid.job) throw new Error("当前项目仍有任务在运行或等待确认，请任务结束后再备份。");
@@ -43,8 +51,8 @@ export function createProjectBackup(project: Project, state: WorkbenchState, aut
     void _authority;
     review = archivedStudioReviewSchema.parse(content);
   }
-  const reviewProgress = valid.reviewProgress && { ...valid.reviewProgress, jobId: null, checkpoint: { ...valid.reviewProgress.checkpoint, runId: null, steps: valid.reviewProgress.checkpoint.steps.map(step => ({ ...step, state: step.state === "running" ? "interrupted" as const : step.state })) } };
-  const backup = projectBackupSchema.parse({ format: "juben-workbench/project-backup", schemaVersion: 2, id, exportedAt: now, project: portableProject(project), workbench: { ...valid, review, reviewProgress, job: null, error: null }, authoringRecordExists });
+  const reviewProgress = portableReviewProgress(valid.reviewProgress);
+  const backup = projectBackupSchema.parse({ format: "juben-workbench/project-backup", schemaVersion: 3, id, exportedAt: now, project: portableProject(project), workbench: { ...valid, review, reviewProgress, job: null, error: null }, authoringRecordExists });
   serializeProjectBackup(backup); return backup;
 }
 export function serializeProjectBackup(backup: ProjectBackup) {
@@ -75,7 +83,7 @@ export function restoredProject(backup: ProjectBackup, operationId: string, fing
     if (reviewArchives.length >= 20) throw new Error("审查历史已达20份，无法完整加入本次记录，未恢复且未删除任何内容。");
     reviewArchives.push({ id: backup.id, origin: "backup-import", importedAt: now, blueprintRevision: backup.workbench.reviewBlueprintRevision, review: backup.workbench.review });
   }
-  const reviewProgress = backup.workbench.reviewProgress && { ...backup.workbench.reviewProgress, jobId: null, checkpoint: { ...backup.workbench.reviewProgress.checkpoint, runId: null, steps: backup.workbench.reviewProgress.checkpoint.steps.map(step => ({ ...step, state: step.state === "running" ? "interrupted" as const : step.state })) } };
+  const reviewProgress = portableReviewProgress(backup.workbench.reviewProgress);
   const workbench = workbenchSchema.parse({ ...backup.workbench, review: null, reviewBlueprintRevision: null, reviewProgress, reviewArchives, restoredFrom: origin, job: null, error: null });
   return { project: projectSchema.parse(project), workbench };
 }
