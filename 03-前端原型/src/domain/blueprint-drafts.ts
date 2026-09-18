@@ -1,4 +1,5 @@
 import { blueprintDraftSchema, type BlueprintDraft, type WorkbenchState } from "./workbench";
+import { archiveCurrentBlueprint } from "./blueprint-history";
 
 /** These helpers mutate only the caller's transaction snapshot. */
 export function putBlueprintDraft(state: WorkbenchState, draft: BlueprintDraft, expected: number | null) {
@@ -22,8 +23,7 @@ export function applyBlueprintDraft(state: WorkbenchState, id: string, revision:
   if (state.revision !== draft.baseRevision || state.blueprintRevision !== draft.baseBlueprintRevision) throw new Error("项目已在其他页面更新，草稿仍保留；请先对照当前蓝图，再决定是否应用。");
   if (state.job) throw new Error("任务仍在处理，草稿已保留，请任务结束后再提交。");
   if (!state.blueprint) throw new Error("正式蓝图尚不存在，草稿已保留。");
-  if (state.versions.length >= 20) throw new Error("蓝图历史已达20份，本次未保存；草稿和现有版本已保留。历史整理入口将在后续阶段补齐，目前请保留草稿。");
-  state.versions.push({ revision: state.blueprintRevision, data: state.blueprint });
+  archiveCurrentBlueprint(state);
   state.blueprint = draft.data; state.blueprintRevision++; state.revision++;
   removeBlueprintDraft(state, id, revision);
 }

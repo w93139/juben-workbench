@@ -270,3 +270,18 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: 3px solid
 .project-delete:hover { transform: translateY(-1px); }
 .project-delete:focus-visible { outline: 2px solid #aa503a; outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { .project-delete { transition: none; } .project-delete:hover { transform: none; } }
+
+/* Structured authoring mounts one record form at a time. */
+.blueprint-section-nav { display: flex; flex-wrap: wrap; gap: 8px; }
+.blueprint-record-picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); gap: 8px; max-height: 280px; overflow: auto; }
+.blueprint-record-picker button { text-align: left; border: 1px solid var(--border); border-radius: 8px; padding: 10px; overflow-wrap: anywhere; }
+.blueprint-record-picker button[aria-pressed="true"] { background: var(--muted); border-color: var(--primary); }
+.blueprint-record-picker small { display: block; opacity: .65; font-size: 11px; }
+.blueprint-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.blueprint-field { min-width: 0; overflow-wrap: anywhere; }
+.blueprint-field .plain-select { max-width: 100%; }
+.blueprint-options { min-width: 0; }
+.blueprint-options input[type="checkbox"] { margin-top: 4px; flex-shrink: 0; }
+@media (max-width: 640px) { .blueprint-field-grid { grid-template-columns: 1fr; } .blueprint-section-nav button { flex: 1 0 28%; } }
+
+.plain-select { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; background: var(--background); color: var(--foreground); min-width: 0; }

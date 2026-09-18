@@ -1,3 +1,4 @@
+import { archiveCurrentBlueprint } from "@/domain/blueprint-history";
 import { materialSchema, type Material, type WorkbenchState } from "@/domain/workbench";
 import { studioInputs, studioJobViewSchema, type StudioOperation } from "@/domain/studio";
 import { ANALYSIS_DOCUMENT_LIMIT, ANALYSIS_INPUT_BYTES, SINGLE_CONTEXT_BYTES } from "@/domain/analysis-limits";
@@ -63,7 +64,7 @@ export async function startStudioJob(projectId: string, state: WorkbenchState, o
   const requestId = crypto.randomUUID();
   const reserved = await changeWorkbench(projectId, state.revision, next => {
     if (next.job) throw new Error("当前已有任务在处理。");
-    if (operation === "blueprint" && next.blueprint && next.versions.length >= 20) throw new Error("蓝图历史已达20份，当前尚无历史整理入口。本次未调用模型，现有内容保留；待版本管理完善后再生成。");
+    if (operation === "blueprint" && next.blueprint && next.versions.length >= 20) throw new Error("蓝图历史已达20份，请在创作蓝图的历史版本中备份并删除不再需要的旧版，再重新生成；本次未调用模型。");
     next.job = { jobId: requestId, operation, phase: "正在提交资料", sourceRevision: state.sourceRevision, blueprintRevision: state.blueprintRevision, submittedAt: Date.now() };
     next.error = null;
   });
@@ -107,7 +108,7 @@ export async function pollStudioJob(projectId: string, state: WorkbenchState) {
     const result = job.result;
     if (result?.kind === "analysis" && operation === "analyze") { next.analysis = result.analysis; next.analysisSourceRevision = next.sourceRevision; next.choiceId = null; next.blueprintSourceRevision = null; }
     else if (result?.kind === "blueprint" && operation === "blueprint") {
-      if (next.blueprint) { if (next.versions.length >= 20) { next.error = "蓝图历史已达20份，新蓝图未替换旧稿；现有内容保留。当前尚无历史整理入口，请勿反复重新生成，待版本管理完善后再处理。"; return; } next.versions.push({ revision: next.blueprintRevision, data: next.blueprint }); }
+      if (next.blueprint) { if (next.versions.length >= 20) { next.error = "蓝图历史已达20份，新蓝图未替换旧稿；请先备份并整理历史，勿反复重新生成。"; return; } archiveCurrentBlueprint(next); }
       next.blueprint = result.blueprint; next.blueprintRevision++; next.blueprintSourceRevision = next.sourceRevision; next.blueprintChoiceId = next.choiceId;
     } else if (result?.kind === "review" && operation === "review") { next.review = result; next.reviewBlueprintRevision = next.blueprintRevision; }
     else throw new Error("返回结果与当前任务不一致，原内容已保留。");

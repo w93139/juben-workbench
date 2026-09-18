@@ -1,5 +1,6 @@
 import { workbenchSchema, emptyWorkbench, type BlueprintDraft, type WorkbenchState } from "@/domain/workbench";
 import { applyBlueprintDraft, putBlueprintDraft, removeBlueprintDraft } from "@/domain/blueprint-drafts";
+import { assertHistoryVersion, removeBlueprintHistory, type BlueprintVersion, type HistorySelection } from "@/domain/blueprint-history";
 
 export const WORKBENCH_DB = "juben-workbench:authoring:v1";
 export const WORKBENCH_STORE = "projects";
@@ -56,8 +57,14 @@ export function changeWorkbench(id: string, revision: number, update: (state: Wo
     update(state); state.revision++;
   });
 }
-export async function saveBlueprintDraft(id: string, draft: BlueprintDraft, expected: number | null): Promise<BlueprintDraft> {
-  const next = await transactWorkbench(id, state => putBlueprintDraft(state, draft, expected));
+export async function saveBlueprintDraft(id: string, draft: BlueprintDraft, expected: number | null, history?: HistorySelection): Promise<BlueprintDraft> {
+  const next = await transactWorkbench(id, state => {
+    if (history) {
+      assertHistoryVersion(state, history.historyRevision, history.index, history.version);
+      if (state.revision !== draft.baseRevision || state.blueprintRevision !== draft.baseBlueprintRevision) throw new Error("正式蓝图或项目已变化，请重新对照后恢复。");
+    }
+    putBlueprintDraft(state, draft, expected);
+  });
   return next.blueprintDrafts.find(item => item.id === draft.id)!;
 }
 export async function deleteBlueprintDraft(id: string, draftId: string, revision: number, allowMissing = false): Promise<void> {
@@ -65,6 +72,10 @@ export async function deleteBlueprintDraft(id: string, draftId: string, revision
 }
 export function commitBlueprintDraft(id: string, draftId: string, revision: number): Promise<WorkbenchState> {
   return transactWorkbench(id, state => applyBlueprintDraft(state, draftId, revision));
+}
+
+export function deleteBlueprintHistory(id: string, historyRevision: number, index: number, selected: BlueprintVersion) {
+  return transactWorkbench(id, state => removeBlueprintHistory(state, historyRevision, index, selected));
 }
 
 /** A tombstone serializes deletion against job reservation and stale-tab writes. */
