@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowUpRight, FolderOpen, FileText, Search } from "lucide-react";
 import { DeleteProjectButton } from "./delete-project";
+import { RestoreProjectButton } from "./project-backup";
 import { AppFrame } from "./app-frame";
 import { UploadProjectButton } from "./create-project";
 import { Input } from "./ui/input";
@@ -32,7 +33,7 @@ export function ProjectListPage({ home = false }: { home?: boolean }) {
   return <AppFrame title={home ? "工作台首页" : "我的项目"}>
     <div className="page-heading"><div><span className="eyebrow">{home ? "FROM STRUCTURE TO ORIGINAL STORIES" : "YOUR STORY ARCHIVE"}</span><h1 className="serif">{home ? "从完整剧本，走向新的故事。" : "我的项目"}</h1></div></div>
     {home ? <UploadProjectButton /> : <>
-      <div className="section-heading"><h2>全部项目<span className="count">{mine.length}</span></h2></div>
+      <div className="section-heading"><h2>全部项目<span className="count">{mine.length}</span></h2><RestoreProjectButton /></div>
       <div className="search-tools"><div className="search-box"><Search size={15} /><Input aria-label="搜索项目名称" placeholder="搜索项目名称…" value={search} onChange={event => setSearch(event.target.value)} /></div></div>
       {projects.isPending ? <Loading /> : projects.error ? <LoadError error={projects.error} retry={() => void projects.refetch()} /> : shown.length ? <ProjectTable projects={shown} /> : <section className="panel empty-state"><FolderOpen size={26} className="mx-auto" /><h2>{search ? "没有找到匹配的项目" : "当前浏览器和地址下暂无项目"}</h2>{!search && <p className="field-hint">之前上传过？请先用原浏览器和相同网址打开，再检查项目记录。</p>}<Link className="text-link" href="/">上传文件夹</Link></section>}
     </>}

@@ -4,6 +4,7 @@ export const STORAGE_KEY = "juben-workbench:projects:v1";
 
 export class BrowserStorage implements StoragePort {
   private queue: Promise<unknown> = Promise.resolve();
+  get crossTabSafe() { return typeof navigator !== "undefined" && !!navigator.locks; }
 
   read() {
     try {

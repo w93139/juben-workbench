@@ -2,7 +2,8 @@ import { workbenchSchema, emptyWorkbench, type BlueprintDraft, type WorkbenchSta
 import { applyBlueprintDraft, putBlueprintDraft, removeBlueprintDraft } from "@/domain/blueprint-drafts";
 
 export const WORKBENCH_DB = "juben-workbench:authoring:v1";
-const STORE = "projects";
+export const WORKBENCH_STORE = "projects";
+const STORE = WORKBENCH_STORE;
 function isDeleted(value: unknown): value is { deleted: true; backup?: unknown } {
   return !!value && typeof value === "object" && "deleted" in value && value.deleted === true;
 }
@@ -10,7 +11,7 @@ class DeletedWorkbenchError extends Error {}
 function assertAvailable(value: unknown) {
   if (isDeleted(value)) throw new DeletedWorkbenchError("项目已删除或删除尚未完成，请返回项目列表。原文件不受影响。");
 }
-async function database(): Promise<IDBDatabase> {
+export async function openWorkbenchDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     let settled = false;
     const request = indexedDB.open(WORKBENCH_DB, 1);
@@ -20,15 +21,18 @@ async function database(): Promise<IDBDatabase> {
   });
 }
 export async function readWorkbench(id: string): Promise<WorkbenchState> {
-  const db = await database();
+  return (await readWorkbenchSnapshot(id)).state;
+}
+export async function readWorkbenchSnapshot(id: string): Promise<{ exists: boolean; state: WorkbenchState }> {
+  const db = await openWorkbenchDatabase();
   try { return await new Promise((resolve, reject) => {
     const req = db.transaction(STORE).objectStore(STORE).get(id);
-    req.onsuccess = () => { try { assertAvailable(req.result); resolve(req.result === undefined ? emptyWorkbench() : workbenchSchema.parse(req.result)); } catch (failure) { reject(failure instanceof DeletedWorkbenchError ? failure : new Error("本机创作数据无法读取，已保留原数据，请先备份再处理。")); } };
+    req.onsuccess = () => { try { assertAvailable(req.result); resolve({ exists: req.result !== undefined, state: req.result === undefined ? emptyWorkbench() : workbenchSchema.parse(req.result) }); } catch (failure) { reject(failure instanceof DeletedWorkbenchError ? failure : new Error("本机创作数据无法读取，已保留原数据，请先备份再处理。")); } };
     req.onerror = () => reject(new Error("读取创作数据失败，请重试。"));
   }); } finally { db.close(); }
 }
 async function transactWorkbench(id: string, update: (state: WorkbenchState) => void): Promise<WorkbenchState> {
-  const db = await database();
+  const db = await openWorkbenchDatabase();
   try {
     const result = await new Promise<WorkbenchState>((resolve, reject) => {
       const transaction = db.transaction(STORE, "readwrite");
@@ -65,7 +69,7 @@ export function commitBlueprintDraft(id: string, draftId: string, revision: numb
 
 /** A tombstone serializes deletion against job reservation and stale-tab writes. */
 async function deleteTransaction(id: string, action: "prepare" | "restore" | "finish") {
-  const db = await database();
+  const db = await openWorkbenchDatabase();
   try { await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE, "readwrite"); const store = tx.objectStore(STORE);
     const request = store.get(id); let error: unknown;

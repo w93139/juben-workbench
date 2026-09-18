@@ -31,7 +31,7 @@ export function LoadError({ error, retry }: { error: unknown; retry: () => void 
   function download() {
     if (backup === null) return;
     const url = URL.createObjectURL(new Blob([backup], { type: "application/json" }));
-    const link = document.createElement("a"); link.href = url; link.download = "本间工作台-原始数据备份.json"; link.click();
+    const link = document.createElement("a"); link.href = url; link.download = "本间工作台-原始项目索引.json"; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   async function reset() {
@@ -41,12 +41,12 @@ export function LoadError({ error, retry }: { error: unknown; retry: () => void 
   }
   return <section className="panel"><AlertCircle size={22} className="mb-4 text-destructive" /><ErrorMessage error={error} />
     {actionError && !open ? <ErrorMessage error={actionError} /> : null}
-    <div className="flex flex-wrap gap-3"><Button variant="outline" onClick={retry}>重新读取</Button>{recoverable && <Button ref={recoveryTrigger} variant="outline" onClick={prepare}>备份与恢复</Button>}<Link href="/projects/demo-names" className="text-link">仍可浏览原始样例 <ArrowUpRight size={13} /></Link></div>
-    <Dialog open={open} onOpenChange={(value) => { if (!busy) setOpen(value); }}><DialogContent onCloseAutoFocus={(event) => { event.preventDefault(); (recoveryTrigger.current ?? document.getElementById("main"))?.focus(); }}><DialogTitle>恢复本机工作区</DialogTitle><DialogDescription>此操作会清空本浏览器中本工作台保存的项目。原始样例不受影响。建议先下载原数据备份。</DialogDescription>
+    <div className="flex flex-wrap gap-3"><Button variant="outline" onClick={retry}>重新读取</Button>{recoverable && <Button ref={recoveryTrigger} variant="outline" onClick={prepare}>项目索引排错</Button>}<Link href="/projects/demo-names" className="text-link">仍可浏览原始样例 <ArrowUpRight size={13} /></Link></div>
+    <Dialog open={open} onOpenChange={(value) => { if (!busy) setOpen(value); }}><DialogContent onCloseAutoFocus={(event) => { event.preventDefault(); (recoveryTrigger.current ?? document.getElementById("main"))?.focus(); }}><DialogTitle>项目索引排错</DialogTitle><DialogDescription>此操作仅清空项目索引，会使现有项目无法从列表打开。此处下载不包含IndexedDB中的材料、蓝图或草稿，不能代替完整项目备份。</DialogDescription>
       {actionError ? <ErrorMessage error={actionError} /> : null}
-      <Button variant="outline" onClick={download} disabled={backup === null}>下载原数据备份</Button>
-      <label className="flex items-start gap-3 text-sm leading-6"><input type="checkbox" className="mt-1" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />我了解这将清空本机项目，并已自行保留需要的数据</label>
-      <Button variant="destructive" disabled={!confirmed || backup === null || busy} onClick={reset}>{busy ? "正在恢复…" : "清空并恢复工作区"}</Button>
+      <Button variant="outline" onClick={download} disabled={backup === null}>下载原始项目索引</Button>
+      <label className="flex items-start gap-3 text-sm leading-6"><input type="checkbox" className="mt-1" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />我了解这将清空项目索引，并已另行保留完整创作数据</label>
+      <Button variant="destructive" disabled={!confirmed || backup === null || busy} onClick={reset}>{busy ? "正在清空…" : "清空项目索引"}</Button>
     </DialogContent></Dialog>
   </section>;
 }

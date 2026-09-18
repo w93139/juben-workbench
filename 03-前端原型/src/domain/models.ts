@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { restoreOriginSchema } from "./project-restore";
 import { folderPlanSchema } from "./folder-plan";
 import { productionWorkspaceSchema } from "./production";
 import { blueprintWorkspaceSchema } from "./blueprint";
@@ -40,6 +41,7 @@ export const projectSchema = z.object({
   outputSettings: outputSettingsSchema.default(defaultOutputSettings),
   production: productionWorkspaceSchema.nullable().default(null),
   folderPlan: folderPlanSchema.nullable().default(null),
+  restoredFrom: restoreOriginSchema.nullable().default(null),
 });
 export type Project = z.infer<typeof projectSchema>;
 

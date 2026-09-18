@@ -6,13 +6,14 @@ import { BrowserStorage, STORAGE_KEY } from "@/services/browser-storage";
 import { LocalProjectService } from "@/services/local-project-service";
 import { BrowserOutputDirectories } from "@/services/browser-output-directories";
 import { browserProjectDeletion } from "@/services/workbench-store";
+import { browserProjectRecovery } from "@/services/project-recovery-store";
 import type { LocalProjectPort } from "@/services/contracts";
 
 const ServiceContext = createContext<LocalProjectPort | null>(null);
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [client] = useState(() => new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 0 } } }));
-  const [service] = useState(() => new LocalProjectService(new BrowserStorage(), undefined, undefined, new BrowserOutputDirectories(), browserProjectDeletion));
+  const [service] = useState(() => new LocalProjectService(new BrowserStorage(), undefined, undefined, new BrowserOutputDirectories(), browserProjectDeletion, browserProjectRecovery));
   useEffect(() => {
     const refresh = (event: StorageEvent) => {
       if (event.key === STORAGE_KEY || event.key === null) void client.invalidateQueries();

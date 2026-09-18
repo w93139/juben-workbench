@@ -2,7 +2,8 @@ import { z } from "zod";
 import { emptyResearch } from "@/domain/research";
 import { outputSettingsInputSchema, type OutputSettingsInput } from "@/domain/output-settings";
 import { blankDecisions, createProjectSchema, envelopeSchema, legacyEnvelopeSchema, projectSchema, updateProjectSchema, type CreateProjectInput, type Project, type ProjectEnvelope, type UpdateProjectInput } from "@/domain/models";
-import { ServiceError, type LocalProjectPort, type ProjectDeletionPort, type StoragePort, type OutputDirectoryPort } from "./contracts";
+import { ServiceError, type LocalProjectPort, type ProjectDeletionPort, type ProjectRecoveryPort, type StoragePort, type OutputDirectoryPort } from "./contracts";
+import { createProjectBackup, projectBackupSchema, projectBackupFingerprint, restoredProject, type ProjectBackup } from "@/domain/project-backup";
 import { baseline } from "./project-sample";
 
 function parseInput<T>(schema: z.ZodType<T>, input: unknown): T {
@@ -18,6 +19,7 @@ export class LocalProjectService implements LocalProjectPort {
     protected uuid: () => string = () => crypto.randomUUID(),
     private outputDirectories?: OutputDirectoryPort,
     private deletion?: ProjectDeletionPort,
+    private recovery?: ProjectRecoveryPort,
   ) {}
 
   protected readEnvelope(): ProjectEnvelope {
@@ -46,6 +48,7 @@ export class LocalProjectService implements LocalProjectPort {
   }
 
   async list() {
+    await this.recoverPending();
     const { projects } = this.readEnvelope();
     return structuredClone([...projects].sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "")).concat(baseline));
   }
@@ -56,6 +59,7 @@ export class LocalProjectService implements LocalProjectPort {
     const deletion = this.deletion;
     return this.storage.exclusive(async () => {
       const envelope = this.readEnvelope();
+      await this.reconcile(envelope);
       const project = envelope.projects.find(item => item.id === id);
       if (!project) throw new ServiceError("NOT_FOUND", "项目已不存在，请刷新列表。");
       if (project.readOnly) throw new ServiceError("READ_ONLY", "只读项目不能删除。");
@@ -74,6 +78,7 @@ export class LocalProjectService implements LocalProjectPort {
 
   async get(id: string) {
     if (id === baseline.id) return structuredClone(baseline);
+    await this.recoverPending();
     const project = this.readEnvelope().projects.find((item) => item.id === id);
     if (!project) throw new ServiceError("NOT_FOUND", "没有找到这个项目。它可能属于另一个浏览器，或本机数据已被清除。");
     return structuredClone(project);
@@ -148,7 +153,62 @@ export class LocalProjectService implements LocalProjectPort {
   async resetLocalProjects(expectedBackup: string) {
     return this.storage.exclusive(async () => {
       if (this.storage.read() !== expectedBackup) throw new ServiceError("CONFLICT", "本机数据刚刚发生变化。请重新获取备份后再恢复。");
+      if (this.recovery && (await this.recovery.pending()).length) await this.reconcile(this.readEnvelope());
       this.writeEnvelope({ schemaVersion: 3, projects: [] });
+    });
+  }
+
+  private async reconcile(envelope: ProjectEnvelope) {
+    if (!this.recovery) return;
+    const pending = await this.recovery.pending();
+    if (pending.length && !this.storage.crossTabSafe) throw new ServiceError("STORAGE_UNAVAILABLE", "存在未完成恢复，但当前浏览器缺少跨页锁；请使用支持本机存储锁的浏览器继续。");
+    for (const journal of pending) {
+      const published = envelope.projects.find(project => project.id === journal.project.id);
+      if (published) {
+        if (published.restoredFrom?.operationId !== journal.operationId || published.restoredFrom.fingerprint !== journal.fingerprint) throw new ServiceError("CONFLICT", "恢复副本身份已变化，未自动覆盖或清理。");
+        await this.recovery.complete(journal.operationId);
+      } else await this.recovery.rollback(journal.operationId);
+    }
+  }
+  private async recoverPending() {
+    if (this.recovery) await this.storage.exclusive(async () => this.reconcile(this.readEnvelope()));
+  }
+  async exportProjectBackup(id: string): Promise<ProjectBackup> {
+    if (!this.recovery) throw new ServiceError("STORAGE_UNAVAILABLE", "当前环境不支持完整项目备份。");
+    return this.storage.exclusive(async () => {
+      const envelope = this.readEnvelope(); await this.reconcile(envelope);
+      const project = envelope.projects.find(item => item.id === id);
+      if (!project) throw new ServiceError("NOT_FOUND", "没有找到可备份的个人项目。");
+      const snapshot = await this.recovery!.readSnapshot(id);
+      return createProjectBackup(project, snapshot.state, snapshot.exists, this.now(), this.uuid());
+    });
+  }
+  async restoreProjectBackup(input: ProjectBackup, operationId: string): Promise<{ project: Project; cleanupPending: boolean }> {
+    if (!this.recovery || !this.storage.crossTabSafe) throw new ServiceError("STORAGE_UNAVAILABLE", "当前浏览器不支持跨页安全恢复，请使用支持本机存储锁的浏览器；原项目未改变。");
+    const backup = projectBackupSchema.parse(input);
+    const fingerprint = await projectBackupFingerprint(backup);
+    const restored = restoredProject(backup, operationId, fingerprint, this.now());
+    return this.storage.exclusive(async () => {
+      const envelope = this.readEnvelope();
+      const pending = (await this.recovery!.pending()).find(journal => journal.operationId === operationId);
+      if (pending && pending.fingerprint !== fingerprint) throw new ServiceError("CONFLICT", "恢复编号已被另一份备份使用，未覆盖或清理未完成的副本。");
+      await this.reconcile(envelope);
+      const existing = envelope.projects.find(project => project.id === restored.project.id);
+      if (existing) {
+        if (existing.restoredFrom?.operationId !== operationId || existing.restoredFrom.fingerprint !== fingerprint) throw new ServiceError("CONFLICT", "恢复编号已被另一份备份使用，未覆盖已有副本。");
+        const body = await this.recovery!.readSnapshot(existing.id);
+        if (!body.exists || body.state.restoredFrom?.operationId !== operationId || body.state.restoredFrom.fingerprint !== fingerprint) throw new ServiceError("STORAGE_CORRUPT", "恢复副本正文缺失或身份不一致，已保留项目记录。");
+        return { project: structuredClone(existing), cleanupPending: false };
+      }
+      await this.recovery!.stage({ operationId, fingerprint, project: restored.project }, restored.workbench);
+      try { this.writeEnvelope({ ...envelope, projects: [...envelope.projects, restored.project] }); }
+      catch (failure) {
+        try { await this.recovery!.rollback(operationId); }
+        catch { throw new ServiceError("STORAGE_UNAVAILABLE", "恢复尚未完成，已保留恢复记录；请重新读取项目列表后重试。原项目没有改变。"); }
+        throw failure;
+      }
+      try { await this.recovery!.complete(operationId); return { project: structuredClone(restored.project), cleanupPending: false }; }
+      catch { return { project: structuredClone(restored.project), cleanupPending: true }; }
     });
   }
 }

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { blueprintDataSchema } from "./blueprint";
-import { studioAnalysisSchema, studioReviewResultSchema } from "./studio";
+import { archivedStudioReviewSchema, studioAnalysisSchema, studioReviewResultSchema } from "./studio";
+import { restoreOriginSchema } from "./project-restore";
 
 export const materialSchema = z.object({ id: z.string(), name: z.string().max(1000), size: z.number().nonnegative(), status: z.enum(["read", "unsupported", "error"]), text: z.string().max(300000), method: z.string(), warnings: z.array(z.string()), excluded: z.boolean().default(false) });
 export type Material = z.infer<typeof materialSchema>;
@@ -10,6 +11,10 @@ export const blueprintDraftSchema = z.object({
   data: blueprintDataSchema, updatedAt: z.iso.datetime(),
 });
 export type BlueprintDraft = z.infer<typeof blueprintDraftSchema>;
+export const reviewArchiveSchema = z.object({
+  id: z.uuid(), origin: z.literal("backup-import"), importedAt: z.iso.datetime(),
+  blueprintRevision: z.number().int().nullable(), review: archivedStudioReviewSchema,
+}).strict();
 export const workbenchSchema = z.object({
   revision: z.number().int().nonnegative(), sourceRevision: z.number().int().nonnegative(),
   documents: z.array(materialSchema).max(2000),
@@ -19,11 +24,13 @@ export const workbenchSchema = z.object({
   versions: z.array(z.object({ revision: z.number().int(), data: blueprintDataSchema })).max(20),
   blueprintDrafts: z.array(blueprintDraftSchema).max(12).refine(items => new Set(items.map(item => item.id)).size === items.length, "草稿编号不能重复").default([]),
   review: studioReviewResultSchema.nullable(), reviewBlueprintRevision: z.number().int().nullable(),
+  reviewArchives: z.array(reviewArchiveSchema).max(20).refine(items => new Set(items.map(item => item.id)).size === items.length, "审查历史编号不能重复").default([]),
+  restoredFrom: restoreOriginSchema.nullable().default(null),
   job: z.object({ jobId: z.string(), operation: z.enum(["analyze", "blueprint", "review"]), phase: z.string(), sourceRevision: z.number().int(), blueprintRevision: z.number().int(), submittedAt: z.number().optional() }).nullable(),
   error: z.string().nullable(),
 });
 export type WorkbenchState = z.infer<typeof workbenchSchema>;
-export function emptyWorkbench(): WorkbenchState { return { revision: 0, sourceRevision: 0, documents: [], analysis: null, analysisSourceRevision: null, choiceId: null, instructions: "", blueprint: null, blueprintRevision: 0, blueprintSourceRevision: null, blueprintChoiceId: null, versions: [], blueprintDrafts: [], review: null, reviewBlueprintRevision: null, job: null, error: null }; }
+export function emptyWorkbench(): WorkbenchState { return { revision: 0, sourceRevision: 0, documents: [], analysis: null, analysisSourceRevision: null, choiceId: null, instructions: "", blueprint: null, blueprintRevision: 0, blueprintSourceRevision: null, blueprintChoiceId: null, versions: [], blueprintDrafts: [], review: null, reviewBlueprintRevision: null, reviewArchives: [], restoredFrom: null, job: null, error: null }; }
 export function readableMaterials(state: WorkbenchState) { return state.documents.filter(d => !d.excluded); }
 export function materialsReady(state: WorkbenchState) { const docs = readableMaterials(state); return docs.length > 0 && docs.every(d => d.status === "read" && !!d.text.trim()); }
 export function analysisCurrent(state: WorkbenchState) { return !!state.analysis && state.analysisSourceRevision === state.sourceRevision; }

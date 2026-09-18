@@ -30,12 +30,18 @@ export const studioInputs = {
   review: z.object({ blueprint: blueprintDataSchema }).strict(),
 };
 export type StudioOperation = keyof typeof studioInputs;
-export const studioReviewResultSchema = z.object({
+const studioReviewContentSchema = z.object({
   kind: z.literal("review"), passed: z.boolean(), issues: z.array(z.string()).max(2000), artifacts: z.array(studioArtifactSchema).max(240),
   reports: z.object({ designGate: studioAuditSchema.optional(), independentA: studioAuditSchema.optional(), independentB: studioAuditSchema.optional(), mutualA: studioAuditSchema.optional(), mutualB: studioAuditSchema.optional(), coordinator: studioAuditSchema.optional() }).strict(),
   blueprint: blueprintDataSchema.optional(),
-  validationId: z.string().uuid().optional(), blueprintFingerprint: z.string().regex(/^[a-f0-9]{64}$/), humanPlaytest: z.literal("not-run"),
-}).strict().refine((value) => !value.passed || (!!value.validationId && !value.issues.length && value.artifacts.length >= 6 && [value.reports.designGate, value.reports.independentA, value.reports.independentB, value.reports.mutualA, value.reports.mutualB, value.reports.coordinator].every((report) => report && !report.blocking.length && report.contentComplete && report.playerHostIsolation && report.findingsAddressed)), "通过状态缺少完整审查链");
+  blueprintFingerprint: z.string().regex(/^[a-f0-9]{64}$/), humanPlaytest: z.literal("not-run"),
+}).strict();
+function completeReview(value: z.infer<typeof studioReviewContentSchema>) {
+  return !value.issues.length && value.artifacts.length >= 6 && [value.reports.designGate, value.reports.independentA, value.reports.independentB, value.reports.mutualA, value.reports.mutualB, value.reports.coordinator].every((report) => report && !report.blocking.length && report.contentComplete && report.playerHostIsolation && report.findingsAddressed);
+}
+export const archivedStudioReviewSchema = studioReviewContentSchema.refine(value => !value.passed || completeReview(value), "历史通过状态缺少完整审查链");
+export type ArchivedStudioReview = z.infer<typeof archivedStudioReviewSchema>;
+export const studioReviewResultSchema = studioReviewContentSchema.extend({ validationId: z.uuid().optional() }).refine(value => !value.passed || (!!value.validationId && completeReview(value)), "通过状态缺少完整审查链");
 export type StudioReviewResult = z.infer<typeof studioReviewResultSchema>;
 export const studioResultSchema = z.union([z.object({ kind: z.literal("analysis"), analysis: studioAnalysisSchema }).strict(), z.object({ kind: z.literal("blueprint"), blueprint: blueprintDataSchema }).strict(), studioReviewResultSchema]);
 export type StudioResult = z.infer<typeof studioResultSchema>;

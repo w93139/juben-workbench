@@ -4,6 +4,8 @@ import type { BlueprintData, BlueprintWorkspace } from "@/domain/blueprint";
 import type { OutputSettingsInput, PickedOutputDirectory } from "@/domain/output-settings";
 import type { CreateProjectInput, DecisionStatus, DemoContent, Project, UpdateProjectInput, WorkflowStage } from "@/domain/models";
 import type { SourceFileInput, IssueResolution, MechanismChoice, OriginalDirection, ResearchCatalog, CreativePlanInput } from "@/domain/research";
+import type { ProjectBackup } from "@/domain/project-backup";
+import type { WorkbenchState } from "@/domain/workbench";
 
 export type ServiceErrorCode = "NOT_FOUND" | "READ_ONLY" | "CONFLICT" | "INVALID_INPUT" | "STORAGE_UNAVAILABLE" | "STORAGE_CORRUPT" | "STORAGE_VERSION" | "CANCELLED" | "DIRECTORY_UNAVAILABLE";
 
@@ -35,6 +37,14 @@ export interface ProjectDeletionPort {
   restore(id: string): Promise<void>;
   finish(id: string): Promise<void>;
 }
+export interface ProjectRestoreJournal { operationId: string; fingerprint: string; project: Project }
+export interface ProjectRecoveryPort {
+  readSnapshot(id: string): Promise<{ exists: boolean; state: WorkbenchState }>;
+  pending(): Promise<ProjectRestoreJournal[]>;
+  stage(journal: ProjectRestoreJournal, state: WorkbenchState): Promise<void>;
+  rollback(operationId: string): Promise<void>;
+  complete(operationId: string): Promise<void>;
+}
 
 export interface LocalProjectPort {
   remove(id: string, revision: number): Promise<{ cleanupPending: boolean }>;
@@ -47,6 +57,8 @@ export interface LocalProjectPort {
   getOutputDirectoryCapability(): OutputDirectoryCapability;
   getBackup(): Promise<string | null>;
   resetLocalProjects(expectedBackup: string): Promise<void>;
+  exportProjectBackup(id: string): Promise<ProjectBackup>;
+  restoreProjectBackup(backup: ProjectBackup, operationId: string): Promise<{ project: Project; cleanupPending: boolean }>;
 }
 
 /** Historical simulated workflow contract. */
@@ -96,6 +108,7 @@ export interface ProjectService extends LocalProjectPort {
 }
 
 export interface StoragePort {
+  readonly crossTabSafe?: boolean;
   read(): string | null;
   write(value: string): void;
   exclusive<T>(operation: () => Promise<T>): Promise<T>;
