@@ -691,3 +691,9 @@
 - 先红证据：新服务端定向11项旧实现9失败（其中public已有阻断但诊断断言不同）、2通过；两项旧前端跨页回归均失败。
 - Fresh：35文件281项单元、ESLint、独立typecheck及Webpack构建通过；40项E2E首跑37通过，3项出现浏览器会话/执行超时，未改代码单worker定向重跑3/3通过（14秒），无未解决失败。15项同步保护测试通过。
 - 独立后端审查无Blocker/Important；前端审查发现重试拆解未检查草稿pending，已补代码与回归并复审关闭。本轮未调用真实模型，原整本及阶段B仍待独立验收。
+
+### 批次2 · 清理不可达旧界面
+
+- 独立审查及从当前17个App入口的静态import遍历均确认22个文件不可达、无保留源码/测试直接导入：旧blueprint三文件、production三文件、research十文件、旧export、stage-content、workspace-actions、development-progress组件，以及blueprint-editor/development-progress领域辅助。
+- 仅删除上述22项；保留仍活跃的research/common、workspace-panels、export-service、Mock服务、全部历史数据schema与旧URL映射。CSS混合规则和共用模块在下一批处理，历史E2E保留为档案。
+- Fresh：281项单元、ESLint、独立typecheck、Webpack构建通过。并行E2E再次出现3个不同场景的浏览器会话超时，未修改代码或放宽断言，改为单worker完整重跑40/40通过（51.8秒）；后续本机回归采用单worker降低并发干扰。独立删除范围复审无Blocker/Important。净移除1083行旧源码。
