@@ -59,8 +59,14 @@ function artifactIssues(blueprint: BlueprintData, artifacts: StudioArtifact[]) {
   if (new Set(artifacts.map((a) => a.id)).size !== artifacts.length) issues.push("正文材料编号重复");
   for (const moduleId of ["character", "private", "updates", "clues", "host", "ending"] as const) if (!artifacts.some((a) => a.module === moduleId)) issues.push(`缺少正文类别：${moduleId}`);
   for (const role of blueprint.characters) for (const moduleId of ["character", "private", "updates"] as const) if (!artifacts.some((a) => a.module === moduleId && a.characterId === role.id && a.audience === "player")) issues.push(`${role.name}缺少${moduleId}材料`);
-  const allIds = new Set([...blueprint.characters, ...blueprint.events, ...blueprint.knowledge, ...blueprint.clues, ...blueprint.claims, ...blueprint.rounds, ...blueprint.triggers, ...blueprint.endings].map((item) => item.id));
+  const allIds = new Set([...blueprint.characters, ...blueprint.relationships, ...blueprint.events, ...blueprint.knowledge, ...blueprint.clues, ...blueprint.claims, ...blueprint.rounds, ...blueprint.triggers, ...blueprint.endings].map((item) => item.id));
   for (const clue of blueprint.clues.filter((item) => item.characterIds.length === 0)) if (!artifacts.some((artifact) => artifact.module === "clues" && artifact.sourceIds.includes(clue.id))) issues.push(`公共线索“${clue.name}”未覆盖到正文材料`);
+  for (const clue of blueprint.clues.filter(item => item.characterIds.length > 0)) {
+    const allowed = (artifact: StudioArtifact) => artifact.audience === "player" && ["character", "private", "updates"].includes(artifact.module) && clue.characterIds.includes(artifact.characterId ?? "") && artifact.roundId === clue.roundId;
+    const linked = artifacts.filter(artifact => artifact.sourceIds.includes(clue.id));
+    if (!linked.some(allowed)) issues.push(`私人线索“${clue.name}”未发放到允许角色的指定轮次材料`);
+    if (linked.some(artifact => artifact.audience === "player" && !allowed(artifact))) issues.push(`私人线索“${clue.name}”存在角色或发放轮次越界`);
+  }
   for (const artifact of artifacts) {
     if (!artifact.sourceIds.length || artifact.sourceIds.some((sourceId) => !allIds.has(sourceId))) issues.push(`${artifact.title}的蓝图来源关联缺失或无效`);
     if (artifact.module === "clues" && artifact.sourceIds.some((sourceId) => blueprint.clues.some((clue) => clue.id === sourceId && clue.characterIds.length > 0))) issues.push(`${artifact.title}把限定读者线索放入公共线索`);
@@ -202,14 +208,14 @@ export class StudioEngine {
       return { kind: "blueprint", blueprint };
     }
     const { blueprint } = studioInputs.review.parse(input);
-    const reports: StudioReviewResult["reports"] = {}; const structural = checkBlueprint(blueprint).map((issue) => issue.message);
+    const reports: StudioReviewResult["reports"] = {}; const structural = checkBlueprint(blueprint).filter(issue => issue.severity === "error").map((issue) => issue.message);
     const result: StudioReviewResult = { kind: "review", passed: false, issues: structural, artifacts: [], reports, blueprint, blueprintFingerprint: createHash("sha256").update(JSON.stringify(blueprint)).digest("hex"), humanPlaytest: "not-run" };
     if (structural.length) return result;
     phase("主 Agent 正在核对蓝图是否具备完整正文生成条件");
     reports.designGate = await this.call(config, config.mainModel, "按剧本设计六道门检查蓝图内容，而不只看字段是否非空。核对每角色贡献与关系、时间因果、知识来源、必要结论可获得证据、轮次主持兜底。未成形内容必须阻断。给原文定位和摘录，所有真人试玩状态not-run。", { blueprint }, studioAuditSchema, job);
     result.issues = auditIssues(reports.designGate, "主Agent生成前检查", blueprint); if (result.issues.length) return result;
     phase("主 Agent 正在从同一蓝图生成六类完整开本材料");
-    const bundle = await this.call(config, config.mainModel, "从通过设计门的同一蓝图生成完整可读开本包，不是摘要/提纲/占位。六类必须齐：character角色本、private私人信息、updates阶段更新、clues公共线索、host主持手册、ending终局主持材料。每角色有独立前三类材料。玩家只知道矩阵允许的内容；秘密和未来信息按轮隔离。host/ending仅host受众。sourceIds明确关联蓝图记录。主持含真相、发放时间、触发兜底、完整终局执行。", { blueprint }, artifactBundleSchema, job);
+    const bundle = await this.call(config, config.mainModel, "从通过设计门的同一蓝图生成完整可读开本包，不是摘要/提纲/占位。六类必须齐：character角色本、private私人信息、updates阶段更新、clues公共线索、host主持手册、ending终局主持材料。每角色有独立前三类材料。玩家只知道矩阵允许的内容；秘密和未来信息按轮隔离。host/ending仅host受众。sourceIds明确关联蓝图记录，包括关系记录。每条限定角色线索必须关联到至少一份允许角色的玩家材料，roundId显式填写该线索指定轮次，不可用null代替；不得向其他角色或其他轮次发放，主持副本不算玩家覆盖。主持含真相、发放时间、触发兜底、完整终局执行。", { blueprint }, artifactBundleSchema, job);
     result.artifacts = bundle.artifacts; result.issues = artifactIssues(blueprint, result.artifacts); if (result.issues.length) return result;
     const snapshot = { blueprint, artifacts: result.artifacts }; context(snapshot);
     phase("审查模型 A 与 B 正在独立核对同一份完整资料");

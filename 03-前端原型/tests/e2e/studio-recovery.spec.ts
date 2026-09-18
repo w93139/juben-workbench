@@ -269,3 +269,61 @@ test("本机暂停后刷新不自动重试，手动继续保留材料并使用�
   await page.getByRole("button", { name: "重试拆解", exact: true }).click();
   await expect(page.getByRole("heading", { name: "原剧本拆解大纲", exact: true })).toBeVisible(); expect(posts).toBe(1);
 });
+
+test("创作要求跨页刷新后，旧页聚焦失焦不覆盖新值", async ({ page, context }) => {
+  await offlineCapability(page); const base = await seedProject(page, "要求跨页同步"); await writeState(page, base, prepared());
+  await page.goto(`${base}/stages/analysis`); await page.getByText("补充你的创作要求", { exact: true }).click();
+  const field = page.getByRole("textbox", { name: "补充创作要求", exact: true });
+  await field.fill("A先保存的要求"); await page.getByRole("heading", { name: "选择改写方向", exact: true }).click();
+  await expect.poll(async () => (await readState(page, base)).instructions).toBe("A先保存的要求");
+  const other = await context.newPage(); await offlineCapability(other); await other.goto(`${base}/stages/analysis`);
+  await other.getByText("补充你的创作要求", { exact: true }).click();
+  await other.getByRole("textbox", { name: "补充创作要求", exact: true }).fill("B之后保存的新要求");
+  await other.getByRole("heading", { name: "选择改写方向", exact: true }).click();
+  await expect.poll(async () => (await readState(page, base)).instructions).toBe("B之后保存的新要求");
+  await page.bringToFront(); await expect(field).toHaveValue("B之后保存的新要求");
+  const revision = (await readState(page, base)).revision;
+  await field.focus(); await page.getByRole("heading", { name: "选择改写方向", exact: true }).click();
+  expect((await readState(page, base)).instructions).toBe("B之后保存的新要求"); expect((await readState(page, base)).revision).toBe(revision);
+});
+test("未保存要求遇到另页更新时保留草稿并拒绝覆盖", async ({ page, context }) => {
+  await offlineCapability(page); const base = await seedProject(page, "要求草稿冲突"); await writeState(page, base, prepared());
+  await page.goto(`${base}/stages/analysis`); await page.getByText("补充你的创作要求", { exact: true }).click();
+  const other = await context.newPage(); await offlineCapability(other); await other.goto(`${base}/stages/analysis`);
+  await other.getByText("补充你的创作要求", { exact: true }).click();
+  const field = page.getByRole("textbox", { name: "补充创作要求", exact: true });
+  await field.fill("A未保存的要求");
+  await other.getByRole("textbox", { name: "补充创作要求", exact: true }).fill("B已保存的新要求");
+  await other.getByRole("heading", { name: "选择改写方向", exact: true }).click();
+  await expect.poll(async () => (await readState(page, base)).instructions).toBe("B已保存的新要求");
+  await page.getByRole("heading", { name: "选择改写方向", exact: true }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "项目已在其他页面更新" })).toBeVisible();
+  await expect(field).toHaveValue("A未保存的要求"); expect((await readState(page, base)).instructions).toBe("B已保存的新要求");
+  await expect(page.getByRole("button", { name: "生成蓝图", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "使用最新已保存要求", exact: true }).click();
+  await expect(field).toHaveValue("B已保存的新要求");
+});
+
+test("创作要求保存失败可见、保留输入并阻止生成", async ({ page }) => {
+  await offlineCapability(page); const base = await seedProject(page, "要求保存失败"); await writeState(page, base, prepared());
+  await page.goto(`${base}/stages/analysis`); await page.getByText("补充你的创作要求", { exact: true }).click();
+  const field = page.getByRole("textbox", { name: "补充创作要求", exact: true }); await field.fill("需要保留的草稿");
+  await page.evaluate(() => { const original = IDBObjectStore.prototype.put; let failed = false; IDBObjectStore.prototype.put = function (value, key) { if (!failed) { failed = true; throw new DOMException("测试存储不足", "QuotaExceededError"); } return original.call(this, value, key); }; });
+  await page.getByRole("heading", { name: "选择改写方向", exact: true }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "测试存储不足" })).toBeVisible(); await expect(field).toHaveValue("需要保留的草稿");
+  expect((await readState(page, base)).instructions).toBe("");
+  await expect(page.getByRole("button", { name: "生成蓝图", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "重试保存要求", exact: true }).click();
+  await expect.poll(async () => (await readState(page, base)).instructions).toBe("需要保留的草稿");
+  await page.getByRole("button", { name: /责任与选择/ }).click();
+  await expect(page.getByRole("button", { name: "生成蓝图", exact: true })).toBeEnabled();
+});
+
+
+test("过期分析页的要求尚未保存时不能重试拆解", async ({ page }) => {
+  await offlineCapability(page); const base = await seedProject(page, "过期拆解要求"); const state = prepared(); state.sourceRevision++;
+  await writeState(page, base, state); await page.goto(`${base}/stages/analysis`);
+  await page.getByText("补充你的创作要求", { exact: true }).click();
+  await page.getByRole("textbox", { name: "补充创作要求", exact: true }).fill("尚未保存的新要求");
+  await expect(page.getByRole("button", { name: "拆解大纲", exact: true })).toBeDisabled();
+});

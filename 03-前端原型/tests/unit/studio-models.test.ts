@@ -224,3 +224,49 @@ describe("真实模型编排服务（只用假transport，不访问网络）", (
     expect(() => engine.getValidated(done.result!.kind === "review" ? done.result!.validationId! : "")).toThrow(StudioError);
   });
 });
+
+it("合法关系来源可通过，未知来源仍拒绝", async () => {
+  for (const sourceId of ["rel", "missing-relation"]) {
+    const call: ModelTransport = async (...args) => {
+      if (args[2].includes("六类必须齐")) { const list = artifacts(); list[0].sourceIds.push(sourceId); return { artifacts: list }; }
+      return transport()(...args);
+    };
+    const engine = new StudioEngine(() => config, call);
+    const done = await wait(engine, (await engine.start("review", { blueprint: blueprint() })).jobId);
+    if (done.result?.kind !== "review") throw new Error("结果类型错误");
+    expect(done.result.passed).toBe(sourceId === "rel");
+  }
+});
+it("仅体验提示的蓝图仍进入完整审查，结构错误仍零外呼", async () => {
+  const bp = blueprint(); bp.clues.push({ ...bp.clues[0], id: "experience", supports: [], content: "情感体验纸条" });
+  expect(checkBlueprint(bp).map(i => i.severity)).toEqual(["warning"]);
+  const calls = vi.fn<ModelTransport>(async (...args) => {
+    if (args[2].includes("六类必须齐")) { const list = artifacts(); list.find(a => a.module === "clues")!.sourceIds.push("experience"); return { artifacts: list }; }
+    return transport()(...args);
+  });
+  const engine = new StudioEngine(() => config, calls);
+  const done = await wait(engine, (await engine.start("review", { blueprint: bp })).jobId);
+  expect(done.result?.kind === "review" && done.result.passed).toBe(true); expect(calls).toHaveBeenCalledTimes(7);
+  calls.mockClear(); bp.truth = "";
+  const rejected = await wait(engine, (await engine.start("review", { blueprint: bp })).jobId);
+  expect(rejected.result?.kind === "review" && rejected.result.passed).toBe(false); expect(calls).not.toHaveBeenCalled();
+});
+it.each(["missing", "host", "wrong-role", "wrong-round", "null-round", "public", "extra-leak", "valid", "allowed-recipient"])("私人线索覆盖与发放边界：%s", async mode => {
+  const bp = blueprint();
+  bp.rounds.push({ ...bp.rounds[0], id: "r2", name: "复核" });
+  bp.claims.push({ id: "private-claim", statement: "仅私人证词支持的必要结论", required: true });
+  bp.clues.push({ id: "private-clue", name: "个人证词", content: "仅在复核轮允许持有人看到的证词", supports: ["private-claim"], roundId: "r2", characterIds: mode === "allowed-recipient" ? ["a", "b"] : ["a"], cost: 0, access: "复核轮由任一允许持有人取得" });
+  expect(checkBlueprint(bp)).toEqual([]);
+  const list = artifacts();
+  if (mode !== "missing") {
+    const target = list.find(a => mode === "host" ? a.module === "host" : mode === "public" ? a.module === "clues" : a.module === "private" && a.characterId === (mode === "wrong-role" || mode === "allowed-recipient" ? "b" : "a"))!;
+    target.sourceIds.push("private-clue"); target.roundId = mode === "wrong-round" ? "r1" : mode === "null-round" ? null : "r2";
+    if (mode === "extra-leak") list.push({ ...target, id: "leaked-copy", characterId: "b", sourceIds: ["b", "private-clue"] });
+  }
+  const engine = new StudioEngine(() => config, async (...args) => args[2].includes("六类必须齐") ? { artifacts: list } : transport()(...args));
+  const done = await wait(engine, (await engine.start("review", { blueprint: bp })).jobId);
+  if (done.result?.kind !== "review") throw new Error("结果类型错误");
+  const passes = ["valid", "allowed-recipient"].includes(mode);
+  expect(done.result.passed).toBe(passes);
+  if (!passes) { expect(done.result.validationId).toBeUndefined(); expect(done.result.issues.join(" ")).toContain("个人证词"); }
+});
