@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { changeWorkbench, readWorkbench } from "@/services/workbench-store";
+import { changeWorkbench, readWorkbench, saveBlueprintDraft, commitBlueprintDraft, deleteBlueprintDraft } from "@/services/workbench-store";
 import { emptyWorkbench } from "@/domain/workbench";
+import { emptyBlueprintData } from "@/domain/blueprint";
 
 // Only the IndexedDB transport is faked; both public storage functions run unchanged.
 function storedRecord(value: unknown) {
@@ -39,6 +40,11 @@ it.each([
   await expect(changeWorkbench("deleted-project", 0, update)).rejects.toThrow("项目已删除或删除尚未完成");
   expect(update).not.toHaveBeenCalled(); expect(storage.put).not.toHaveBeenCalled();
   expect(storage.transactions[1].abort).toHaveBeenCalledOnce(); expect(storage.close).toHaveBeenCalledTimes(2);
+  const draftId = crypto.randomUUID();
+  await expect(saveBlueprintDraft("deleted-project", { id: draftId, revision: 1, baseRevision: 0, baseBlueprintRevision: 0, data: emptyBlueprintData(), updatedAt: new Date().toISOString() }, null)).rejects.toThrow("项目已删除");
+  await expect(commitBlueprintDraft("deleted-project", draftId, 1)).rejects.toThrow("项目已删除");
+  await expect(deleteBlueprintDraft("deleted-project", draftId, 1)).rejects.toThrow("项目已删除");
+  expect(storage.put).not.toHaveBeenCalled();
 });
 it("损坏正文仍使用保留原数据的提示，不暴露结构解析内容", async () => {
   storedRecord({ instructions: 99 });

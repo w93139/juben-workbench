@@ -4,6 +4,12 @@ import { studioAnalysisSchema, studioReviewResultSchema } from "./studio";
 
 export const materialSchema = z.object({ id: z.string(), name: z.string().max(1000), size: z.number().nonnegative(), status: z.enum(["read", "unsupported", "error"]), text: z.string().max(300000), method: z.string(), warnings: z.array(z.string()), excluded: z.boolean().default(false) });
 export type Material = z.infer<typeof materialSchema>;
+export const blueprintDraftSchema = z.object({
+  id: z.uuid(), revision: z.number().int().positive(),
+  baseRevision: z.number().int().nonnegative(), baseBlueprintRevision: z.number().int().nonnegative(),
+  data: blueprintDataSchema, updatedAt: z.iso.datetime(),
+});
+export type BlueprintDraft = z.infer<typeof blueprintDraftSchema>;
 export const workbenchSchema = z.object({
   revision: z.number().int().nonnegative(), sourceRevision: z.number().int().nonnegative(),
   documents: z.array(materialSchema).max(2000),
@@ -11,12 +17,13 @@ export const workbenchSchema = z.object({
   blueprint: blueprintDataSchema.nullable(), blueprintRevision: z.number().int().nonnegative(),
   blueprintSourceRevision: z.number().int().nullable(), blueprintChoiceId: z.string().nullable(),
   versions: z.array(z.object({ revision: z.number().int(), data: blueprintDataSchema })).max(20),
+  blueprintDrafts: z.array(blueprintDraftSchema).max(12).refine(items => new Set(items.map(item => item.id)).size === items.length, "草稿编号不能重复").default([]),
   review: studioReviewResultSchema.nullable(), reviewBlueprintRevision: z.number().int().nullable(),
   job: z.object({ jobId: z.string(), operation: z.enum(["analyze", "blueprint", "review"]), phase: z.string(), sourceRevision: z.number().int(), blueprintRevision: z.number().int(), submittedAt: z.number().optional() }).nullable(),
   error: z.string().nullable(),
 });
 export type WorkbenchState = z.infer<typeof workbenchSchema>;
-export function emptyWorkbench(): WorkbenchState { return { revision: 0, sourceRevision: 0, documents: [], analysis: null, analysisSourceRevision: null, choiceId: null, instructions: "", blueprint: null, blueprintRevision: 0, blueprintSourceRevision: null, blueprintChoiceId: null, versions: [], review: null, reviewBlueprintRevision: null, job: null, error: null }; }
+export function emptyWorkbench(): WorkbenchState { return { revision: 0, sourceRevision: 0, documents: [], analysis: null, analysisSourceRevision: null, choiceId: null, instructions: "", blueprint: null, blueprintRevision: 0, blueprintSourceRevision: null, blueprintChoiceId: null, versions: [], blueprintDrafts: [], review: null, reviewBlueprintRevision: null, job: null, error: null }; }
 export function readableMaterials(state: WorkbenchState) { return state.documents.filter(d => !d.excluded); }
 export function materialsReady(state: WorkbenchState) { const docs = readableMaterials(state); return docs.length > 0 && docs.every(d => d.status === "read" && !!d.text.trim()); }
 export function analysisCurrent(state: WorkbenchState) { return !!state.analysis && state.analysisSourceRevision === state.sourceRevision; }

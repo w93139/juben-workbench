@@ -1,4 +1,5 @@
-import { workbenchSchema, emptyWorkbench, type WorkbenchState } from "@/domain/workbench";
+import { workbenchSchema, emptyWorkbench, type BlueprintDraft, type WorkbenchState } from "@/domain/workbench";
+import { applyBlueprintDraft, putBlueprintDraft, removeBlueprintDraft } from "@/domain/blueprint-drafts";
 
 export const WORKBENCH_DB = "juben-workbench:authoring:v1";
 const STORE = "projects";
@@ -26,7 +27,7 @@ export async function readWorkbench(id: string): Promise<WorkbenchState> {
     req.onerror = () => reject(new Error("读取创作数据失败，请重试。"));
   }); } finally { db.close(); }
 }
-export async function changeWorkbench(id: string, revision: number, update: (state: WorkbenchState) => void): Promise<WorkbenchState> {
+async function transactWorkbench(id: string, update: (state: WorkbenchState) => void): Promise<WorkbenchState> {
   const db = await database();
   try {
     const result = await new Promise<WorkbenchState>((resolve, reject) => {
@@ -35,8 +36,7 @@ export async function changeWorkbench(id: string, revision: number, update: (sta
       req.onsuccess = () => { try {
         assertAvailable(req.result);
         next = req.result === undefined ? emptyWorkbench() : workbenchSchema.parse(req.result);
-        if (next.revision !== revision) throw new Error("项目已在其他页面更新，当前输入保留，请刷新后重试。");
-        update(next); next.revision++; next = workbenchSchema.parse(next); store.put(next, id);
+        update(next); next = workbenchSchema.parse(next); store.put(next, id);
       } catch (failure) { error = failure instanceof Error ? failure : new Error("无法保存当前修改"); transaction.abort(); } };
       transaction.oncomplete = () => resolve(next);
       transaction.onabort = transaction.onerror = () => reject(error ?? new Error("本机存储失败，当前输入已保留，请重试。"));
@@ -45,6 +45,22 @@ export async function changeWorkbench(id: string, revision: number, update: (sta
     if (typeof BroadcastChannel !== "undefined") { const channel = new BroadcastChannel(WORKBENCH_DB); channel.postMessage(id); channel.close(); }
     return result;
   } finally { db.close(); }
+}
+export function changeWorkbench(id: string, revision: number, update: (state: WorkbenchState) => void): Promise<WorkbenchState> {
+  return transactWorkbench(id, state => {
+    if (state.revision !== revision) throw new Error("项目已在其他页面更新，当前输入保留，请刷新后重试。");
+    update(state); state.revision++;
+  });
+}
+export async function saveBlueprintDraft(id: string, draft: BlueprintDraft, expected: number | null): Promise<BlueprintDraft> {
+  const next = await transactWorkbench(id, state => putBlueprintDraft(state, draft, expected));
+  return next.blueprintDrafts.find(item => item.id === draft.id)!;
+}
+export async function deleteBlueprintDraft(id: string, draftId: string, revision: number, allowMissing = false): Promise<void> {
+  await transactWorkbench(id, state => removeBlueprintDraft(state, draftId, revision, allowMissing));
+}
+export function commitBlueprintDraft(id: string, draftId: string, revision: number): Promise<WorkbenchState> {
+  return transactWorkbench(id, state => applyBlueprintDraft(state, draftId, revision));
 }
 
 /** A tombstone serializes deletion against job reservation and stale-tab writes. */
@@ -69,7 +85,8 @@ async function deleteTransaction(id: string, action: "prepare" | "restore" | "fi
     tx.onerror = tx.onabort = () => reject(error ?? new Error("本机存储未完成删除，请重试。"));
   }); } finally { db.close(); }
   window.dispatchEvent(new CustomEvent("authoring-updated", { detail: id }));
-  if (typeof BroadcastChannel !== "undefined") { const channel = new BroadcastChannel(WORKBENCH_DB); channel.postMessage(id); channel.close(); }
+  if (action === "finish") window.dispatchEvent(new CustomEvent("authoring-deleted", { detail: id }));
+  if (typeof BroadcastChannel !== "undefined") { const channel = new BroadcastChannel(WORKBENCH_DB); channel.postMessage(action === "finish" ? { deletedProjectId: id } : id); channel.close(); }
 }
 export const browserProjectDeletion = {
   prepare: (id: string) => deleteTransaction(id, "prepare"),

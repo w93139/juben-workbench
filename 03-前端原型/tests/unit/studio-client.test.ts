@@ -79,3 +79,10 @@ it("超过12MB的长剧本不预留任务、不发请求且保留原文", async 
   await expect(startStudioJob("p", saved, "analyze")).rejects.toThrow("约12 MB");
   expect(saved.job).toBeNull(); expect(fetcher).not.toHaveBeenCalled(); expect(saved.documents[13].text).toHaveLength(300000);
 });
+it("运行中轮询读取最新草稿，不用查询开始时旧快照覆盖", async () => {
+  saved.job = { jobId: crypto.randomUUID(), operation: "review", phase: "提交", sourceRevision: 0, blueprintRevision: 0 };
+  const old = structuredClone(saved);
+  const draft = { id: crypto.randomUUID(), revision: 1, baseRevision: 0, baseBlueprintRevision: 0, data: emptyBlueprintData(), updatedAt: new Date().toISOString() };
+  vi.stubGlobal("fetch", vi.fn(async () => { saved.blueprintDrafts.push(draft); return Response.json({ jobId: saved.job!.jobId, status: "running", phase: "继续处理" }); }));
+  const result = await pollStudioJob("p", old); expect(result.blueprintDrafts).toEqual([draft]); expect(result.job?.phase).toBe("继续处理"); expect(result.revision).toBe(0);
+});

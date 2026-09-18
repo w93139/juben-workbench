@@ -95,7 +95,10 @@ export async function pollStudioJob(projectId: string, state: WorkbenchState) {
       next.error = "上次任务记录未找到，已结束等待，材料和已有成果均保留。没有自动重试模型；请手动重新拆解（可能产生新的模型费用）。";
     });
   }
-  if (job.status === "running") return { ...state, job: { ...state.job, phase: job.phase } };
+  if (job.status === "running") {
+    const latest = await readWorkbench(projectId);
+    return latest.job?.jobId === job.jobId ? { ...latest, job: { ...latest.job, phase: job.phase } } : latest;
+  }
   return changeWorkbench(projectId, state.revision, next => {
     if (next.job?.jobId !== job.jobId) throw new Error("任务已变化，请重新读取。");
     if (next.sourceRevision !== next.job.sourceRevision || next.blueprintRevision !== next.job.blueprintRevision) { next.job = null; next.error = "材料或蓝图已变化，旧任务结果未应用。"; return; }
