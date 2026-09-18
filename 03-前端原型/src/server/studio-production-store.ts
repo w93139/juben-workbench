@@ -1,0 +1,121 @@
+import { randomUUID } from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
+import { z } from "zod";
+import { reviewUnits, type ReviewUnitId } from "@/domain/studio-production";
+import { LocalApiError } from "./local-security";
+
+const hash = z.string().regex(/^[a-f0-9]{64}$/);
+type Run = { id: string; revision: number; active_job_id: string };
+type Unit = { unit_id: ReviewUnitId; request_hash: string; value_json: string | null; job_id: string; call_id: string | null };
+/** Shares the job database. Checkpoints have no TTL and cannot be uploaded by clients. */
+export class StudioProductionStore {
+  constructor(private db: DatabaseSync, private now = Date.now) {
+    db.exec(`CREATE TABLE IF NOT EXISTS studio_production_runs (
+      id TEXT PRIMARY KEY, run_key TEXT NOT NULL UNIQUE, revision INTEGER NOT NULL, active_job_id TEXT NOT NULL
+    ); CREATE TABLE IF NOT EXISTS studio_production_units (
+      run_id TEXT NOT NULL, unit_id TEXT NOT NULL, request_hash TEXT NOT NULL, job_id TEXT NOT NULL,
+      call_id TEXT, value_json TEXT, PRIMARY KEY(run_id, unit_id)
+    ); CREATE TABLE IF NOT EXISTS studio_production_attempts (
+      run_id TEXT NOT NULL, unit_id TEXT NOT NULL, job_id TEXT NOT NULL, call_id TEXT,
+      response_json TEXT, issues_json TEXT,
+      PRIMARY KEY(run_id, unit_id, job_id)
+    )`);
+  }
+  private transaction<T>(action: () => T): T {
+    this.db.exec("BEGIN IMMEDIATE");
+    try { const result = action(); this.db.exec("COMMIT"); return result; }
+    catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+  /** Called inside the same transaction as job admission and budget preview consumption. */
+  claim(runKey: string, jobId: string) {
+    if (!this.db.isTransaction) throw new Error("Production claim requires job transaction");
+    hash.parse(runKey); z.uuid().parse(jobId);
+    let row = this.db.prepare("SELECT id, revision, active_job_id FROM studio_production_runs WHERE run_key = ?").get(runKey) as Run | undefined;
+    if (row) {
+      const active = this.db.prepare("SELECT status FROM studio_jobs WHERE id = ?").get(row.active_job_id) as { status: string } | undefined;
+      if (active?.status === "running") throw new LocalApiError(409, "同一批正文仍有任务在运行，请查询原任务，不能重复开始。");
+      this.db.prepare("UPDATE studio_production_runs SET active_job_id = ? WHERE id = ?").run(jobId, row.id);
+    } else {
+      row = { id: randomUUID(), revision: 0, active_job_id: jobId };
+      this.db.prepare("INSERT INTO studio_production_runs(id, run_key, revision, active_job_id) VALUES (?, ?, 0, ?)").run(row.id, runKey, jobId);
+    }
+    return row.id;
+  }
+  private owner(runId: string, jobId: string) {
+    const row = this.db.prepare(`SELECT r.id FROM studio_production_runs r JOIN studio_jobs j ON j.id = r.active_job_id
+      WHERE r.id = ? AND j.id = ? AND j.status = 'running' AND j.owner_pid = ? AND j.lease_until > ?`).get(runId, jobId, process.pid, this.now());
+    if (!row) throw new LocalApiError(409, "正文批次的执行权已失效，未覆盖已保存成果，也没有自动重试。");
+  }
+  private unit(runId: string, unitId: ReviewUnitId) {
+    if (!reviewUnits.some(unit => unit.id === unitId)) throw new Error("Unknown production unit");
+    return this.db.prepare("SELECT * FROM studio_production_units WHERE run_id = ? AND unit_id = ?").get(runId, unitId) as Unit | undefined;
+  }
+  find(runKey: string) {
+    hash.parse(runKey);
+    const run = this.db.prepare("SELECT id FROM studio_production_runs WHERE run_key = ?").get(runKey) as { id: string } | undefined;
+    return run ? this.snapshot(run.id) : null;
+  }
+  read(runId: string, unitId: ReviewUnitId, requestHash: string): unknown {
+    hash.parse(requestHash);
+    const row = this.unit(runId, unitId);
+    if (row && row.request_hash !== requestHash) throw new LocalApiError(409, "该阶段的冻结资料已变化，不能混用原检查点。请修改蓝图后重新建立批次。");
+    return row?.value_json ? JSON.parse(row.value_json) : undefined;
+  }
+  begin(runId: string, unitId: ReviewUnitId, jobId: string, requestHash: string) {
+    hash.parse(requestHash);
+    this.transaction(() => {
+      this.owner(runId, jobId);
+      const prior = this.unit(runId, unitId);
+      if (prior?.value_json || prior?.job_id === jobId) throw new LocalApiError(409, "阶段已保存或已发起，本任务不能重复调用。");
+      if (prior && prior.request_hash !== requestHash) throw new LocalApiError(409, "阶段输入已变化，不能覆盖原检查点。");
+      const definition = reviewUnits.find(unit => unit.id === unitId)!;
+      for (const dependency of definition.dependencies) if (!this.unit(runId, dependency)?.value_json) throw new LocalApiError(409, "前置阶段尚未保存，未继续调用。");
+      this.db.prepare(`INSERT INTO studio_production_units(run_id, unit_id, request_hash, job_id) VALUES (?, ?, ?, ?)
+        ON CONFLICT(run_id, unit_id) DO UPDATE SET job_id = excluded.job_id, call_id = NULL`).run(runId, unitId, requestHash, jobId);
+      this.db.prepare("INSERT INTO studio_production_attempts(run_id, unit_id, job_id) VALUES (?, ?, ?)").run(runId, unitId, jobId);
+      this.bump(runId);
+    });
+  }
+  private bump(runId: string) { this.db.prepare("UPDATE studio_production_runs SET revision = revision + 1 WHERE id = ?").run(runId); }
+  attachCall(runId: string, unitId: ReviewUnitId, jobId: string, callId: string) {
+    z.uuid().parse(callId);
+    this.transaction(() => {
+      this.owner(runId, jobId);
+      const changed = this.db.prepare("UPDATE studio_production_units SET call_id = ? WHERE run_id = ? AND unit_id = ? AND job_id = ? AND call_id IS NULL AND value_json IS NULL").run(callId, runId, unitId, jobId);
+      if (changed.changes !== 1) throw new LocalApiError(409, "阶段费用登记已变化，未重复发送请求。");
+      this.db.prepare("UPDATE studio_production_attempts SET call_id = ? WHERE run_id = ? AND unit_id = ? AND job_id = ?").run(callId, runId, unitId, jobId);
+    });
+  }
+  save(runId: string, unitId: ReviewUnitId, jobId: string, requestHash: string, value: unknown) {
+    const serialized = JSON.stringify(value);
+    if (Buffer.byteLength(serialized) > 2_000_000) throw new LocalApiError(413, "阶段成果超过保存容量，未继续调用。已有成果保留。");
+    this.transaction(() => {
+      this.owner(runId, jobId);
+      const changed = this.db.prepare("UPDATE studio_production_units SET value_json = ? WHERE run_id = ? AND unit_id = ? AND job_id = ? AND request_hash = ? AND value_json IS NULL").run(serialized, runId, unitId, jobId, requestHash);
+      if (changed.changes !== 1) throw new LocalApiError(409, "阶段成果已保存或执行权已变化，未覆盖现有结果。");
+      this.bump(runId);
+    });
+  }
+  reject(runId: string, unitId: ReviewUnitId, jobId: string, value: unknown, issues: string[]) {
+    const serialized = JSON.stringify(value);
+    if (Buffer.byteLength(serialized) > 2_000_000) throw new LocalApiError(413, "阶段响应超过保存容量，未继续调用。");
+    z.array(z.string()).max(2000).parse(issues);
+    this.transaction(() => {
+      this.owner(runId, jobId);
+      const unit = this.unit(runId, unitId);
+      if (unit?.job_id !== jobId || unit.value_json !== null) throw new LocalApiError(409, "阶段记录已变化，未覆盖已有成果。");
+      this.db.prepare("UPDATE studio_production_attempts SET response_json = ?, issues_json = ? WHERE run_id = ? AND unit_id = ? AND job_id = ?").run(serialized, JSON.stringify(issues), runId, unitId, jobId);
+      this.bump(runId);
+    });
+  }
+  snapshot(runId: string) {
+    const run = this.db.prepare("SELECT id, revision, active_job_id FROM studio_production_runs WHERE id = ?").get(runId) as Run | undefined;
+    if (!run) throw new LocalApiError(409, "正文检查点不存在，未自动重试。");
+    const units = this.db.prepare("SELECT * FROM studio_production_units WHERE run_id = ?").all(runId) as Unit[];
+    return { runId, revision: run.revision, units: units.map(unit => {
+      const rejected = this.db.prepare("SELECT response_json, issues_json FROM studio_production_attempts WHERE run_id = ? AND unit_id = ? AND job_id = ?").get(runId, unit.unit_id, unit.job_id) as { response_json: string | null; issues_json: string | null } | undefined;
+      const value = unit.value_json ?? rejected?.response_json;
+      return { id: unit.unit_id, jobId: unit.job_id, saved: unit.value_json !== null, callId: unit.call_id, value: value ? JSON.parse(value) as unknown : undefined, issues: rejected?.issues_json ? z.array(z.string()).parse(JSON.parse(rejected.issues_json)) : [] };
+    }) };
+  }
+}

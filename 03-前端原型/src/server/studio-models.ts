@@ -1,7 +1,9 @@
 import { acquireTaskPower, TaskPowerError, type TaskPower } from "./task-power";
 import { TaskExecution, TaskExecutionError } from "./task-execution";
 import { StudioJobStore } from "./studio-job-store";
-import { StudioBilling, studioConfigFingerprint, studioInputFingerprint } from "./studio-billing";
+import { StudioBilling, studioExecutionFingerprint, studioInputFingerprint, studioProductionKey } from "./studio-billing";
+import { reviewUnits, type ReviewUnitId } from "@/domain/studio-production";
+import { hydrateReviewProgress } from "./studio-review-progress";
 import { LocalApiError } from "./local-security";
 import { studioBudgetClaimSchema, type StudioBudgetClaim } from "@/domain/studio-budget";
 import { evaluationResponseProfile } from "@/domain/model-evaluation";
@@ -11,11 +13,12 @@ import { studioSettingsStore } from "./studio-settings";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { blueprintDataSchema, checkBlueprint, type BlueprintData } from "@/domain/blueprint";
-import { studioAnalysisSchema, studioArtifactSchema, studioAuditSchema, studioInputs, type StudioCallDiagnostic, type StudioOperation, type StudioJobView, type StudioResult, type StudioReviewResult, type StudioArtifact, type StudioAudit } from "@/domain/studio";
+import { artifactBundleSchema, studioAnalysisSchema, studioAuditSchema, studioInputs, type StudioCallDiagnostic, type StudioOperation, type StudioJobView, type StudioResult, type StudioReviewResult, type StudioArtifact, type StudioAudit } from "@/domain/studio";
+export { artifactBundleSchema } from "@/domain/studio";
 
 export class StudioError extends Error { constructor(public code: string, message: string, public status = 400) { super(message); this.name = "StudioError"; } }
 export interface StudioConfig { baseUrl: string; apiKey: string; mainModel: string; reviewA: string; reviewB: string }
-export type ModelTransport = (config: StudioConfig, model: string, instructions: string, payload: unknown, schema: z.ZodType, signal: AbortSignal, overrides?: { maxTokens?: number; billing?: { service: StudioBilling; jobId: string; phase: string } }) => Promise<unknown>;
+export type ModelTransport = (config: StudioConfig, model: string, instructions: string, payload: unknown, schema: z.ZodType, signal: AbortSignal, overrides?: { maxTokens?: number; billing?: { service: StudioBilling; jobId: string; phase: string; prepared?: (callId: string) => void } }) => Promise<unknown>;
 const CONTEXT_BYTES = SINGLE_CONTEXT_BYTES;
 const RESPONSE_BYTES = 2000000;
 const CALL_TIMEOUT = 240000;
@@ -56,6 +59,7 @@ export const openAITransport: ModelTransport = async (config, model, instruction
   let parsed: unknown;
   try {
     signal.throwIfAborted();
+    if (ticket) billing?.prepared?.(ticket.callId);
     ticket?.dispatch();
     signal.addEventListener("abort", interrupt, { once: true });
     const response = await fetch(`${config.baseUrl}/chat/completions`, { method: "POST", redirect: "error", signal, headers: { "content-type": "application/json", authorization: `Bearer ${config.apiKey}` }, body: serialized });
@@ -75,7 +79,6 @@ export const openAITransport: ModelTransport = async (config, model, instruction
   if (!content.trim()) throw new StudioError("MODEL_RESPONSE_INVALID", "模型没有返回可用的最终正文，本次结果未采纳。", 502);
   try { return JSON.parse(content); } catch { throw new StudioError("MODEL_RESPONSE_INVALID", "模型未返回严格JSON，本次结果未采纳。", 502); }
 };
-export const artifactBundleSchema = z.object({ artifacts: z.array(studioArtifactSchema).min(6).max(240) }).strict();
 function safeError(error: unknown) { return error instanceof LocalApiError ? { code: "BUDGET_BLOCKED", message: error.message } : error instanceof LongAnalysisError ? { code: "ANALYSIS_PART_FAILED", message: error.message } : error instanceof StudioError || error instanceof TaskExecutionError || error instanceof TaskPowerError ? { code: error.code, message: error.message } : { code: "MODEL_UNAVAILABLE", message: "模型调用未完成，未生成可用结果。请检查服务端连接后重试。" }; }
 function auditIssues(audit: StudioAudit, label: string, source?: unknown) {
   const values: string[] = []; const visit = (value: unknown) => { if (typeof value === "string") values.push(value); else if (Array.isArray(value)) value.forEach(visit); else if (value && typeof value === "object") Object.values(value).forEach(visit); }; if (source) visit(source);
@@ -106,13 +109,20 @@ function artifactIssues(blueprint: BlueprintData, artifacts: StudioArtifact[]) {
   }
   return issues;
 }
+function reviewContractIssues(unitId: ReviewUnitId, value: unknown, payload: unknown): string[] {
+  const data = payload as { blueprint?: BlueprintData; snapshot?: { blueprint: BlueprintData; artifacts: StudioArtifact[] } };
+  if (unitId === "artifacts") return artifactIssues(data.blueprint!, artifactBundleSchema.parse(value).artifacts);
+  const audit = studioAuditSchema.parse(value);
+  // Contract failures are retryable; valid blocking opinions remain saved and require author changes.
+  return auditIssues({ ...audit, blocking: [], contentComplete: true, playerHostIsolation: true, findingsAddressed: true }, "报告依据", unitId === "designGate" ? data.blueprint : data.snapshot ?? payload);
+}
 async function settleCalls<T>(calls: Promise<T>[]): Promise<T[]> {
   const settled = await Promise.allSettled(calls);
   const failed = settled.find((item) => item.status === "rejected");
   if (failed?.status === "rejected") throw failed.reason;
   return settled.map((item) => (item as PromiseFulfilledResult<T>).value);
 }
-interface Job { view: StudioJobView; expiresAt: number; fingerprint: string; operation: StudioOperation; execution?: TaskExecution; cleanupWarning?: string }
+interface Job { view: StudioJobView; expiresAt: number; fingerprint: string; operation: StudioOperation; productionId?: string; execution?: TaskExecution; cleanupWarning?: string }
 export class StudioEngine {
   private jobs = new Map<string, Job>();
   private validations = new Map<string, { jobId: string; result: StudioReviewResult; expiresAt: number }>();
@@ -141,17 +151,24 @@ export class StudioEngine {
     if (duplicate) return structuredClone(duplicate.view);
     if (this.jobs.size >= MAX_JOBS || [...this.jobs.values()].filter((job) => job.view.status === "running").length >= MAX_RUNNING) throw new StudioError("BUSY", "当前已有处理任务或保留记录达到上限，请稍后重试。", 429);
     const jobId = requestId ?? randomUUID(); const job: Job = { operation, view: { jobId, status: "running", phase: "已接收资料，正在建立任务防休眠保护" }, expiresAt: this.now() + JOB_TTL, fingerprint };
+    if (operation === "review") {
+      const { blueprint } = studioInputs.review.parse(parsed.data);
+      job.view.reviewProgress = { runId: null, revision: 0, steps: reviewUnits.map(unit => ({ id: unit.id, state: "pending" })), review: { kind: "review", passed: false, issues: ["生成与审查尚未完成，当前成果不能用于通过导出。"], artifacts: [], reports: {}, blueprint, blueprintFingerprint: createHash("sha256").update(JSON.stringify(blueprint)).digest("hex"), humanPlaytest: "not-run" } };
+    }
     if (this.store) {
-      const claimed = this.store.claim(job.view, fingerprint, this.billing ? budget : undefined, this.billing ? studioConfigFingerprint(config) : undefined);
+      const executionFingerprint = studioExecutionFingerprint(config, operation);
+      const claimed = this.store.claim(job.view, fingerprint, this.billing ? budget : undefined, this.billing ? executionFingerprint : undefined, operation === "review" ? studioProductionKey(fingerprint, executionFingerprint) : undefined);
       if (!claimed.created) {
         if (claimed.fingerprint !== fingerprint) throw new StudioError("REQUEST_ID_CONFLICT", "同一任务编号的输入已变化，未重复调用模型。", 409);
         return structuredClone(claimed.view);
       }
+      job.productionId = claimed.productionId;
     }
     this.jobs.set(jobId, job);
     void this.runProtected(operation, parsed.data, config, job).then(result => {
       if (job.view.status !== "running") return;
       const view: StudioJobView = { ...job.view, status: "completed", phase: result.kind === "review" && !result.passed ? "审查结束，有待处理问题" : "本步处理完成", result };
+      delete view.reviewProgress;
       this.store?.save(view); job.view = view;
     }).catch(error => this.failJob(job, error));
     return structuredClone(job.view);
@@ -162,7 +179,8 @@ export class StudioEngine {
     let lastCall = job.view.lastCall;
     if (lastCall && lastCall.status === "running") lastCall = { ...lastCall, status: "failed", elapsedMs: Math.max(0, this.now() - lastCall.startedAt), errorCode: failure.code, ...(error instanceof TaskExecutionError && error.pauseGapMs != null ? { pauseGapMs: error.pauseGapMs } : {}) };
     if (lastCall) failure.message += `（模型 ${lastCall.model}；本次输入 ${Math.ceil(lastCall.inputBytes / 1000)} KB；经过 ${Math.round(lastCall.elapsedMs / 1000)} 秒）`;
-    job.view = { jobId: job.view.jobId, status: "failed", phase: failure.code === "HOST_EXECUTION_PAUSED" ? "本机执行已中断" : "处理未完成", error: failure, ...(lastCall ? { lastCall } : {}) };
+    try { this.refreshReview(job, false, false); } catch { /* Keep the last readable progress if storage is unavailable. */ }
+    job.view = { jobId: job.view.jobId, status: "failed", phase: failure.code === "HOST_EXECUTION_PAUSED" ? "本机执行已中断" : "处理未完成", error: failure, ...(lastCall ? { lastCall } : {}), ...(job.view.reviewProgress ? { reviewProgress: job.view.reviewProgress } : {}) };
     try { this.store?.save(job.view); } catch {
       try { const saved = this.store?.read(job.view.jobId)?.view; if (saved?.status === "failed") { job.view = saved; return; } } catch { /* Preserve a safe local failure. */ }
       job.view.error = { code: "JOB_SAVE_FAILED", message: "任务结果保存失败，请检查本机磁盘。没有自动重试模型。" };
@@ -189,7 +207,35 @@ export class StudioEngine {
     return structuredClone(job.view);
   }
   getValidated(validationId: string, expectedFingerprint?: string) { this.clean(); const persisted = this.store?.validated(validationId); const record = this.store ? (persisted ? { result: persisted } : undefined) : this.validations.get(validationId); if (!record) throw new StudioError("VALIDATION_NOT_FOUND", "没有可用的服务端通过记录，请重新审查。", 409); if (expectedFingerprint && record.result.blueprintFingerprint !== expectedFingerprint) throw new StudioError("VALIDATION_MISMATCH", "当前蓝图与通过记录不一致，请重新审查。", 409); return structuredClone(record.result); }
-  private async call<T>(config: StudioConfig, model: string, instructions: string, payload: unknown, schema: z.ZodType<T>, job?: Job, maxTokens?: number) {
+  get production() { return this.store?.production; }
+  private refreshReview(job: Job, running = true, persist = true) {
+    if (job.productionId && job.view.reviewProgress && this.store) job.view.reviewProgress = hydrateReviewProgress(job.view.reviewProgress, this.store.production.snapshot(job.productionId), job.view.jobId, running);
+    if (persist) this.store?.save(job.view);
+  }
+  private async reviewCall<T>(unitId: ReviewUnitId, config: StudioConfig, model: string, instructions: string, payload: unknown, schema: z.ZodType<T>, job: Job): Promise<T> {
+    const production = this.store?.production, runId = job.productionId;
+    job.execution?.check();
+    const requestHash = createHash("sha256").update(JSON.stringify([model, instructions, payload, z.toJSONSchema(schema), evaluationResponseProfile(model)])).digest("hex");
+    const cached = runId ? production?.read(runId, unitId, requestHash) : undefined;
+    if (cached !== undefined) { const result = schema.parse(cached); if (reviewContractIssues(unitId, result, payload).length) throw new StudioError("CHECKPOINT_INVALID", "已保存阶段未通过冻结资料校验，未复用也未自动重试，请检查本机数据。", 409); this.refreshReview(job); return result; }
+    context(payload);
+    if (production && runId) { production.begin(runId, unitId, job.view.jobId, requestHash); this.refreshReview(job); }
+    const result = await this.call(config, model, instructions, payload, schema, job, undefined, callId => { if (runId) production?.attachCall(runId, unitId, job.view.jobId, callId); });
+    job.execution?.check(); const issues = reviewContractIssues(unitId, result, payload);
+    if (production && runId) {
+      if (issues.length) production.reject(runId, unitId, job.view.jobId, result, issues);
+      else production.save(runId, unitId, job.view.jobId, requestHash, result);
+      this.refreshReview(job);
+    } else if (job.view.reviewProgress) {
+      const progress = job.view.reviewProgress;
+      if (unitId === "artifacts") progress.review.artifacts = artifactBundleSchema.parse(result).artifacts;
+      else progress.review.reports[unitId] = studioAuditSchema.parse(result);
+      progress.review.issues.push(...issues); progress.revision++; progress.steps.find(unit => unit.id === unitId)!.state = issues.length ? "interrupted" : "saved";
+    }
+    if (issues.length) throw new StudioError("MODEL_RESPONSE_INVALID", "阶段响应中的来源、发放边界或引用未通过程序核对。未采用的原文与问题已保留，请查阅后手动继续；本次调用可能已收费。", 502);
+    return result;
+  }
+  private async call<T>(config: StudioConfig, model: string, instructions: string, payload: unknown, schema: z.ZodType<T>, job?: Job, maxTokens?: number, prepared?: (callId: string) => void) {
     job?.execution?.check(); context(payload); const controller = new AbortController();
     const abort = () => controller.abort(job?.execution?.signal.reason);
     job?.execution?.signal.addEventListener("abort", abort, { once: true });
@@ -200,7 +246,7 @@ export class StudioEngine {
     record();
     try {
       const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { try { job?.execution?.check(); } catch (error) { reject(error); return; } controller.abort(); reject(new StudioError("MODEL_TIMEOUT", `本次模型请求等待达到${Math.round(callTimeout / 1000)}秒，未取得完整结果。材料已保留，没有自动重试；已发出的请求可能产生费用。`, 504)); }, callTimeout); });
-      const overrides = { ...(maxTokens != null ? { maxTokens } : {}), ...(this.billing && job ? { billing: { service: this.billing, jobId: job.view.jobId, phase: job.view.phase } } : {}) };
+      const overrides = { ...(maxTokens != null ? { maxTokens } : {}), ...(this.billing && job ? { billing: { service: this.billing, jobId: job.view.jobId, phase: job.view.phase, prepared } } : {}) };
       const raw = await Promise.race([this.transport(config, model, instructions, payload, schema, controller.signal, Object.keys(overrides).length ? overrides : undefined), timeout, ...(job?.execution ? [job.execution.interrupted] : [])]);
       job?.execution?.check();
       if (Buffer.byteLength(JSON.stringify(raw)) > RESPONSE_BYTES) throw new StudioError("MODEL_RESPONSE_TOO_LARGE", "模型响应超过限制，本次结果未采纳。", 502);
@@ -242,20 +288,20 @@ export class StudioEngine {
     const result: StudioReviewResult = { kind: "review", passed: false, issues: structural, artifacts: [], reports, blueprint, blueprintFingerprint: createHash("sha256").update(JSON.stringify(blueprint)).digest("hex"), humanPlaytest: "not-run" };
     if (structural.length) return result;
     phase("主 Agent 正在核对蓝图是否具备完整正文生成条件");
-    reports.designGate = await this.call(config, config.mainModel, "按剧本设计六道门检查蓝图内容，而不只看字段是否非空。核对每角色贡献与关系、时间因果、知识来源、必要结论可获得证据、轮次主持兜底。未成形内容必须阻断。给原文定位和摘录，所有真人试玩状态not-run。", { blueprint }, studioAuditSchema, job);
+    reports.designGate = await this.reviewCall("designGate", config, config.mainModel, "按剧本设计六道门检查蓝图内容，而不只看字段是否非空。核对每角色贡献与关系、时间因果、知识来源、必要结论可获得证据、轮次主持兜底。未成形内容必须阻断。给原文定位和摘录，所有真人试玩状态not-run。", { blueprint }, studioAuditSchema, job);
     result.issues = auditIssues(reports.designGate, "主Agent生成前检查", blueprint); if (result.issues.length) return result;
     phase("主 Agent 正在从同一蓝图生成六类完整开本材料");
-    const bundle = await this.call(config, config.mainModel, "从通过设计门的同一蓝图生成完整可读开本包，不是摘要/提纲/占位。六类必须齐：character角色本、private私人信息、updates阶段更新、clues公共线索、host主持手册、ending终局主持材料。每角色有独立前三类材料。玩家只知道矩阵允许的内容；秘密和未来信息按轮隔离。host/ending仅host受众。sourceIds明确关联蓝图记录，包括关系记录。每条限定角色线索必须关联到至少一份允许角色的玩家材料，roundId显式填写该线索指定轮次，不可用null代替；不得向其他角色或其他轮次发放，主持副本不算玩家覆盖。主持含真相、发放时间、触发兜底、完整终局执行。", { blueprint }, artifactBundleSchema, job);
+    const bundle = await this.reviewCall("artifacts", config, config.mainModel, "从通过设计门的同一蓝图生成完整可读开本包，不是摘要/提纲/占位。六类必须齐：character角色本、private私人信息、updates阶段更新、clues公共线索、host主持手册、ending终局主持材料。每角色有独立前三类材料。玩家只知道矩阵允许的内容；秘密和未来信息按轮隔离。host/ending仅host受众。sourceIds明确关联蓝图记录，包括关系记录。每条限定角色线索必须关联到至少一份允许角色的玩家材料，roundId显式填写该线索指定轮次，不可用null代替；不得向其他角色或其他轮次发放，主持副本不算玩家覆盖。主持含真相、发放时间、触发兜底、完整终局执行。", { blueprint }, artifactBundleSchema, job);
     result.artifacts = bundle.artifacts; result.issues = artifactIssues(blueprint, result.artifacts); if (result.issues.length) return result;
     const snapshot = { blueprint, artifacts: result.artifacts }; context(snapshot);
     phase("审查模型 A 与 B 正在独立核对同一份完整资料");
     const instruction = "独立审核整个蓝图和全部正文，核对语义完整性、时间线、证据可获得性、角色贡献、泄漏、主持可执行性及正文是否只是提纲。仅有schema不能通过。逐项给真实原文定位和摘录。任何未解决问题写blocking；不确定的体验写warnings且待真人试玩。contentComplete/playerHostIsolation/findingsAddressed必须诚实。";
-    [reports.independentA, reports.independentB] = await settleCalls([this.call(config, config.reviewA, instruction, snapshot, studioAuditSchema, job), this.call(config, config.reviewB, instruction, snapshot, studioAuditSchema, job)]);
+    [reports.independentA, reports.independentB] = await settleCalls([this.reviewCall("independentA", config, config.reviewA, instruction, snapshot, studioAuditSchema, job), this.reviewCall("independentB", config, config.reviewB, instruction, snapshot, studioAuditSchema, job)]);
     phase("两路审查模型正在交换报告并核对分歧与证据");
     const mutualInstruction = "逐条复核另一模型报告并回到冻结的原文资料。不能因模型一致或声称运行脚本就采信，需核对引用和规则是否忠实。保留或驳回意见必须给证据；不能用多数票消除阻断。若自己或对方任何阻断仍未解决，写入blocking。不得改写原文以假装修复。";
-    [reports.mutualA, reports.mutualB] = await settleCalls([this.call(config, config.reviewA, mutualInstruction, { snapshot, own: reports.independentA, other: reports.independentB }, studioAuditSchema, job), this.call(config, config.reviewB, mutualInstruction, { snapshot, own: reports.independentB, other: reports.independentA }, studioAuditSchema, job)]);
+    [reports.mutualA, reports.mutualB] = await settleCalls([this.reviewCall("mutualA", config, config.reviewA, mutualInstruction, { snapshot, own: reports.independentA, other: reports.independentB }, studioAuditSchema, job), this.reviewCall("mutualB", config, config.reviewB, mutualInstruction, { snapshot, own: reports.independentB, other: reports.independentA }, studioAuditSchema, job)]);
     phase("主 Agent 正在回到原文逐项核对两路审查与互审结果");
-    reports.coordinator = await this.call(config, config.mainModel, "最终按原文证据核对两路独审和互审，不能按票数判定。检查正文完整而非摘要，受众隔离，证据规则和未解决阻断。没有实际修改资料不得把旧问题写成已修复。体验效果仍待真人试玩。", { snapshot, reports }, studioAuditSchema, job);
+    reports.coordinator = await this.reviewCall("coordinator", config, config.mainModel, "最终按原文证据核对两路独审和互审，不能按票数判定。检查正文完整而非摘要，受众隔离，证据规则和未解决阻断。没有实际修改资料不得把旧问题写成已修复。体验效果仍待真人试玩。", { snapshot, reports }, studioAuditSchema, job);
     result.issues = Object.entries(reports).flatMap(([label, report]) => auditIssues(report, label, label === "designGate" ? blueprint : snapshot));
     result.passed = result.issues.length === 0;
     if (result.passed) { const validationId = randomUUID(); result.validationId = validationId; this.validations.set(validationId, { jobId: job.view.jobId, result: structuredClone(result), expiresAt: this.now() + JOB_TTL }); }

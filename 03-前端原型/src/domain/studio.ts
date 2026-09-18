@@ -2,6 +2,7 @@ import { z } from "zod";
 import { blueprintDataSchema } from "./blueprint";
 import { moduleIds } from "./production";
 import { ANALYSIS_DOCUMENT_LIMIT } from "./analysis-limits";
+import { reviewUnits } from "./studio-production";
 
 const text = (max: number) => z.string().trim().min(1).max(max);
 export const studioDocumentSchema = z.object({ id: text(120), name: text(500), text: z.string().min(1).max(300000).refine(value => !!value.trim(), "原文不能为空") }).strict();
@@ -18,6 +19,7 @@ export const studioArtifactSchema = z.object({
   title: text(500), content: text(120000), sourceIds: z.array(text(100)).max(200),
 }).strict();
 export type StudioArtifact = z.infer<typeof studioArtifactSchema>;
+export const artifactBundleSchema = z.object({ artifacts: z.array(studioArtifactSchema).min(6).max(240) }).strict();
 export const studioAuditSchema = z.object({
   summary: text(12000), blocking: z.array(text(3000)).max(100), warnings: z.array(text(3000)).max(100),
   evidence: z.array(z.object({ location: text(1000), quote: text(3000), conclusion: text(3000) }).strict()).min(1).max(100),
@@ -43,6 +45,13 @@ export const archivedStudioReviewSchema = studioReviewContentSchema.refine(value
 export type ArchivedStudioReview = z.infer<typeof archivedStudioReviewSchema>;
 export const studioReviewResultSchema = studioReviewContentSchema.extend({ validationId: z.uuid().optional() }).refine(value => !value.passed || (!!value.validationId && completeReview(value)), "通过状态缺少完整审查链");
 export type StudioReviewResult = z.infer<typeof studioReviewResultSchema>;
+export const studioReviewProgressSchema = z.object({
+  runId: z.uuid().nullable(), revision: z.number().int().nonnegative().safe(),
+  steps: z.array(z.object({ id: z.enum(reviewUnits.map(unit => unit.id)), state: z.enum(["pending", "running", "saved", "interrupted"]) }).strict()).length(7)
+    .refine(steps => new Set(steps.map(step => step.id)).size === 7, "阶段编号不能重复"),
+  review: studioReviewContentSchema.extend({ passed: z.literal(false), blueprint: blueprintDataSchema }),
+}).strict();
+export type StudioReviewProgress = z.infer<typeof studioReviewProgressSchema>;
 export const studioResultSchema = z.union([z.object({ kind: z.literal("analysis"), analysis: studioAnalysisSchema }).strict(), z.object({ kind: z.literal("blueprint"), blueprint: blueprintDataSchema }).strict(), studioReviewResultSchema]);
 export type StudioResult = z.infer<typeof studioResultSchema>;
 export const studioCallDiagnosticSchema = z.object({
@@ -51,5 +60,5 @@ export const studioCallDiagnosticSchema = z.object({
   maxOutputTokens: z.number().int().positive(), pauseGapMs: z.number().int().nonnegative().optional(), status: z.enum(["running", "completed", "failed"]), errorCode: z.string().max(100).optional(),
 }).strict();
 export type StudioCallDiagnostic = z.infer<typeof studioCallDiagnosticSchema>;
-export const studioJobViewSchema = z.object({ jobId: z.string().uuid(), status: z.enum(["running", "completed", "failed"]), phase: z.string().max(1000), result: studioResultSchema.optional(), lastCall: studioCallDiagnosticSchema.optional(), error: z.object({ code: z.string().max(100), message: z.string().max(3000) }).strict().optional() }).strict().refine((value) => value.status === "completed" ? !!value.result && !value.error : value.status === "failed" ? !!value.error && !value.result : !value.result && !value.error, "任务状态与结果不一致");
+export const studioJobViewSchema = z.object({ jobId: z.string().uuid(), status: z.enum(["running", "completed", "failed"]), phase: z.string().max(1000), result: studioResultSchema.optional(), reviewProgress: studioReviewProgressSchema.optional(), lastCall: studioCallDiagnosticSchema.optional(), error: z.object({ code: z.string().max(100), message: z.string().max(3000) }).strict().optional() }).strict().refine((value) => value.status === "completed" ? !!value.result && !value.error : value.status === "failed" ? !!value.error && !value.result : !value.result && !value.error, "任务状态与结果不一致");
 export type StudioJobView = z.infer<typeof studioJobViewSchema>;

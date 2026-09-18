@@ -4,6 +4,7 @@ import { StudioBudgetLedger } from "./studio-budget";
 import { StudioPrices, calculateQuotedFen, reserveQuotedFen } from "./studio-pricing";
 import { LocalApiError } from "./local-security";
 import type { StudioConfig } from "./studio-models";
+import { REVIEW_PROTOCOL } from "@/domain/studio-production";
 
 const tokens = z.number().int().nonnegative().max(2_147_483_647);
 export function studioConfigFingerprint(config: StudioConfig) {
@@ -13,10 +14,17 @@ export function studioConfigFingerprint(config: StudioConfig) {
 export function studioInputFingerprint(projectId: string, operation: string, serializedInput: string) {
   return createHash("sha256").update(JSON.stringify([projectId]) + operation + serializedInput).digest("hex");
 }
+export function studioExecutionFingerprint(config: StudioConfig, operation: string) {
+  const configuration = studioConfigFingerprint(config);
+  return operation === "review" ? createHash("sha256").update(configuration + REVIEW_PROTOCOL).digest("hex") : configuration;
+}
+export function studioProductionKey(inputFingerprint: string, executionFingerprint: string) {
+  return createHash("sha256").update(inputFingerprint + executionFingerprint).digest("hex");
+}
 const usageSchema = z.object({ model: z.string(), usage: z.object({ prompt_tokens: tokens.positive(), completion_tokens: tokens, total_tokens: tokens.optional(),
   completion_tokens_details: z.object({ reasoning_tokens: tokens.optional() }).passthrough().nullable().optional(),
 }).passthrough() }).passthrough();
-export interface StudioChargeTicket { dispatch(): void; record(envelope: unknown): void; interrupt(): void }
+export interface StudioChargeTicket { callId: string; dispatch(): void; record(envelope: unknown): void; interrupt(): void }
 export class StudioBilling {
   constructor(readonly ledger: StudioBudgetLedger, readonly prices = new StudioPrices()) {}
   async prepare(jobId: string, phase: string, config: StudioConfig, model: string, serializedRequest: string, maxTokens: number, signal: AbortSignal): Promise<StudioChargeTicket> {
@@ -25,6 +33,7 @@ export class StudioBilling {
     const reservation = reserveQuotedFen(quote, Buffer.byteLength(serializedRequest), maxTokens);
     const callId = this.ledger.reserve(jobId, phase, quote, createHash("sha256").update(serializedRequest).digest("hex"), reservation);
     return {
+      callId,
       dispatch: () => this.ledger.dispatch(callId),
       interrupt: () => this.ledger.interrupt(callId),
       record: envelope => {

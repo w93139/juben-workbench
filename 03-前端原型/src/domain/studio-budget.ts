@@ -33,6 +33,7 @@ export const studioCostPreviewSchema = z.object({
   projectId: projectBudgetIdSchema, operation: z.enum(["analyze", "blueprint", "review"]), budget: studioBudgetSchema,
   previewId: z.string().uuid(),
   quotes: z.array(studioQuoteSchema).min(1).max(3), callsMax: integer.positive(), estimateFen: integer,
+  checkpoint: z.object({ runId: z.uuid().nullable(), savedUnits: integer.max(7), interruptedUnits: integer.max(7) }).strict().optional(),
 }).strict();
 export type StudioCostPreview = z.infer<typeof studioCostPreviewSchema>;
 

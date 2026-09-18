@@ -1,8 +1,7 @@
-import { archiveCurrentBlueprint } from "@/domain/blueprint-history";
 import { materialSchema, type Material, type WorkbenchState } from "@/domain/workbench";
 import { studioInputs, studioJobViewSchema, type StudioOperation } from "@/domain/studio";
 import { ANALYSIS_DOCUMENT_LIMIT, ANALYSIS_INPUT_BYTES, SINGLE_CONTEXT_BYTES } from "@/domain/analysis-limits";
-import { changeWorkbench, readWorkbench } from "./workbench-store";
+import { changeWorkbench, readWorkbench, mergeStudioJob, releaseMissingStudioJob } from "./workbench-store";
 
 export class StudioRequestError extends Error {
   constructor(message: string, public status: number, public code?: string) { super(message); }
@@ -90,27 +89,7 @@ export async function pollStudioJob(projectId: string, state: WorkbenchState) {
     if (!(error instanceof StudioRequestError) || error.code !== "JOB_NOT_FOUND") throw error;
     // A concurrent GET can arrive before the initial POST. Allow submission to settle first.
     if (state.job.submittedAt && Date.now() - state.job.submittedAt < 30000) return state;
-    return changeWorkbench(projectId, state.revision, next => {
-      if (next.job?.jobId !== state.job?.jobId) return;
-      next.job = null;
-      next.error = "上次任务记录未找到，已结束等待，材料和已有成果均保留。没有自动重试模型；请手动重新拆解（可能产生新的模型费用）。";
-    });
+    return releaseMissingStudioJob(projectId, state.job.jobId);
   }
-  if (job.status === "running") {
-    const latest = await readWorkbench(projectId);
-    return latest.job?.jobId === job.jobId ? { ...latest, job: { ...latest.job, phase: job.phase } } : latest;
-  }
-  return changeWorkbench(projectId, state.revision, next => {
-    if (next.job?.jobId !== job.jobId) throw new Error("任务已变化，请重新读取。");
-    if (next.sourceRevision !== next.job.sourceRevision || next.blueprintRevision !== next.job.blueprintRevision) { next.job = null; next.error = "材料或蓝图已变化，旧任务结果未应用。"; return; }
-    const operation = next.job.operation; next.job = null;
-    if (job.status === "failed") { next.error = job.error?.message || "处理失败，请重试。"; return; }
-    const result = job.result;
-    if (result?.kind === "analysis" && operation === "analyze") { next.analysis = result.analysis; next.analysisSourceRevision = next.sourceRevision; next.choiceId = null; next.blueprintSourceRevision = null; }
-    else if (result?.kind === "blueprint" && operation === "blueprint") {
-      if (next.blueprint) { if (next.versions.length >= 20) { next.error = "蓝图历史已达20份，新蓝图未替换旧稿；请先备份并整理历史，勿反复重新生成。"; return; } archiveCurrentBlueprint(next); }
-      next.blueprint = result.blueprint; next.blueprintRevision++; next.blueprintSourceRevision = next.sourceRevision; next.blueprintChoiceId = next.choiceId;
-    } else if (result?.kind === "review" && operation === "review") { next.review = result; next.reviewBlueprintRevision = next.blueprintRevision; }
-    else throw new Error("返回结果与当前任务不一致，原内容已保留。");
-  });
+  return mergeStudioJob(projectId, job);
 }

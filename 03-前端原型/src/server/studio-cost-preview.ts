@@ -4,13 +4,15 @@ import { studioInputs, studioAnalysisSchema, studioAuditSchema, type StudioOpera
 import { blueprintDataSchema } from "@/domain/blueprint";
 import { studioCostPreviewSchema } from "@/domain/studio-budget";
 import { analysisBatches, analysisSelectionSchema, sourceSelectionSchema } from "./long-analysis";
-import { StudioBilling, studioConfigFingerprint, studioInputFingerprint } from "./studio-billing";
+import { StudioBilling, studioExecutionFingerprint, studioInputFingerprint, studioProductionKey } from "./studio-billing";
+import type { StudioProductionStore } from "./studio-production-store";
+import { reviewUnits } from "@/domain/studio-production";
 import { artifactBundleSchema, studioRequestBytesCeiling, type StudioConfig } from "./studio-models";
 import { LocalApiError } from "./local-security";
 import { reserveQuotedFen } from "./studio-pricing";
 
 /** Budget ceiling planning, not a forecast of semantic work or an invoice. Execution reserves exact requests. */
-export async function previewStudioCost(billing: StudioBilling, config: StudioConfig, projectId: string, operation: StudioOperation, input: unknown) {
+export async function previewStudioCost(billing: StudioBilling, config: StudioConfig, projectId: string, operation: StudioOperation, input: unknown, production?: StudioProductionStore) {
   const parsed = studioInputs[operation].safeParse(input);
   if (!parsed.success) throw new LocalApiError(400, "当前资料不完整，无法估算本步骤。");
   const inputBytes = Buffer.byteLength(JSON.stringify(parsed.data));
@@ -20,7 +22,7 @@ export async function previewStudioCost(billing: StudioBilling, config: StudioCo
   if (budget.uncertainCalls || budget.overrunFen) throw new LocalApiError(409, "项目存在待核对或超额费用，请先处理费用记录。");
   const models = operation === "review" ? [config.mainModel, config.reviewA, config.reviewB] : [config.mainModel];
   const quotes = await billing.prices.get(config.baseUrl, models);
-  let callsMax = operation === "review" ? 7 : 1;
+  let callsMax = operation === "review" ? reviewUnits.length : 1;
   let contextLimit = operation === "review" ? SINGLE_CONTEXT_BYTES : inputBytes;
   if (operation === "analyze" && inputBytes > ANALYSIS_DIRECT_BYTES) {
     const count = analysisBatches(studioInputs.analyze.parse(input).documents).length;
@@ -31,7 +33,11 @@ export async function previewStudioCost(billing: StudioBilling, config: StudioCo
     : operation === "blueprint" ? [blueprintDataSchema] : [studioAuditSchema, artifactBundleSchema];
   const requestCeiling = studioRequestBytesCeiling(contextLimit, schemas);
   const perModel = quotes.map(quote => reserveQuotedFen(quote, requestCeiling, Math.max(evaluationResponseProfile(quote.modelId).maxTokens, operation === "analyze" ? 8192 : 0)));
-  const estimateFen = operation === "review" ? perModel[0] * 3 + perModel[1] * 2 + perModel[2] * 2 : perModel[0] * callsMax;
-  const previewId = billing.ledger.preparePreview(projectId, budget.revision, studioInputFingerprint(projectId, operation, JSON.stringify(parsed.data)), studioConfigFingerprint(config));
-  return studioCostPreviewSchema.parse({ projectId, operation, budget, quotes, callsMax, estimateFen, previewId });
+  const estimateFen = operation === "review" ? reviewUnits.reduce((sum, unit) => sum + perModel[unit.role === "main" ? 0 : unit.role === "reviewA" ? 1 : 2], 0) : perModel[0] * callsMax;
+  const inputFingerprint = studioInputFingerprint(projectId, operation, JSON.stringify(parsed.data));
+  const executionFingerprint = studioExecutionFingerprint(config, operation);
+  const saved = operation === "review" ? production?.find(studioProductionKey(inputFingerprint, executionFingerprint)) : undefined;
+  const checkpoint = operation === "review" ? { runId: saved?.runId ?? null, savedUnits: saved?.units.filter(unit => unit.saved).length ?? 0, interruptedUnits: saved?.units.filter(unit => !unit.saved).length ?? 0 } : undefined;
+  const previewId = billing.ledger.preparePreview(projectId, budget.revision, inputFingerprint, executionFingerprint);
+  return studioCostPreviewSchema.parse({ projectId, operation, budget, quotes, callsMax, estimateFen, previewId, ...(checkpoint ? { checkpoint } : {}) });
 }

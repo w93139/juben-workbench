@@ -233,8 +233,9 @@ it("合法关系来源可通过，未知来源仍拒绝", async () => {
     };
     const engine = new StudioEngine(() => config, call);
     const done = await wait(engine, (await engine.start("review", { blueprint: blueprint() })).jobId);
-    if (done.result?.kind !== "review") throw new Error("结果类型错误");
-    expect(done.result.passed).toBe(sourceId === "rel");
+    const review = done.result?.kind === "review" ? done.result : done.reviewProgress?.review;
+    expect(review?.passed).toBe(sourceId === "rel");
+    if (sourceId !== "rel") expect(done.error?.code).toBe("MODEL_RESPONSE_INVALID");
   }
 });
 it("仅体验提示的蓝图仍进入完整审查，结构错误仍零外呼", async () => {
@@ -265,8 +266,8 @@ it.each(["missing", "host", "wrong-role", "wrong-round", "null-round", "public",
   }
   const engine = new StudioEngine(() => config, async (...args) => args[2].includes("六类必须齐") ? { artifacts: list } : transport()(...args));
   const done = await wait(engine, (await engine.start("review", { blueprint: bp })).jobId);
-  if (done.result?.kind !== "review") throw new Error("结果类型错误");
+  const review = done.result?.kind === "review" ? done.result : done.reviewProgress?.review;
   const passes = ["valid", "allowed-recipient"].includes(mode);
-  expect(done.result.passed).toBe(passes);
-  if (!passes) { expect(done.result.validationId).toBeUndefined(); expect(done.result.issues.join(" ")).toContain("个人证词"); }
+  expect(review?.passed).toBe(passes);
+  if (!passes) { expect(done.result).toBeUndefined(); expect(done.error?.code).toBe("MODEL_RESPONSE_INVALID"); expect(review?.issues.join(" ")).toContain("个人证词"); }
 });

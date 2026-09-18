@@ -6,6 +6,8 @@ import { studioJobViewSchema, type StudioJobView } from "@/domain/studio";
 import { LocalApiError } from "./local-security";
 import { StudioBudgetLedger } from "./studio-budget";
 import type { StudioBudgetClaim } from "@/domain/studio-budget";
+import { StudioProductionStore } from "./studio-production-store";
+import { hydrateReviewProgress } from "./studio-review-progress";
 
 // Only validated results and request hashes are retained: never credentials or input files.
 const RETENTION = 7 * 24 * 60 * 60 * 1000;
@@ -14,6 +16,7 @@ type Row = { fingerprint: string; view_json: string; owner_pid: number; lease_un
 export class StudioJobStore {
   private db: DatabaseSync;
   readonly budget: StudioBudgetLedger;
+  readonly production: StudioProductionStore;
   constructor(file = resolve(process.cwd(), "runtime-data/studio-jobs.sqlite"), private now = Date.now) {
     if (file !== ":memory:") {
       mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
@@ -26,6 +29,7 @@ export class StudioJobStore {
     this.db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS studio_jobs (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, view_json TEXT NOT NULL, status TEXT NOT NULL, owner_pid INTEGER NOT NULL, lease_until INTEGER NOT NULL, expires_at INTEGER NOT NULL, validation_id TEXT UNIQUE)");
     this.db.exec("CREATE TABLE IF NOT EXISTS studio_analysis_notes (cache_key TEXT PRIMARY KEY, note_json TEXT NOT NULL, expires_at INTEGER NOT NULL)");
     this.budget = new StudioBudgetLedger(this.db, this.now);
+    this.production = new StudioProductionStore(this.db, this.now);
   }
   close() { this.db.close(); }
   readAnalysisNote(key: string): unknown {
@@ -48,7 +52,8 @@ export class StudioJobStore {
       const previous = studioJobViewSchema.parse(JSON.parse(row.view_json));
       const code = alive ? "HOST_EXECUTION_PAUSED" : "JOB_INTERRUPTED";
       const lastCall = previous.lastCall && { ...previous.lastCall, ...(previous.lastCall.status === "running" ? { status: "failed" as const, errorCode: code, elapsedMs: Math.max(0, now - previous.lastCall.startedAt) } : {}) };
-      const view: StudioJobView = { jobId: row.id, status: "failed", phase: "上次处理已中断", error: { code, message: `${previous.phase}。${alive ? HOST_PAUSE_MESSAGE : "上次处理因服务退出而中断，材料已保留。没有自动重试；手动继续可能产生新的模型费用。"}` }, ...(lastCall ? { lastCall } : {}) };
+      const reviewProgress = previous.reviewProgress?.runId ? hydrateReviewProgress(previous.reviewProgress, this.production.snapshot(previous.reviewProgress.runId), row.id, false) : previous.reviewProgress;
+      const view: StudioJobView = { jobId: row.id, status: "failed", phase: "上次处理已中断", error: { code, message: `${previous.phase}。${alive ? HOST_PAUSE_MESSAGE : "上次处理因服务退出而中断，材料已保留。没有自动重试；手动继续可能产生新的模型费用。"}` }, ...(lastCall ? { lastCall } : {}), ...(reviewProgress ? { reviewProgress } : {}) };
       this.db.prepare("UPDATE studio_jobs SET view_json = ?, status = 'failed', expires_at = ? WHERE id = ? AND status = 'running' AND owner_pid = ? AND lease_until = ?").run(JSON.stringify(view), now + RETENTION, row.id, row.owner_pid, row.lease_until);
     }
     this.db.prepare("DELETE FROM studio_jobs WHERE status != 'running' AND expires_at < ?").run(now);
@@ -58,16 +63,18 @@ export class StudioJobStore {
     const row = this.db.prepare("SELECT fingerprint, view_json FROM studio_jobs WHERE id = ?").get(id) as Row | undefined;
     return row ? { fingerprint: row.fingerprint, view: studioJobViewSchema.parse(JSON.parse(row.view_json)) } : null;
   }
-  claim(view: StudioJobView, fingerprint: string, budget?: StudioBudgetClaim, configHash?: string): { created: boolean; fingerprint: string; view: StudioJobView } {
+  claim(view: StudioJobView, fingerprint: string, budget?: StudioBudgetClaim, configHash?: string, productionKey?: string): { created: boolean; fingerprint: string; view: StudioJobView; productionId?: string } {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const prior = this.read(view.jobId);
       if (prior) { this.db.exec("COMMIT"); return { ...prior, created: false }; }
       const count = this.db.prepare("SELECT COUNT(*) AS count FROM studio_jobs WHERE status = 'running'").get() as { count: number };
       if (count.count >= 2) throw new LocalApiError(429, "当前已有两个创作任务，请等待完成后再试。");
+      const productionId = productionKey ? this.production.claim(productionKey, view.jobId) : undefined;
+      if (view.reviewProgress && productionId) view.reviewProgress.runId = productionId;
       if (budget) this.budget.admitInTransaction(budget, view.jobId, fingerprint, configHash);
       this.db.prepare("INSERT INTO studio_jobs(id, fingerprint, view_json, status, owner_pid, lease_until, expires_at) VALUES (?, ?, ?, 'running', ?, ?, ?)").run(view.jobId, fingerprint, JSON.stringify(studioJobViewSchema.parse(view)), process.pid, this.now() + LEASE, this.now() + RETENTION);
-      this.db.exec("COMMIT"); return { created: true, fingerprint, view };
+      this.db.exec("COMMIT"); return { created: true, fingerprint, view, productionId };
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
   heartbeat(id: string) {

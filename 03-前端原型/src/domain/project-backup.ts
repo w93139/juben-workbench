@@ -9,10 +9,10 @@ const portableWorkbenchSchema = workbenchSchema.omit({ review: true, job: true, 
   review: archivedStudioReviewSchema.nullable(), job: z.null(), error: z.null(),
 });
 export const projectBackupSchema = z.object({
-  format: z.literal("juben-workbench/project-backup"), schemaVersion: z.literal(1),
+  format: z.literal("juben-workbench/project-backup"), schemaVersion: z.union([z.literal(1), z.literal(2)]),
   id: z.uuid(), exportedAt: z.iso.datetime(),
   project: projectSchema, workbench: portableWorkbenchSchema, authoringRecordExists: z.boolean(),
-}).strict();
+}).strict().refine(value => value.schemaVersion === 2 || value.workbench.reviewProgress === null, "阶段成果备份需要版本2");
 export type ProjectBackup = z.infer<typeof projectBackupSchema>;
 
 /** Keep content/relative naming, but never carry local output authority or active work. */
@@ -43,7 +43,8 @@ export function createProjectBackup(project: Project, state: WorkbenchState, aut
     void _authority;
     review = archivedStudioReviewSchema.parse(content);
   }
-  const backup = projectBackupSchema.parse({ format: "juben-workbench/project-backup", schemaVersion: 1, id, exportedAt: now, project: portableProject(project), workbench: { ...valid, review, job: null, error: null }, authoringRecordExists });
+  const reviewProgress = valid.reviewProgress && { ...valid.reviewProgress, jobId: null, checkpoint: { ...valid.reviewProgress.checkpoint, runId: null, steps: valid.reviewProgress.checkpoint.steps.map(step => ({ ...step, state: step.state === "running" ? "interrupted" as const : step.state })) } };
+  const backup = projectBackupSchema.parse({ format: "juben-workbench/project-backup", schemaVersion: 2, id, exportedAt: now, project: portableProject(project), workbench: { ...valid, review, reviewProgress, job: null, error: null }, authoringRecordExists });
   serializeProjectBackup(backup); return backup;
 }
 export function serializeProjectBackup(backup: ProjectBackup) {
@@ -74,6 +75,7 @@ export function restoredProject(backup: ProjectBackup, operationId: string, fing
     if (reviewArchives.length >= 20) throw new Error("审查历史已达20份，无法完整加入本次记录，未恢复且未删除任何内容。");
     reviewArchives.push({ id: backup.id, origin: "backup-import", importedAt: now, blueprintRevision: backup.workbench.reviewBlueprintRevision, review: backup.workbench.review });
   }
-  const workbench = workbenchSchema.parse({ ...backup.workbench, review: null, reviewBlueprintRevision: null, reviewArchives, restoredFrom: origin, job: null, error: null });
+  const reviewProgress = backup.workbench.reviewProgress && { ...backup.workbench.reviewProgress, jobId: null, checkpoint: { ...backup.workbench.reviewProgress.checkpoint, runId: null, steps: backup.workbench.reviewProgress.checkpoint.steps.map(step => ({ ...step, state: step.state === "running" ? "interrupted" as const : step.state })) } };
+  const workbench = workbenchSchema.parse({ ...backup.workbench, review: null, reviewBlueprintRevision: null, reviewProgress, reviewArchives, restoredFrom: origin, job: null, error: null });
   return { project: projectSchema.parse(project), workbench };
 }

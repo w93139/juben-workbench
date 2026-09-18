@@ -2,9 +2,13 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { emptyWorkbench, blueprintCurrent, type WorkbenchState } from "@/domain/workbench";
 import { emptyBlueprintData } from "@/domain/blueprint";
 import { pollStudioJob, startStudioJob } from "@/services/studio-client";
+import { applyStudioJobView, applyMissingStudioJob } from "@/domain/studio-job-update";
+import type { StudioJobView } from "@/domain/studio";
 let saved: WorkbenchState;
 vi.mock("@/services/workbench-store", () => ({
   readWorkbench: async () => structuredClone(saved),
+  mergeStudioJob: async (_id: string, job: StudioJobView) => { const next = structuredClone(saved); applyStudioJobView(next, job); saved = next; return structuredClone(next); },
+  releaseMissingStudioJob: async (_id: string, jobId: string) => { const next = structuredClone(saved); applyMissingStudioJob(next, jobId); saved = next; return structuredClone(next); },
   changeWorkbench: async (_id: string, revision: number, fn: (state: WorkbenchState) => void) => {
     if (revision !== saved.revision) throw new Error("版本冲突");
     const next = structuredClone(saved); fn(next); next.revision++; saved = next; return structuredClone(next);

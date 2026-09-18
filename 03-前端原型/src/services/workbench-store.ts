@@ -1,6 +1,8 @@
 import { workbenchSchema, emptyWorkbench, type BlueprintDraft, type WorkbenchState } from "@/domain/workbench";
 import { applyBlueprintDraft, putBlueprintDraft, removeBlueprintDraft } from "@/domain/blueprint-drafts";
 import { assertHistoryVersion, removeBlueprintHistory, type BlueprintVersion, type HistorySelection } from "@/domain/blueprint-history";
+import { applyStudioJobView, applyMissingStudioJob } from "@/domain/studio-job-update";
+import { studioJobViewSchema, type StudioJobView } from "@/domain/studio";
 
 export const WORKBENCH_DB = "juben-workbench:authoring:v1";
 export const WORKBENCH_STORE = "projects";
@@ -32,8 +34,9 @@ export async function readWorkbenchSnapshot(id: string): Promise<{ exists: boole
     req.onerror = () => reject(new Error("读取创作数据失败，请重试。"));
   }); } finally { db.close(); }
 }
-async function transactWorkbench(id: string, update: (state: WorkbenchState) => void): Promise<WorkbenchState> {
+async function transactWorkbench(id: string, update: (state: WorkbenchState) => void | boolean): Promise<WorkbenchState> {
   const db = await openWorkbenchDatabase();
+  let changed = true;
   try {
     const result = await new Promise<WorkbenchState>((resolve, reject) => {
       const transaction = db.transaction(STORE, "readwrite");
@@ -41,13 +44,15 @@ async function transactWorkbench(id: string, update: (state: WorkbenchState) => 
       req.onsuccess = () => { try {
         assertAvailable(req.result);
         next = req.result === undefined ? emptyWorkbench() : workbenchSchema.parse(req.result);
-        update(next); next = workbenchSchema.parse(next); store.put(next, id);
+        changed = update(next) !== false; next = workbenchSchema.parse(next); if (changed) store.put(next, id);
       } catch (failure) { error = failure instanceof Error ? failure : new Error("无法保存当前修改"); transaction.abort(); } };
       transaction.oncomplete = () => resolve(next);
       transaction.onabort = transaction.onerror = () => reject(error ?? new Error("本机存储失败，当前输入已保留，请重试。"));
     });
-    window.dispatchEvent(new CustomEvent("authoring-updated", { detail: id }));
-    if (typeof BroadcastChannel !== "undefined") { const channel = new BroadcastChannel(WORKBENCH_DB); channel.postMessage(id); channel.close(); }
+    if (changed) {
+      window.dispatchEvent(new CustomEvent("authoring-updated", { detail: id }));
+      if (typeof BroadcastChannel !== "undefined") { const channel = new BroadcastChannel(WORKBENCH_DB); channel.postMessage(id); channel.close(); }
+    }
     return result;
   } finally { db.close(); }
 }
@@ -56,6 +61,13 @@ export function changeWorkbench(id: string, revision: number, update: (state: Wo
     if (state.revision !== revision) throw new Error("项目已在其他页面更新，当前输入保留，请刷新后重试。");
     update(state); state.revision++;
   });
+}
+export function mergeStudioJob(id: string, view: StudioJobView) {
+  const job = studioJobViewSchema.parse(view);
+  return transactWorkbench(id, state => applyStudioJobView(state, job));
+}
+export function releaseMissingStudioJob(id: string, jobId: string) {
+  return transactWorkbench(id, state => applyMissingStudioJob(state, jobId));
 }
 export async function saveBlueprintDraft(id: string, draft: BlueprintDraft, expected: number | null, history?: HistorySelection): Promise<BlueprintDraft> {
   const next = await transactWorkbench(id, state => {
