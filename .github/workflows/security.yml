@@ -37,3 +37,46 @@ jobs:
       - name: Verify pushed scanner and synchronization protections
         if: github.event_name == 'push'
         run: python3 -m unittest discover -s project/scripts -p 'test_*.py'
+
+  application:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Set up Node.js 24
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4, verified through GitHub API
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: 03-前端原型/package-lock.json
+      - name: Install dependencies and Chromium
+        working-directory: 03-前端原型
+        run: |
+          npm ci
+          npx --no-install playwright install --with-deps chromium
+      - name: Run isolated free application checks
+        run: python3 scripts/verify-app.py --in-place
+
+  macos-components:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Set up Node.js 24
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: 03-前端原型/package-lock.json
+      - name: Install dependencies
+        working-directory: 03-前端原型
+        run: npm ci
+      - name: Check native PDF, RTF and image OCR
+        working-directory: 03-前端原型
+        run: npx --no-install vitest run tests/unit/material-reader.test.ts

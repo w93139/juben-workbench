@@ -7,11 +7,12 @@ import { StudioSettingsStore } from "@/server/studio-settings";
 import { StudioJobStore } from "@/server/studio-job-store";
 import { analysisBatches } from "@/server/long-analysis";
 import { guardedVerificationFetch, type VerificationCall } from "./live-analysis-guard";
+import { analysisVerificationDocuments } from "./analysis-fixture";
 
 it.skipIf(process.env.STUDIO_LIVE_VERIFY !== "1")("当前主模型真实分段及汇总：自有样例、最多3次、累计预留不超过3元", async () => {
   const config = new StudioSettingsStore(process.env.STUDIO_LIVE_SETTINGS_ROOT ?? resolve("runtime-data")).config();
   if (!config || config.baseUrl !== "https://maas-api.antdigital.com/v1") throw new Error("仅使用已配置的蚂蚁官方连接，未调用模型。");
-  const documents = Array.from({ length: 10 }, (_, i) => ({ id: `test-role-${i}`, name: `自有测试角色${i}.txt`, text: `【自有验证样例，非用户原剧本】角色${i}在第${i + 1}轮获得记录${i}。角色0负责保管钟表，角色9负责公开原始账册。记录只证明事件顺序，不能单独证明动机。`.padEnd(3000, `校对记录${i}：同一事件须用独立来源交叉核实；不能把推断写成事实。`) }));
+  const documents = analysisVerificationDocuments();
   const batches = analysisBatches(documents);
   if (batches.length !== 2) throw new Error("测试计划不再是两批加一次汇总，未调用模型。");
   const network = globalThis.fetch;
