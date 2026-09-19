@@ -3,6 +3,7 @@ import { blueprintDataSchema } from "./blueprint";
 import { moduleIds } from "./production";
 import { ANALYSIS_DOCUMENT_LIMIT } from "./analysis-limits";
 import { reviewUnits } from "./studio-production";
+import { reviewPlanSchema, scopedStages, scopedUnitId } from "./review-plan";
 
 const text = (max: number) => z.string().trim().min(1).max(max);
 export const studioDocumentSchema = z.object({ id: text(120), name: text(500), text: z.string().min(1).max(300000).refine(value => !!value.trim(), "原文不能为空") }).strict();
@@ -26,6 +27,36 @@ export const studioAuditSchema = z.object({
   contentComplete: z.boolean(), playerHostIsolation: z.boolean(), findingsAddressed: z.boolean(), humanPlaytest: z.literal("not-run"),
 }).strict();
 export type StudioAudit = z.infer<typeof studioAuditSchema>;
+export const studioScopedAuditSchema = studioAuditSchema.extend({ coverage: z.array(z.object({ partId: text(100), hash: z.string().regex(/^[a-f0-9]{64}$/), quote: text(3000) }).strict()).min(1).max(2) }).strict();
+export type StudioScopedAudit = z.infer<typeof studioScopedAuditSchema>;
+export const segmentedReviewSchema = z.object({ plan: reviewPlanSchema, units: z.array(z.object({
+  id: text(100), scopeId: text(100), stage: z.enum(scopedStages), state: z.enum(["pending", "running", "saved", "interrupted"]),
+  report: studioScopedAuditSchema.optional(), issues: z.array(text(3000)).max(20).default([]),
+}).strict()).max(51200) }).strict();
+export type SegmentedReview = z.infer<typeof segmentedReviewSchema>;
+function completeSegmentedReview(value: SegmentedReview, artifacts: StudioArtifact[]) {
+  const { plan, units } = value, scopes = [...plan.parts, ...plan.links];
+  if (new Set(scopes.map(scope => scope.id)).size !== scopes.length || units.length !== scopes.length * 5 || plan.callsMax !== units.length || new Set(units.map(unit => unit.id)).size !== units.length) return false;
+  if (plan.artifacts.length !== artifacts.length || new Set(artifacts.map(artifact => artifact.id)).size !== artifacts.length) return false;
+  for (const artifact of artifacts) {
+    if (!plan.artifacts.some(item => item.id === artifact.id && item.length === artifact.content.length)) return false;
+    const parts = plan.parts.filter(part => part.artifactId === artifact.id); let end = 0;
+    for (const part of parts) { if (part.start !== end || part.end <= end || part.end > artifact.content.length) return false; end = part.end; }
+    if (end !== artifact.content.length) return false;
+  }
+  const byPart = new Map(plan.parts.map(part => [part.id, part])), byUnit = new Map(units.map(unit => [unit.id, unit]));
+  for (const scope of scopes) for (const stage of scopedStages) {
+    const unit = byUnit.get(scopedUnitId(scope.id, stage)), report = unit?.report;
+    if (!unit || unit.scopeId !== scope.id || unit.stage !== stage || unit.state !== "saved" || unit.issues.length || !report || report.blocking.length || !report.contentComplete || !report.playerHostIsolation || !report.findingsAddressed) return false;
+    const ids = "parts" in scope ? scope.parts : [scope.id];
+    if (report.coverage.length !== ids.length || new Set(report.coverage.map(entry => entry.partId)).size !== ids.length) return false;
+    for (const id of ids) {
+      const part = byPart.get(id), evidence = report.coverage.find(entry => entry.partId === id), artifact = artifacts.find(item => item.id === part?.artifactId);
+      if (!part || !artifact || !evidence || evidence.hash !== part.hash || !artifact.content.slice(part.start, part.end).includes(evidence.quote)) return false;
+    }
+  }
+  return true;
+}
 export const studioInputs = {
   analyze: z.object({ documents: z.array(studioDocumentSchema).min(1).max(ANALYSIS_DOCUMENT_LIMIT), instructions: z.string().max(10000).default("") }).strict(),
   blueprint: z.object({ analysis: studioAnalysisSchema, choiceId: text(100), instructions: z.string().max(10000).default("") }).strict(),
@@ -36,10 +67,11 @@ const studioReviewContentSchema = z.object({
   kind: z.literal("review"), passed: z.boolean(), issues: z.array(z.string()).max(2000), artifacts: z.array(studioArtifactSchema).max(240),
   reports: z.object({ designGate: studioAuditSchema.optional(), independentA: studioAuditSchema.optional(), independentB: studioAuditSchema.optional(), mutualA: studioAuditSchema.optional(), mutualB: studioAuditSchema.optional(), coordinator: studioAuditSchema.optional() }).strict(),
   blueprint: blueprintDataSchema.optional(),
+  segmented: segmentedReviewSchema.optional(),
   blueprintFingerprint: z.string().regex(/^[a-f0-9]{64}$/), humanPlaytest: z.literal("not-run"),
 }).strict();
 function completeReview(value: z.infer<typeof studioReviewContentSchema>) {
-  return !value.issues.length && value.artifacts.length >= 6 && [value.reports.designGate, value.reports.independentA, value.reports.independentB, value.reports.mutualA, value.reports.mutualB, value.reports.coordinator].every((report) => report && !report.blocking.length && report.contentComplete && report.playerHostIsolation && report.findingsAddressed);
+  return !value.issues.length && value.artifacts.length >= 6 && (!value.segmented || completeSegmentedReview(value.segmented, value.artifacts)) && [value.reports.designGate, value.reports.independentA, value.reports.independentB, value.reports.mutualA, value.reports.mutualB, value.reports.coordinator].every((report) => report && !report.blocking.length && report.contentComplete && report.playerHostIsolation && report.findingsAddressed);
 }
 export const archivedStudioReviewSchema = studioReviewContentSchema.refine(value => !value.passed || completeReview(value), "历史通过状态缺少完整审查链");
 export type ArchivedStudioReview = z.infer<typeof archivedStudioReviewSchema>;

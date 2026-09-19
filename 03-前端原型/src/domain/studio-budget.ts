@@ -32,8 +32,9 @@ export const studioBudgetResponseSchema = z.object({ budget: studioBudgetSchema.
 export const studioCostPreviewSchema = z.object({
   projectId: projectBudgetIdSchema, operation: z.enum(["analyze", "blueprint", "review"]), budget: studioBudgetSchema,
   previewId: z.string().uuid(),
+  reviewMode: z.enum(["generation", "segmented"]).optional(),
   quotes: z.array(studioQuoteSchema).min(1).max(3), callsMax: integer.positive(), estimateFen: integer,
-  checkpoint: z.object({ runId: z.uuid().nullable(), savedUnits: integer.max(246), interruptedUnits: integer.max(246), totalUnits: integer.min(6).max(246), allCached: z.boolean() }).strict().refine(value => value.savedUnits + value.interruptedUnits <= value.totalUnits && (!value.allCached || value.runId !== null && value.savedUnits === value.totalUnits), "检查点数量不一致").optional(),
+  checkpoint: z.object({ runId: z.uuid().nullable(), savedUnits: integer.max(52000), interruptedUnits: integer.max(52000), totalUnits: integer.min(6).max(52000), allCached: z.boolean() }).strict().refine(value => value.savedUnits + value.interruptedUnits <= value.totalUnits && (!value.allCached || value.runId !== null && value.savedUnits === value.totalUnits), "检查点数量不一致").optional(),
 }).strict();
 export type StudioCostPreview = z.infer<typeof studioCostPreviewSchema>;
 

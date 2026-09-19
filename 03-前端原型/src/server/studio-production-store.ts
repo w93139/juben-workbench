@@ -4,6 +4,10 @@ import { z } from "zod";
 import { reviewUnits } from "@/domain/studio-production";
 import { artifactPlanSchema, artifactPlanDigest, type ArtifactPlan } from "./artifact-plan";
 import { LocalApiError } from "./local-security";
+import { reviewPlanSchema, scopedStages, scopedUnitId, type ReviewPlan } from "@/domain/review-plan";
+import { reviewPlanDigest, verifyReviewPlan } from "./review-plan";
+import type { BlueprintData } from "@/domain/blueprint";
+import type { StudioArtifact } from "@/domain/studio";
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 type Run = { id: string; revision: number; active_job_id: string };
@@ -20,7 +24,8 @@ export class StudioProductionStore {
       run_id TEXT NOT NULL, unit_id TEXT NOT NULL, job_id TEXT NOT NULL, call_id TEXT,
       response_json TEXT, issues_json TEXT,
       PRIMARY KEY(run_id, unit_id, job_id)
-    ); CREATE TABLE IF NOT EXISTS studio_production_plans (run_id TEXT PRIMARY KEY, plan_hash TEXT NOT NULL, plan_json TEXT NOT NULL)`);
+    ); CREATE TABLE IF NOT EXISTS studio_production_plans (run_id TEXT PRIMARY KEY, plan_hash TEXT NOT NULL, plan_json TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS studio_review_plans (run_id TEXT PRIMARY KEY, plan_hash TEXT NOT NULL, plan_json TEXT NOT NULL)`);
   }
   private transaction<T>(action: () => T): T {
     this.db.exec("BEGIN IMMEDIATE");
@@ -63,11 +68,42 @@ export class StudioProductionStore {
     return plan;
   }
   private definition(runId: string, unitId: string) {
+    if (unitId.startsWith("sr-")) {
+      const plan = this.reviewPlan(runId);
+      for (const scope of plan ? [...plan.parts, ...plan.links] : []) for (const stage of scopedStages) {
+        if (scopedUnitId(scope.id, stage) !== unitId) continue;
+        const stages = stage === "coordinator" ? ["mutualA", "mutualB"] as const : stage.startsWith("mutual") ? ["independentA", "independentB"] as const : [];
+        return { id: unitId, dependencies: ["artifacts", ...stages.map(stage => scopedUnitId(scope.id, stage))] };
+      }
+      throw new LocalApiError(409, "分段审查单元不在冻结计划中，未调用模型。");
+    }
     const plan = this.plan(runId);
     if (plan?.targets.some(target => target.id === unitId)) return { id: unitId, dependencies: ["designGate"] };
     const definition = reviewUnits.find(unit => unit.id === unitId);
     if (!definition) throw new Error("Unknown production unit");
     return plan && unitId === "artifacts" ? { ...definition, dependencies: plan.targets.map(target => target.id) } : definition;
+  }
+  reviewPlan(runId: string): ReviewPlan | null {
+    const row = this.db.prepare("SELECT plan_hash, plan_json FROM studio_review_plans WHERE run_id = ?").get(runId) as { plan_hash: string; plan_json: string } | undefined;
+    if (!row) return null;
+    const plan = reviewPlanSchema.parse(JSON.parse(row.plan_json));
+    if (reviewPlanDigest(plan) !== row.plan_hash) throw new LocalApiError(409, "分段审查计划校验失败，未继续调用。");
+    return plan;
+  }
+  registerReviewPlan(runId: string, jobId: string, plan: ReviewPlan, blueprint: BlueprintData, artifacts: StudioArtifact[]) {
+    verifyReviewPlan(plan, blueprint, artifacts);
+    this.transaction(() => {
+      this.owner(runId, jobId);
+      const prior = this.reviewPlan(runId), digest = reviewPlanDigest(plan);
+      if (prior) { if (reviewPlanDigest(prior) !== digest) throw new LocalApiError(409, "分段审查计划已变化，未覆盖已保存资料。"); return; }
+      if (!this.unit(runId, "artifacts")?.value_json) throw new LocalApiError(409, "正文汇总尚未保存，未建立分段审查计划。");
+      for (const artifact of artifacts) {
+        const stored = this.unit(runId, artifact.id)?.value_json;
+        if (!stored || stored !== JSON.stringify(artifact)) throw new LocalApiError(409, "正文与检查点不一致，未建立分段审查计划。");
+      }
+      this.db.prepare("INSERT INTO studio_review_plans(run_id, plan_hash, plan_json) VALUES (?, ?, ?)").run(runId, digest, JSON.stringify(plan));
+      this.bump(runId);
+    });
   }
   private unit(runId: string, unitId: string) {
     this.definition(runId, unitId);
@@ -135,7 +171,7 @@ export class StudioProductionStore {
     const run = this.db.prepare("SELECT id, revision, active_job_id FROM studio_production_runs WHERE id = ?").get(runId) as Run | undefined;
     if (!run) throw new LocalApiError(409, "正文检查点不存在，未自动重试。");
     const units = this.db.prepare("SELECT * FROM studio_production_units WHERE run_id = ?").all(runId) as Unit[];
-    return { runId, revision: run.revision, plan: this.plan(runId), units: units.map(unit => {
+    return { runId, revision: run.revision, plan: this.plan(runId), reviewPlan: this.reviewPlan(runId), units: units.map(unit => {
       const rejected = this.db.prepare("SELECT response_json, issues_json FROM studio_production_attempts WHERE run_id = ? AND unit_id = ? AND job_id = ?").get(runId, unit.unit_id, unit.job_id) as { response_json: string | null; issues_json: string | null } | undefined;
       const value = unit.value_json ?? rejected?.response_json;
       return { id: unit.unit_id, requestHash: unit.request_hash, jobId: unit.job_id, saved: unit.value_json !== null, callId: unit.call_id, value: value ? JSON.parse(value) as unknown : undefined, issues: rejected?.issues_json ? z.array(z.string()).parse(JSON.parse(rejected.issues_json)) : [] };

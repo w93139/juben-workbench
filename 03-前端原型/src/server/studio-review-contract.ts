@@ -1,5 +1,5 @@
 import type { BlueprintData } from "@/domain/blueprint";
-import { studioArtifactSchema, studioAuditSchema, type StudioArtifact, type StudioAudit } from "@/domain/studio";
+import { studioArtifactSchema, studioAuditSchema, studioScopedAuditSchema, type StudioArtifact, type StudioAudit } from "@/domain/studio";
 import { artifactTargetIssues, type artifactPayload } from "./artifact-plan";
 
 export function auditIssues(audit: StudioAudit, label: string, source?: unknown) {
@@ -34,6 +34,15 @@ export function artifactIssues(blueprint: BlueprintData, artifacts: StudioArtifa
 export function reviewContractIssues(unitId: string, value: unknown, payload: unknown): string[] {
   const data = payload as { blueprint?: BlueprintData; snapshot?: { blueprint: BlueprintData; artifacts: StudioArtifact[] } };
   if (unitId.startsWith("gen-")) return artifactTargetIssues((payload as ReturnType<typeof artifactPayload>).target, studioArtifactSchema.parse(value));
+  if (unitId.startsWith("sr-")) {
+    const audit = studioScopedAuditSchema.parse(value);
+    const scoped = payload as { blueprint: BlueprintData; sources: { partId: string; hash: string; content: string }[] };
+    const issues = auditIssues({ ...audit, blocking: [], contentComplete: true, playerHostIsolation: true, findingsAddressed: true }, "报告依据", { blueprint: scoped.blueprint, sources: scoped.sources });
+    if (Buffer.byteLength(JSON.stringify(value)) > 40_000) issues.push("单段报告超过40000字节容量，未采用");
+    if (audit.coverage.length !== scoped.sources.length || new Set(audit.coverage.map(entry => entry.partId)).size !== scoped.sources.length
+      || scoped.sources.some(source => !audit.coverage.some(entry => entry.partId === source.partId && entry.hash === source.hash && source.content.includes(entry.quote)))) issues.push("分段报告未完整覆盖指定原文，或片段哈希/摘录无法核对");
+    return issues;
+  }
   const audit = studioAuditSchema.parse(value);
   // Contract failures are retryable; valid blocking opinions remain saved and require author changes.
   return auditIssues({ ...audit, blocking: [], contentComplete: true, playerHostIsolation: true, findingsAddressed: true }, "报告依据", unitId === "designGate" ? data.blueprint : data.snapshot ?? payload);

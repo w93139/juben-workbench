@@ -3,6 +3,7 @@ const mocks = vi.hoisted(() => ({ validated: vi.fn(), write: vi.fn() }));
 vi.mock("../../src/server/studio-models", () => ({ getValidatedStudioReview: mocks.validated }));
 vi.mock("../../src/server/local-directories", () => ({ writeSelectedZip: mocks.write }));
 import { POST } from "../../src/app/api/local/directories/write/route";
+import { segmentedFixture } from "../fixtures/segmented-review";
 function request(body: unknown) { return new Request("http://127.0.0.1:3107/api/local/directories/write", { method: "POST", headers: { host: "127.0.0.1:3107", origin: "http://127.0.0.1:3107", "Content-Type": "application/json" }, body: JSON.stringify(body) }); }
 beforeEach(() => { mocks.write.mockReset(); mocks.validated.mockReset(); });
 test("无服务器通过记录及浏览器伪造正文不能写出", async () => {
@@ -22,4 +23,14 @@ test("仅从已通过服务器快照制作全包，包含蓝图、报告、正�
   const text = new TextDecoder().decode(bytes);
   expect(text).toContain("服务器设计蓝图"); expect(text).toContain("真实核验报告"); expect(text).toContain("服务器核验后的角色正文"); expect(text).toContain("服务器核验后的主持谜底"); expect(text).toContain("尚未真人试玩");
   expect(text).toContain("主持材料-含谜底/原创设计蓝图.json");
+});
+test("分段原始报告与覆盖清单完整进入主持ZIP，不能只导出汇总", async () => {
+  const fixture = segmentedFixture();
+  mocks.validated.mockReturnValue({ ...fixture.checkpoint.review, passed: true, validationId: "valid-server" });
+  mocks.write.mockResolvedValue({ written: true, filename: "server.zip" });
+  expect((await POST(request({ directoryId: "chosen", validationId: "valid-server", title: "分段作品" }))).status).toBe(200);
+  const text = new TextDecoder().decode(mocks.write.mock.calls[0][2]);
+  expect(text).toContain("主持材料-含谜底/分段审查原始报告与覆盖.json");
+  expect(text).toContain(fixture.segmented.units.at(-1)!.report!.summary);
+  expect(text).toContain(fixture.segmented.plan.parts.at(-1)!.hash);
 });

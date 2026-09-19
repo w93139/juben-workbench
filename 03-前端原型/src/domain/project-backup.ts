@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { projectSchema, type Project } from "./models";
-import { archivedStudioReviewSchema } from "./studio";
+import { archivedStudioReviewSchema, type SegmentedReview } from "./studio";
 import { workbenchSchema, type WorkbenchState } from "./workbench";
 import { restoreOriginSchema } from "./project-restore";
 
@@ -9,10 +9,14 @@ const portableWorkbenchSchema = workbenchSchema.omit({ review: true, job: true, 
   review: archivedStudioReviewSchema.nullable(), job: z.null(), error: z.null(),
 });
 export const projectBackupSchema = z.object({
-  format: z.literal("juben-workbench/project-backup"), schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+  format: z.literal("juben-workbench/project-backup"), schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
   id: z.uuid(), exportedAt: z.iso.datetime(),
   project: projectSchema, workbench: portableWorkbenchSchema, authoringRecordExists: z.boolean(),
-}).strict().refine(value => value.schemaVersion >= 2 || value.workbench.reviewProgress === null, "阶段成果备份需要版本2").refine(value => value.schemaVersion === 3 || !value.workbench.reviewProgress?.checkpoint.generation, "分模块成果备份需要版本3");
+}).strict().refine(value => value.schemaVersion >= 2 || value.workbench.reviewProgress === null, "阶段成果备份需要版本2").refine(value => value.schemaVersion >= 3 || !value.workbench.reviewProgress?.checkpoint.generation, "分模块成果备份需要版本3")
+  .refine(value => value.schemaVersion >= 4 || !hasSegmentedReview(value.workbench), "分段审查备份需要版本4");
+function hasSegmentedReview(state: { review: { segmented?: unknown } | null; reviewProgress: { checkpoint: { review: { segmented?: unknown } } } | null; reviewArchives: { review: { segmented?: unknown } }[] }) {
+  return !!(state.review?.segmented || state.reviewProgress?.checkpoint.review.segmented || state.reviewArchives.some(archive => archive.review.segmented));
+}
 export type ProjectBackup = z.infer<typeof projectBackupSchema>;
 
 /** Keep content/relative naming, but never carry local output authority or active work. */
@@ -34,11 +38,15 @@ export function portableProject(input: Project): Project {
   }
   return project;
 }
+function portableReview<T extends { segmented?: SegmentedReview }>(review: T): T {
+  return { ...review, ...(review.segmented ? { segmented: { ...review.segmented, units: review.segmented.units.map(unit => ({ ...unit, state: unit.state === "running" ? "interrupted" as const : unit.state })) } } : {}) };
+}
 function portableReviewProgress(progress: WorkbenchState["reviewProgress"]): WorkbenchState["reviewProgress"] {
   if (!progress) return null;
   const checkpoint = progress.checkpoint;
   const portableState = (state: "pending" | "running" | "saved" | "interrupted") => state === "running" ? "interrupted" as const : state;
   return { ...progress, jobId: null, checkpoint: { ...checkpoint, runId: null, steps: checkpoint.steps.map(step => ({ ...step, state: portableState(step.state) })),
+    review: portableReview(checkpoint.review),
     ...(checkpoint.generation ? { generation: { ...checkpoint.generation, units: checkpoint.generation.units.map(unit => ({ ...unit, state: portableState(unit.state) })) } } : {}),
   } };
 }
@@ -49,10 +57,11 @@ export function createProjectBackup(project: Project, state: WorkbenchState, aut
   if (valid.review) {
     const { validationId: _authority, ...content } = valid.review;
     void _authority;
-    review = archivedStudioReviewSchema.parse(content);
+    review = archivedStudioReviewSchema.parse(portableReview(content));
   }
   const reviewProgress = portableReviewProgress(valid.reviewProgress);
-  const backup = projectBackupSchema.parse({ format: "juben-workbench/project-backup", schemaVersion: 3, id, exportedAt: now, project: portableProject(project), workbench: { ...valid, review, reviewProgress, job: null, error: null }, authoringRecordExists });
+  const reviewArchives = valid.reviewArchives.map(archive => ({ ...archive, review: portableReview(archive.review) }));
+  const backup = projectBackupSchema.parse({ format: "juben-workbench/project-backup", schemaVersion: hasSegmentedReview(valid) ? 4 : 3, id, exportedAt: now, project: portableProject(project), workbench: { ...valid, review, reviewProgress, reviewArchives, job: null, error: null }, authoringRecordExists });
   serializeProjectBackup(backup); return backup;
 }
 export function serializeProjectBackup(backup: ProjectBackup) {
@@ -78,10 +87,10 @@ export function restoredProject(backup: ProjectBackup, operationId: string, fing
   for (const char of project.title) { if (title.length + char.length + suffix.length > 40) break; title += char; }
   project.id = `project-restored-${operationId}`; project.title = title + suffix;
   project.createdAt = project.updatedAt = now; project.revision = 0; project.readOnly = false; project.restoredFrom = origin;
-  const reviewArchives = [...backup.workbench.reviewArchives];
+  const reviewArchives = backup.workbench.reviewArchives.map(archive => ({ ...archive, review: portableReview(archive.review) }));
   if (backup.workbench.review) {
     if (reviewArchives.length >= 20) throw new Error("审查历史已达20份，无法完整加入本次记录，未恢复且未删除任何内容。");
-    reviewArchives.push({ id: backup.id, origin: "backup-import", importedAt: now, blueprintRevision: backup.workbench.reviewBlueprintRevision, review: backup.workbench.review });
+    reviewArchives.push({ id: backup.id, origin: "backup-import", importedAt: now, blueprintRevision: backup.workbench.reviewBlueprintRevision, review: portableReview(backup.workbench.review) });
   }
   const reviewProgress = portableReviewProgress(backup.workbench.reviewProgress);
   const workbench = workbenchSchema.parse({ ...backup.workbench, review: null, reviewBlueprintRevision: null, reviewProgress, reviewArchives, restoredFrom: origin, job: null, error: null });

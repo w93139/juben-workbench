@@ -1,3 +1,4 @@
+import { STUDIO_ZIP_BYTES } from "./studio-export-files";
 import { execFile } from "node:child_process";
 import { access, chmod, lstat, mkdir, open, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
@@ -83,7 +84,7 @@ export async function revealLocalDirectory(id: unknown) {
 /** Writes one server-generated ZIP; exclusive creation never overwrites files. */
 export async function writeSelectedZip(id: unknown, filename: string, bytes: Uint8Array) {
   if (!filename || filename.length > 200 || /[\/\\\x00-\x1f\x7f]/.test(filename) || filename === ".." || !filename.endsWith(".zip")) throw new LocalApiError(400, "导出文件名无效。");
-  if (bytes.length > 64 * 1024 * 1024) throw new LocalApiError(413, "导出包超过本机写入大小限制。");
+  if (bytes.length > STUDIO_ZIP_BYTES) throw new LocalApiError(413, "导出包超过本机写入大小限制。");
   const directory = await selectedDirectory(id);
   const target = join(directory.path, filename);
   let handle: Awaited<ReturnType<typeof open>> | undefined;

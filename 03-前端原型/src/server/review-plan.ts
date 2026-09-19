@@ -3,29 +3,15 @@ import type { BlueprintData } from "@/domain/blueprint";
 import { studioArtifactSchema, type StudioArtifact } from "@/domain/studio";
 import { SINGLE_CONTEXT_BYTES } from "@/domain/analysis-limits";
 import { LocalApiError } from "./local-security";
+import { reviewPlanSchema, type ReviewPart, type ReviewLink, type ReviewPlan } from "@/domain/review-plan";
+export type { ReviewPart, ReviewLink, ReviewPlan } from "@/domain/review-plan";
 
 /** UTF-16 offsets refer to the unmodified artifact.content; hashes use UTF-8. */
-export interface ReviewPart {
-  id: string; artifactId: string; start: number; end: number; hash: string;
-}
-export interface ReviewLink {
-  id: string; parts: [string, string]; groups: string[];
-}
-export interface ReviewPlan {
-  version: "segmented-review/1";
-  blueprintHash: string;
-  artifacts: { id: string; hash: string; length: number }[];
-  parts: ReviewPart[];
-  groups: { id: string; parts: string[] }[];
-  links: ReviewLink[];
-  limits: { partBytes: number; contextBytes: number; reportReserveBytes: number; maxParts: number; maxLinks: number };
-  callsMax: number;
-}
 const defaults = { partBytes: 48_000, contextBytes: SINGLE_CONTEXT_BYTES, reportReserveBytes: 200_000, maxParts: 2048, maxLinks: 8192 };
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const textHash = (value: string) => createHash("sha256").update(value).digest("hex");
 const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
-const fail = (message: string): never => { throw new LocalApiError(413, `${message}；未截断正文，未发起模型调用。`); };
+const fail = (message: string): never => { throw new LocalApiError(413, `${message}；未截断正文，本次超限请求未发起。此前成功阶段及费用仍保留。`); };
 const boundary = (text: string, end: number) => end > 0 && end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1]) && /[\uDC00-\uDFFF]/.test(text[end]) ? end - 1 : end;
 
 function partSource(artifact: StudioArtifact, part: ReviewPart) {
@@ -102,7 +88,7 @@ export function buildReviewPlan(blueprint: BlueprintData, input: StudioArtifact[
     const payload = scopePayload(scope.id, {});
     if (bytes(payload) - bytes({}) + limits.reportReserveBytes > limits.contextBytes) fail("完整审查范围及报告预留超出请求容量");
   }
-  return plan;
+  return reviewPlanSchema.parse(plan);
 }
 
 export const reviewPlanDigest = (plan: ReviewPlan) => hash(plan);

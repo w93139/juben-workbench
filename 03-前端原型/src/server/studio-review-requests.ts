@@ -2,11 +2,14 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { evaluationResponseProfile } from "@/domain/model-evaluation";
 import type { BlueprintData } from "@/domain/blueprint";
-import { studioArtifactSchema, studioAuditSchema, type StudioArtifact, type StudioReviewResult } from "@/domain/studio";
+import { studioArtifactSchema, studioAuditSchema, studioScopedAuditSchema, type StudioScopedAudit, type StudioArtifact, type StudioReviewResult } from "@/domain/studio";
 import type { StudioConfig } from "./studio-models";
 import type { StudioProductionStore } from "./studio-production-store";
 import { artifactInstructions, artifactPayload, artifactPlanDigest, type ArtifactPlan } from "./artifact-plan";
 import { artifactIssues, reviewContractIssues } from "./studio-review-contract";
+import { prepareReviewScopes } from "./review-plan";
+import { scopedInstructions, scopedPayload } from "./segmented-review";
+import { scopedStages, scopedUnitId, type ScopedStage } from "@/domain/review-plan";
 
 export const auditInstructions = {
   designGate: "按剧本设计六道门检查蓝图内容，而不只看字段是否非空。核对每角色贡献与关系、时间因果、知识来源、必要结论可获得证据、轮次主持兜底。未成形内容必须阻断。给原文定位和摘录，所有真人试玩状态not-run。",
@@ -19,7 +22,7 @@ export function reviewRequestFingerprint(model: string, instructions: string, pa
 }
 /** Inspection never changes checkpoints, calls a model or grants export authority. */
 export function inspectProductionReuse(plan: ArtifactPlan, saved: ReturnType<StudioProductionStore["snapshot"]> | null | undefined, blueprint: BlueprintData, config: StudioConfig) {
-  const totalUnits = plan.targets.length + 6;
+  const totalUnits = saved?.reviewPlan ? plan.targets.length + 1 + saved.reviewPlan.callsMax : plan.targets.length + 6;
   const valid = new Set<string>();
   const reports: StudioReviewResult["reports"] = {};
   const artifacts: StudioArtifact[] = [];
@@ -38,6 +41,19 @@ export function inspectProductionReuse(plan: ArtifactPlan, saved: ReturnType<Stu
       if (value) artifacts.push(studioArtifactSchema.parse(value));
     }
     if (artifacts.length === plan.targets.length && !artifactIssues(blueprint, artifacts).length) {
+      if (saved.reviewPlan) {
+        const read = prepareReviewScopes(saved.reviewPlan, blueprint, artifacts);
+        for (const scope of [...saved.reviewPlan.parts, ...saved.reviewPlan.links]) {
+          const local: Partial<Record<ScopedStage, StudioScopedAudit>> = {};
+          for (const stage of scopedStages) {
+            if (stage.startsWith("mutual") && (!local.independentA || !local.independentB)) continue;
+            if (stage === "coordinator" && (!local.independentA || !local.independentB || !local.mutualA || !local.mutualB)) continue;
+            const model = stage === "coordinator" ? config.mainModel : stage.endsWith("A") ? config.reviewA : config.reviewB;
+            const value = check(scopedUnitId(scope.id, stage), model, scopedInstructions(stage), scopedPayload(read, scope.id, stage, local), studioScopedAuditSchema);
+            if (value) local[stage] = studioScopedAuditSchema.parse(value);
+          }
+        }
+      } else {
       const snapshot = { blueprint, artifacts };
       for (const id of ["independentA", "independentB", "mutualA", "mutualB", "coordinator"] as const) {
         const model = id === "coordinator" ? config.mainModel : id.endsWith("A") ? config.reviewA : config.reviewB;
@@ -48,8 +64,9 @@ export function inspectProductionReuse(plan: ArtifactPlan, saved: ReturnType<Stu
         const value = check(id, model, instructions, payload, studioAuditSchema);
         if (value) reports[id] = studioAuditSchema.parse(value);
       }
+      }
     }
   }
-  const paidIds = new Set(["designGate", ...plan.targets.map(target => target.id), "independentA", "independentB", "mutualA", "mutualB", "coordinator"]);
+  const paidIds = new Set(["designGate", ...plan.targets.map(target => target.id), ...(saved?.reviewPlan ? [...saved.reviewPlan.parts, ...saved.reviewPlan.links].flatMap(scope => scopedStages.map(stage => scopedUnitId(scope.id, stage))) : ["independentA", "independentB", "mutualA", "mutualB", "coordinator"])]);
   return { runId: saved?.runId ?? null, totalUnits, savedUnits: valid.size, interruptedUnits: saved?.units.filter(unit => paidIds.has(unit.id) && !valid.has(unit.id)).length ?? 0, allCached: valid.size === totalUnits };
 }

@@ -49,8 +49,9 @@ it("审查快照超限仍保留全部长正文，继续不重新收费生成也�
  const store=new StudioJobStore(':memory:');stores.push(store);
  const call=vi.fn<ModelTransport>(async(_c,_m,_i,payload,schema)=>schema===studioArtifactSchema?{...plannedArtifact(payload as Parameters<typeof plannedArtifact>[0]),content:'长正文'.repeat(25000)}:reviewAudit());
  const engine=new StudioEngine(()=>config,call,Date.now,store,power);const first=await wait(engine,(await engine.start('review',{blueprint:reviewBlueprint()},randomUUID())).jobId);
- expect(first.error?.code).toBe('CONTEXT_TOO_LARGE');expect(first.reviewProgress?.review.artifacts).toHaveLength(10);expect(first.reviewProgress?.review.artifacts.every(a=>a.content.length===75000)).toBe(true);expect(call).toHaveBeenCalledTimes(11);
- const second=await wait(engine,(await engine.start('review',{blueprint:reviewBlueprint()},randomUUID())).jobId);expect(second.error?.code).toBe('CONTEXT_TOO_LARGE');expect(call).toHaveBeenCalledTimes(11);
+ expect(first.error?.code).toBe('REVIEW_PLAN_READY');expect(first.reviewProgress?.review.artifacts).toHaveLength(10);expect(first.reviewProgress?.review.artifacts.every(a=>a.content.length===75000)).toBe(true);expect(call).toHaveBeenCalledTimes(11);
+ expect(first.reviewProgress?.review.segmented?.plan.parts.length).toBeGreaterThan(10);
+ const second=await wait(engine,(await engine.start('review',{blueprint:reviewBlueprint()},randomUUID())).jobId);expect(second.error?.code).toBe('MODEL_RESPONSE_INVALID');expect(call.mock.calls.filter(args=>args[4]===studioArtifactSchema)).toHaveLength(10);
 });
 it("未付费前同时拒绝超限计划与目标错配；模型来源不能由程序自动补齐",async()=>{
  const call=vi.fn<ModelTransport>(async()=>reviewAudit());const engine=new StudioEngine(()=>config,call,Date.now,undefined,power);

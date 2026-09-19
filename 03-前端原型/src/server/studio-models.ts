@@ -7,6 +7,11 @@ import { buildArtifactPlan, artifactPayload, artifactInstructions, artifactPlanD
 import { auditIssues, artifactIssues, reviewContractIssues } from "./studio-review-contract";
 import { auditInstructions, reviewRequestFingerprint } from "./studio-review-requests";
 import { hydrateReviewProgress } from "./studio-review-progress";
+import { buildReviewPlan, prepareReviewScopes, reviewPlanDigest } from "./review-plan";
+import { WHOLE_REVIEW_BYTES, reviewApprovalFingerprint, scopedInstructions, scopedPayload, segmentedSummaries } from "./segmented-review";
+import { scopedUnitId, type ReviewPlan, type ScopedStage } from "@/domain/review-plan";
+import { scopedStages } from "@/domain/review-plan";
+import { assertReviewDeliveryCapacity } from "./review-delivery";
 import { LocalApiError } from "./local-security";
 import { studioBudgetClaimSchema, type StudioBudgetClaim } from "@/domain/studio-budget";
 import { evaluationResponseProfile } from "@/domain/model-evaluation";
@@ -16,7 +21,7 @@ import { studioSettingsStore } from "./studio-settings";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { blueprintDataSchema, checkBlueprint } from "@/domain/blueprint";
-import { studioArtifactSchema, studioAnalysisSchema, studioAuditSchema, studioInputs, type StudioCallDiagnostic, type StudioOperation, type StudioJobView, type StudioResult, type StudioReviewResult } from "@/domain/studio";
+import { studioArtifactSchema, studioAnalysisSchema, studioAuditSchema, studioScopedAuditSchema, studioInputs, type StudioScopedAudit, type StudioCallDiagnostic, type StudioOperation, type StudioJobView, type StudioResult, type StudioReviewResult } from "@/domain/studio";
 
 export class StudioError extends Error { constructor(public code: string, message: string, public status = 400) { super(message); this.name = "StudioError"; } }
 export interface StudioConfig { baseUrl: string; apiKey: string; mainModel: string; reviewA: string; reviewB: string }
@@ -88,7 +93,7 @@ async function settleCalls<T>(calls: Promise<T>[]): Promise<T[]> {
   if (failed?.status === "rejected") throw failed.reason;
   return settled.map((item) => (item as PromiseFulfilledResult<T>).value);
 }
-interface Job { view: StudioJobView; expiresAt: number; fingerprint: string; operation: StudioOperation; productionId?: string; productionPlan?: ArtifactPlan; execution?: TaskExecution; cleanupWarning?: string }
+interface Job { view: StudioJobView; expiresAt: number; fingerprint: string; operation: StudioOperation; productionId?: string; productionPlan?: ArtifactPlan; approvedReviewPlan?: ReviewPlan; execution?: TaskExecution; cleanupWarning?: string }
 export class StudioEngine {
   private jobs = new Map<string, Job>();
   private validations = new Map<string, { jobId: string; result: StudioReviewResult; expiresAt: number }>();
@@ -124,7 +129,11 @@ export class StudioEngine {
     }
     if (this.store) {
       const executionFingerprint = studioExecutionFingerprint(config, operation, productionPlan ? artifactPlanDigest(productionPlan) : "");
-      const claimed = this.store.claim(job.view, fingerprint, this.billing ? budget : undefined, this.billing ? executionFingerprint : undefined, operation === "review" ? studioProductionKey(fingerprint, executionFingerprint) : undefined, productionPlan);
+      const productionKey = operation === "review" ? studioProductionKey(fingerprint, executionFingerprint) : undefined;
+      const savedPlan = productionKey ? this.store.production.find(productionKey)?.reviewPlan : undefined;
+      job.approvedReviewPlan = savedPlan ?? undefined;
+      const approval = reviewApprovalFingerprint(executionFingerprint, savedPlan ? reviewPlanDigest(savedPlan) : undefined);
+      const claimed = this.store.claim(job.view, fingerprint, this.billing ? budget : undefined, this.billing ? approval : undefined, productionKey, productionPlan);
       if (!claimed.created) {
         if (claimed.fingerprint !== fingerprint) throw new StudioError("REQUEST_ID_CONFLICT", "同一任务编号的输入已变化，未重复调用模型。", 409);
         return structuredClone(claimed.view);
@@ -184,7 +193,7 @@ export class StudioEngine {
     job.execution?.check();
     const requestHash = reviewRequestFingerprint(model, instructions, payload, schema);
     const cached = runId ? production?.read(runId, unitId, requestHash) : undefined;
-    if (cached !== undefined) { const result = schema.parse(cached); if (reviewContractIssues(unitId, result, payload).length) throw new StudioError("CHECKPOINT_INVALID", "已保存阶段未通过冻结资料校验，未复用也未自动重试，请检查本机数据。", 409); this.refreshReview(job); return result; }
+    if (cached !== undefined) { const result = schema.parse(cached); if (reviewContractIssues(unitId, result, payload).length) throw new StudioError("CHECKPOINT_INVALID", "已保存阶段未通过冻结资料校验，未复用也未自动重试，请检查本机数据。", 409); if (!job.approvedReviewPlan) this.refreshReview(job); return result; }
     context(payload);
     if (production && runId) { production.begin(runId, unitId, job.view.jobId, requestHash); this.refreshReview(job); }
     const result = await this.call(config, model, instructions, payload, schema, job, undefined, callId => { if (runId) production?.attachCall(runId, unitId, job.view.jobId, callId); });
@@ -274,7 +283,45 @@ export class StudioEngine {
       else if (JSON.stringify(cached) !== JSON.stringify(manifest)) throw new StudioError("CHECKPOINT_INVALID", "正文汇总清单与已保存单元不一致，未继续审查。", 409);
       this.refreshReview(job);
     } else if (job.view.reviewProgress) { job.view.reviewProgress.steps.find(step => step.id === "artifacts")!.state = "saved"; job.view.reviewProgress.revision++; }
-    const snapshot = { blueprint, artifacts: result.artifacts }; context(snapshot);
+    const snapshot = { blueprint, artifacts: result.artifacts };
+    if (job.approvedReviewPlan || Buffer.byteLength(JSON.stringify(snapshot)) > WHOLE_REVIEW_BYTES) {
+      if (!job.productionId || !this.store) throw new StudioError("STORE_REQUIRED", "长篇分段审查需要本机持久任务记录，正文未自动重生成。", 409);
+      const reviewPlan = job.approvedReviewPlan ?? buildReviewPlan(blueprint, result.artifacts);
+      assertReviewDeliveryCapacity(reviewPlan, blueprint, result.artifacts, reports.designGate);
+      this.store.production.registerReviewPlan(job.productionId, job.view.jobId, reviewPlan, blueprint, result.artifacts);
+      this.refreshReview(job);
+      if (!job.approvedReviewPlan) throw new StudioError("REVIEW_PLAN_READY", `正文已保存，分段审查需要最多${reviewPlan.callsMax}次调用。请查看继续费用并确认；本次没有发起分段审查。`, 409);
+      const read = prepareReviewScopes(reviewPlan, blueprint, result.artifacts);
+      const scopes = [...reviewPlan.parts, ...reviewPlan.links];
+      const savedUnits = new Set(this.store.production.snapshot(job.productionId).units.filter(unit => unit.saved).map(unit => unit.id));
+      phase("正在核对分段检查点并继续未完成报告");
+      for (const [index, scope] of scopes.entries()) {
+        // Yield between ranges even during all-cache recovery so host leases/cancellation stay live.
+        await new Promise<void>(resolve => setImmediate(resolve));
+        const cached = scopedStages.every(stage => savedUnits.has(scopedUnitId(scope.id, stage)));
+        const local: Partial<Record<ScopedStage, StudioScopedAudit>> = {};
+        const run = async (stage: ScopedStage) => {
+          const model = stage === "coordinator" ? config.mainModel : stage.endsWith("A") ? config.reviewA : config.reviewB;
+          const report = await this.reviewCall(scopedUnitId(scope.id, stage), config, model, scopedInstructions(stage), scopedPayload(read, scope.id, stage, local), studioScopedAuditSchema, job);
+          local[stage] = report; return report;
+        };
+        if (!cached) phase(`分段审查 ${index + 1}/${scopes.length}：${"parts" in scope ? "跨角色/轮次关联" : "正文原文"} · 两路独审`);
+        await settleCalls([run("independentA"), run("independentB")]);
+        if (!cached) phase(`分段审查 ${index + 1}/${scopes.length}：相互核对`);
+        await settleCalls([run("mutualA"), run("mutualB")]);
+        if (!cached) phase(`分段审查 ${index + 1}/${scopes.length}：主模型复核`);
+        await run("coordinator");
+      }
+      this.refreshReview(job);
+      result.segmented = job.view.reviewProgress!.review.segmented!;
+      Object.assign(reports, segmentedSummaries(result.segmented));
+      result.issues = Object.entries(reports).flatMap(([label, report]) => auditIssues(report, label, label === "designGate" ? blueprint : snapshot));
+      if (result.segmented.units.some(unit => unit.state !== "saved" || !unit.report || unit.issues.length) || Object.keys(reports).length !== 6) result.issues.push("分段审查覆盖尚未完成，不能通过。");
+      result.passed = result.issues.length === 0;
+      if (result.passed) { const validationId = randomUUID(); result.validationId = validationId; this.validations.set(validationId, { jobId: job.view.jobId, result: structuredClone(result), expiresAt: this.now() + JOB_TTL }); }
+      return result;
+    }
+    context(snapshot);
     phase("审查模型 A 与 B 正在独立核对同一份完整资料");
     const instruction = auditInstructions.independent;
     [reports.independentA, reports.independentB] = await settleCalls([this.reviewCall("independentA", config, config.reviewA, instruction, snapshot, studioAuditSchema, job), this.reviewCall("independentB", config, config.reviewB, instruction, snapshot, studioAuditSchema, job)]);
