@@ -89,6 +89,7 @@ export function priceLabel(microCnyPerMillion: number) { return `¥${(microCnyPe
 // These are request settings, not an assertion of model quality or provider availability.
 export function evaluationResponseProfile(modelId: string) {
   if (modelId === "deepseek-v4-pro-0813") return { maxTokens: 16384, timeoutMs: 240000 };
+  if (modelId === "deepseek-flash") return { maxTokens: 16384, timeoutMs: 240000 };
   if (modelId === "kimi-k3") return { maxTokens: 8192, timeoutMs: 240000, reasoningEffort: "low" as const };
   return { maxTokens: 4096, timeoutMs: 90000 };
 }

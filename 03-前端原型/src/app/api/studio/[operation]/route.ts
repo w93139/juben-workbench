@@ -18,11 +18,12 @@ export async function GET(request: Request, context: { params: Promise<{ operati
       try {
         const settings = studioSettingsStore.safe();
         const message = !settings.providerConfigured ? "模型尚未连接，请先保存平台地址与密钥。"
-          : !settings.analyzeReady ? "尚未分配主模型，拆解暂不可用。请在模型配置中填写主模型，或完成自动选型。"
+          : !settings.analyzeReady ? "尚未分配拆解模型或主模型，拆解暂不可用。请在模型配置中填写拆解模型（或主模型）。"
+          : !settings.blueprintReady ? "拆解可用；生成蓝图与正文还需要设置主模型。"
           : !settings.reviewReady ? "拆解与蓝图可用；正文生成和交叉验证还需要补齐三个不同模型。"
           : "模型连接已配置，实际可用性以请求结果为准。";
-        return response({ configured: settings.reviewReady, providerConfigured: settings.providerConfigured, analyzeReady: settings.analyzeReady, reviewReady: settings.reviewReady, message });
-      } catch { return response({ configured: false, providerConfigured: false, analyzeReady: false, reviewReady: false, message: "模型连接状态读取失败，请检查本机配置。" }); }
+        return response({ configured: settings.reviewReady, providerConfigured: settings.providerConfigured, analyzeReady: settings.analyzeReady, blueprintReady: settings.blueprintReady, reviewReady: settings.reviewReady, message });
+      } catch { return response({ configured: false, providerConfigured: false, analyzeReady: false, blueprintReady: false, reviewReady: false, message: "模型连接状态读取失败，请检查本机配置。" }); }
     }
     if (operation !== "status") return response({ error: { code: "NOT_FOUND", message: "没有这个操作。" } }, 404);
     return response(studioEngine.get(new URL(request.url).searchParams.get("jobId") ?? ""));

@@ -31,25 +31,26 @@ function microFromYuanText(value: string): number | null {
 /**
  * Reads one input/output CNY-per-million price pair from an Ant catalog item.
  * Legacy flat `¥x/M` fields keep working unchanged. When only the newer
- * `priceInfo.prices[]` tiers are present, the highest published tier is used so a
- * budget reservation never under-estimates the platform charge. Cached or
+ * `priceInfo.prices[]` tiers are present, `input`/`output` take the highest
+ * published (busy-hour) tier so a budget reservation never under-estimates, and
+ * `offPeakInput`/`offPeakOutput` keep the lowest tier for display. Cached or
  * malformed tiers are rejected instead of silently picking an arbitrary number.
  */
-export function readCatalogMicroPrices(item: CatalogPriceItem): { input: number; output: number } | null {
+export function readCatalogMicroPrices(item: CatalogPriceItem): { input: number; output: number; offPeakInput: number; offPeakOutput: number } | null {
   if (typeof item.inPrice === "string" || typeof item.outPrice === "string") {
     const input = item.inPrice ? parseFlatMicroPrice(item.inPrice) : null;
     const output = item.outPrice ? parseFlatMicroPrice(item.outPrice) : null;
-    return input == null || output == null ? null : { input, output };
+    return input == null || output == null ? null : { input, output, offPeakInput: input, offPeakOutput: output };
   }
   const rows = (item.priceInfo?.prices ?? []).flatMap(stage => stage.price ?? []);
-  let input: number | null = null, output: number | null = null;
+  let input: number | null = null, output: number | null = null, offPeakInput: number | null = null, offPeakOutput: number | null = null;
   for (const row of rows) {
     const micro = microFromYuanText(row.priceValue);
     if (micro == null) return null;
-    if (row.priceCode === "INPUT") input = input == null ? micro : Math.max(input, micro);
-    else if (row.priceCode === "OUTPUT") output = output == null ? micro : Math.max(output, micro);
+    if (row.priceCode === "INPUT") { input = input == null ? micro : Math.max(input, micro); offPeakInput = offPeakInput == null ? micro : Math.min(offPeakInput, micro); }
+    else if (row.priceCode === "OUTPUT") { output = output == null ? micro : Math.max(output, micro); offPeakOutput = offPeakOutput == null ? micro : Math.min(offPeakOutput, micro); }
   }
-  return input == null || output == null ? null : { input, output };
+  return input == null || output == null || offPeakInput == null || offPeakOutput == null ? null : { input, output, offPeakInput, offPeakOutput };
 }
 export function assertFreshQuote(quote: StudioQuote, baseUrl: string, model: string, now: number) {
   if (!studioQuoteSchema.safeParse(quote).success || quote.baseUrl !== baseUrl || quote.modelId !== model
@@ -98,7 +99,7 @@ export async function readAntQuotes(baseUrl: string, modelIds: readonly string[]
         || item.protocolParameters?.find(p => p.protocolName === "openai_chat_completions")?.parameters.response_format !== true) throw error();
       const prices = readCatalogMicroPrices(item);
       if (!prices) throw error();
-      return studioQuoteSchema.parse({ provider: "ant", baseUrl: BASE_URL, modelId, currency: "CNY", inputPriceMicroCnyPerMillion: prices.input, outputPriceMicroCnyPerMillion: prices.output, checkedAt, expiresAt: checkedAt + STUDIO_QUOTE_TTL });
+      return studioQuoteSchema.parse({ provider: "ant", baseUrl: BASE_URL, modelId, currency: "CNY", inputPriceMicroCnyPerMillion: prices.input, outputPriceMicroCnyPerMillion: prices.output, offPeakInputPriceMicroCnyPerMillion: prices.offPeakInput, offPeakOutputPriceMicroCnyPerMillion: prices.offPeakOutput, checkedAt, expiresAt: checkedAt + STUDIO_QUOTE_TTL });
     });
   } catch { throw error(); }
 }

@@ -76,8 +76,31 @@ export function analysisBatches(documents: Document[]): Segment[][] {
   return batches;
 }
 
-type Call = <T>(instructions: string, payload: unknown, schema: z.ZodType<T>, maxTokens?: number) => Promise<T>;
-export interface LongAnalysisOptions {
+const ANALYSIS_INSTRUCTION_BYTES = 4096;
+const ESTIMATED_NOTE_BYTES = 8000;
+/**
+ * Pure call plan for budget estimation: real per-batch payload sizes, a merge tree
+ * bounded by the note estimate, and one final unified-outline call. Never calls a model.
+ */
+export function estimateAnalysisPlan(documents: Document[]): { inputBytes: number; maxTokens: number }[] {
+  const batches = analysisBatches(documents);
+  const documentNumbers = new Map(documents.map((doc, i) => [doc.id, i + 1]));
+  const calls: { inputBytes: number; maxTokens: number }[] = [];
+  for (const batch of batches) {
+    const input = citationSegments(batch, documentNumbers).input;
+    calls.push({ inputBytes: size({ segments: input, instructions: "" }) + ANALYSIS_INSTRUCTION_BYTES, maxTokens: ANALYSIS_EXTRACT_TOKENS });
+  }
+  const mergeInput = Math.min(4 * ESTIMATED_NOTE_BYTES, ANALYSIS_CALL_BYTES) + ANALYSIS_INSTRUCTION_BYTES;
+  let notes = batches.length;
+  while (notes > 4) {
+    const groups = Math.ceil(notes / 4);
+    for (let i = 0; i < groups; i++) calls.push({ inputBytes: mergeInput, maxTokens: ANALYSIS_EXTRACT_TOKENS });
+    notes = groups;
+  }
+  calls.push({ inputBytes: mergeInput, maxTokens: ANALYSIS_EXTRACT_TOKENS });
+  return calls;
+}
+type Call = <T>(instructions: string, payload: unknown, schema: z.ZodType<T>, maxTokens?: number) => Promise<T>;export interface LongAnalysisOptions {
   call: Call;
   phase: (message: string) => void;
   modelIdentity: string;

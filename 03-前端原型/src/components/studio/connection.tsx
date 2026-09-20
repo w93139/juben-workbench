@@ -13,7 +13,7 @@ import { ErrorMessage } from "../shared";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../ui/dialog";
 
 const ANT_BASE_URL = "https://maas-api.antdigital.com/v1";
-type Draft = Pick<SafeStudioSettings, "baseUrl" | "mainModel" | "reviewA" | "reviewB">;
+type Draft = Pick<SafeStudioSettings, "baseUrl" | "mainModel" | "analysisModel" | "reviewA" | "reviewB">;
 type EvaluationReport = { filename: string; markdown: string; viewRevision: number };
 const money = (fen: number) => `¥${(fen / 100).toFixed(2)}`;
 async function fetchConnection(signal?: AbortSignal) {
@@ -28,7 +28,7 @@ export function StudioConnection() {
   const cache = useQueryClient();
   const [open, setOpen] = useState(false); const [settings, setSettings] = useState<SafeStudioSettings | null>(null);
   const [evaluation, setEvaluation] = useState<EvaluationView | null>(null);
-  const [draft, setDraft] = useState<Draft>({ baseUrl: ANT_BASE_URL, mainModel: "", reviewA: "", reviewB: "" });
+  const [draft, setDraft] = useState<Draft>({ baseUrl: ANT_BASE_URL, mainModel: "", analysisModel: "", reviewA: "", reviewB: "" });
   const [modelsDirty, setModelsDirty] = useState(false);
   const [apiKey, setApiKey] = useState(""); const [error, setError] = useState<unknown>(null);
   const [actionError, setActionError] = useState<unknown>(null);
@@ -41,7 +41,7 @@ export function StudioConnection() {
   const [report, setReport] = useState<EvaluationReport | null>(null); const [showReport, setShowReport] = useState(false);
 
   const applyConnection = useCallback(({ safe, view }: Awaited<ReturnType<typeof fetchConnection>>) => {
-    setSettings(safe); setDraft({ baseUrl: safe.baseUrl || ANT_BASE_URL, mainModel: safe.mainModel, reviewA: safe.reviewA, reviewB: safe.reviewB }); setModelsDirty(false); acceptView(view); setLastSyncedAt(Date.now());
+    setSettings(safe); setDraft({ baseUrl: safe.baseUrl || ANT_BASE_URL, mainModel: safe.mainModel, analysisModel: safe.analysisModel ?? "", reviewA: safe.reviewA, reviewB: safe.reviewB }); setModelsDirty(false); acceptView(view); setLastSyncedAt(Date.now());
   }, [acceptView]);
   useEffect(() => {
     if (!open) return;
@@ -80,10 +80,10 @@ export function StudioConnection() {
     event.preventDefault(); if (locked || !settings) return;
     setBusy(true); setError(null); setSaved(false);
     try {
-      const models = modelsDirty ? { mainModel: draft.mainModel, reviewA: draft.reviewA, reviewB: draft.reviewB } : { mainModel: "", reviewA: "", reviewB: "" };
+      const models = modelsDirty ? { mainModel: draft.mainModel, analysisModel: draft.analysisModel, reviewA: draft.reviewA, reviewB: draft.reviewB } : { mainModel: "", analysisModel: "", reviewA: "", reviewB: "" };
       const value: SafeStudioSettings = await localJson("/api/studio/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ baseUrl: draft.baseUrl, ...models, apiKey, revision: settings.revision }) });
       setModelsDirty(false);
-      setApiKey(""); setSettings(value); setDraft({ baseUrl: value.baseUrl, mainModel: value.mainModel, reviewA: value.reviewA, reviewB: value.reviewB }); setSaved(true);
+      setApiKey(""); setSettings(value); setDraft({ baseUrl: value.baseUrl, mainModel: value.mainModel, analysisModel: value.analysisModel ?? "", reviewA: value.reviewA, reviewB: value.reviewB }); setSaved(true);
       await cache.invalidateQueries({ queryKey: ["studio-capability"] });
     } catch (failure) { setError(failure); } finally { setBusy(false); }
   }
@@ -148,7 +148,8 @@ export function StudioConnection() {
           <p className="field-hint">Key只保存在这台电脑的服务端受限文件中，不会返回页面、写入浏览器存储或上传GitHub。</p>
           <div className="rounded-lg bg-[var(--muted)] p-3">
             <p className="field-label">模型分配（可先只填主模型）</p>
-            <p className="field-hint mt-1">拆解与生成蓝图只需要主模型；正文生成和交叉验证需要三个不同模型。留空并保存会保留当前分配，不会清空。</p>
+            <p className="field-hint mt-1">拆解只需拆解模型（留空则用主模型）；生成蓝图用主模型；正文生成和交叉验证需要三个不同模型。留空并保存会保留当前分配，不会清空。</p>
+            <label className="field-label mt-2 block">拆解模型<Input aria-label="拆解模型编号" className="mt-1" autoComplete="off" value={draft.analysisModel ?? ""} maxLength={200} disabled={locked} placeholder="留空=用主模型；例如 deepseek-flash" onChange={event => { setDraft({ ...draft, analysisModel: event.target.value }); setModelsDirty(true); setSaved(false); }} /></label>
             <label className="field-label mt-2 block">主模型<Input aria-label="主模型编号" className="mt-1" autoComplete="off" value={draft.mainModel} maxLength={200} disabled={locked} placeholder="例如 deepseek-v4-pro-0813" onChange={event => { setDraft({ ...draft, mainModel: event.target.value }); setModelsDirty(true); setSaved(false); }} /></label>
             <label className="field-label mt-2 block">审查 A<Input aria-label="审查A模型编号" className="mt-1" autoComplete="off" value={draft.reviewA} maxLength={200} disabled={locked} placeholder="正文与交叉验证用" onChange={event => { setDraft({ ...draft, reviewA: event.target.value }); setModelsDirty(true); setSaved(false); }} /></label>
             <label className="field-label mt-2 block">审查 B<Input aria-label="审查B模型编号" className="mt-1" autoComplete="off" value={draft.reviewB} maxLength={200} disabled={locked} placeholder="正文与交叉验证用" onChange={event => { setDraft({ ...draft, reviewB: event.target.value }); setModelsDirty(true); setSaved(false); }} /></label>
@@ -157,7 +158,7 @@ export function StudioConnection() {
           {saved && <p role="status" className="success-message">平台连接已保存。尚未调用模型，也未产生费用。</p>}
         </form>
 
-        {settings?.analyzeReady && !evaluation?.allocation && <section className="rounded-xl border border-[var(--border)] p-4 text-sm"><p className="field-label">当前模型分配</p><p className="mt-2 break-all">主模型：{settings.mainModel}</p>{settings.reviewA && <p className="break-all">审查 A：{settings.reviewA}</p>}{settings.reviewB && <p className="break-all">审查 B：{settings.reviewB}</p>}{!settings.reviewReady && <p className="field-hint mt-1">仅主模型：拆解与生成蓝图可用；正文生成和交叉验证还需补齐审查 A、B 两个不同模型。</p>}</section>}
+        {settings?.analyzeReady && !evaluation?.allocation && <section className="rounded-xl border border-[var(--border)] p-4 text-sm"><p className="field-label">当前模型分配</p><p className="mt-2 break-all">拆解模型：{settings.analysisModel || settings.mainModel}{settings.analysisModel ? "" : "（未单独设置，使用主模型）"}</p><p className="break-all">主模型：{settings.mainModel}</p>{settings.reviewA && <p className="break-all">审查 A：{settings.reviewA}</p>}{settings.reviewB && <p className="break-all">审查 B：{settings.reviewB}</p>}{!settings.reviewReady && <p className="field-hint mt-1">拆解可用；正文生成和交叉验证还需补齐审查 A、B 两个不同模型。</p>}</section>}
 
         {settings?.providerConfigured && <section className="space-y-3 rounded-xl border border-[var(--border)] p-4">
           <details className="rounded-lg bg-[#f1eee8] p-3 text-sm"><summary className="cursor-pointer font-medium">根据公开资料筛选：3 个首选＋1 个替补</summary><p className="field-hint mt-2">资料核对：2026-09-09。先研究，再用三道剧本小样验证；公开榜单不等于剧本创作效果，推荐分工尚待验证。</p>{MODEL_SHORTLIST.map(item => <div className="mt-3" key={item.id}><strong>{item.name} · {item.focus}</strong><p className="field-hint">{item.reason}</p><a className="underline" href={item.url} target="_blank" rel="noreferrer">官方资料</a></div>)}<p className="mt-3"><a className="underline" href="https://arena.ai/leaderboard/text/creative-writing" target="_blank" rel="noreferrer">公开创意写作评测</a> · 评测版本和推理设置可能与平台不同。</p></details>

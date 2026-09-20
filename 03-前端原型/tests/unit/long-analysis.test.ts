@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { z } from "zod";
-import { analysisBatches, ANALYSIS_BATCH_BYTES, analyzeLongSource, sourceNoteSchema, sourceSelectionSchema, type LongAnalysisOptions, type CitationSegment } from "@/server/long-analysis";
+import { analysisBatches, ANALYSIS_BATCH_BYTES, analyzeLongSource, estimateAnalysisPlan, sourceNoteSchema, sourceSelectionSchema, type LongAnalysisOptions, type CitationSegment } from "@/server/long-analysis";
 import { studioInputs } from "@/domain/studio";
 import { ANALYSIS_CALL_BYTES, ANALYSIS_EXTRACT_TOKENS } from "@/domain/analysis-limits";
 type Note = z.infer<typeof sourceNoteSchema>;
@@ -42,6 +42,13 @@ it("分批与汇总请求使用足够推理的输出预算，避免被 length �
   await analyzeLongSource({ documents: documents(), instructions: "" }, { call, phase: () => {}, modelIdentity: "test" });
   expect(seen.length).toBeGreaterThan(0);
   expect(seen.every(value => value === ANALYSIS_EXTRACT_TOKENS)).toBe(true);
+});
+it("估算计划按真实批大小给出，而非按128KB上限重复预留", () => {
+  const docs = documents(); const plan = estimateAnalysisPlan(docs); const batchCount = analysisBatches(docs).length;
+  expect(plan.length).toBeGreaterThanOrEqual(batchCount);
+  expect(plan.every(call => call.maxTokens === ANALYSIS_EXTRACT_TOKENS)).toBe(true);
+  expect(plan.slice(0, batchCount).every(call => call.inputBytes <= ANALYSIS_BATCH_BYTES + 8192)).toBe(true);
+  expect(Math.max(...plan.map(call => call.inputBytes))).toBeLessThan(ANALYSIS_CALL_BYTES);
 });
 it("重复摘录可指定后一次真实位置，模型无需复写UUID、空白或摘录", async () => {
   const repeated = "相同证言\r\n".padEnd(160, " "); const doc = { id: "11111111-1111-4111-8111-111111111111", name: "角色本", text: repeated + repeated };

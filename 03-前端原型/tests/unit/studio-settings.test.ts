@@ -28,6 +28,15 @@ describe("本机模型配置安全保存", () => {
     expect(() => store.setSelection({ mainModel: "m1", reviewA: "m1", reviewB: "m3" }, 2, {})).toThrow("不同");
     expect(() => store.setSelection({ mainModel: "new1", reviewA: "new2", reviewB: "new3" }, 1, {})).toThrow("连接已变化");
   });
+  it("拆解模型可选：留空回退主模型，单独设置只用于拆解", () => {
+    const { store } = setup();
+    const fallback = store.save({ ...input, reviewA: "", reviewB: "" }, {});
+    expect(fallback).toMatchObject({ analyzeReady: true, blueprintReady: true, mainModel: "main", analysisModel: "" });
+    const explicit = store.save({ ...input, revision: 1, analysisModel: "deepseek-flash", reviewA: "", reviewB: "" }, {});
+    expect(explicit).toMatchObject({ analyzeReady: true, analysisModel: "deepseek-flash", mainModel: "main" });
+    expect(store.config({})?.analysisModel).toBe("deepseek-flash");
+    expect(store.config({})?.mainModel).toBe("main");
+  });
   it("分级就绪：只配主模型可拆解，补齐三个不同模型才可交叉验证", () => {
     const { store } = setup();
     const partial = store.save({ ...input, reviewA: "", reviewB: "" }, {});

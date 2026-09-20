@@ -11,7 +11,7 @@ const base = z.string().trim().min(1).max(2048).transform(value => value.replace
   try { const url = new URL(value); return !url.username && !url.password && !url.search && !url.hash && (url.protocol === "https:" || url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)); } catch { return false; }
 }, "请填写HTTPS服务地址，本机服务可使用回环HTTP地址；不要在地址中填写密钥");
 const secret = z.string().trim().min(1).max(4096).refine(value => !/[\x00-\x20\x7f]/.test(value), "密钥格式无效");
-const modelOrEmpty = z.string().trim().max(200).refine(value => value === "" || !/[\x00-\x20\x7f]/.test(value), "模型编号不能包含空格或控制字符");
+const modelOrEmpty = z.string().trim().max(200).refine(value => value === "" || !/[\x00-\x20\x7f]/.test(value), "模型编号不能包含空格或控制字符").default("");
 const allocationMessage = "主模型必填；两条审查模型要么都填、要么都空，且三个模型必须不同";
 const distinctAllocation = (value: { mainModel: string; reviewA: string; reviewB: string }) => {
   const reviewA = value.reviewA, reviewB = value.reviewB;
@@ -19,18 +19,18 @@ const distinctAllocation = (value: { mainModel: string; reviewA: string; reviewB
   if (!reviewA || !reviewB) return false;
   return new Set([value.mainModel, reviewA, reviewB]).size === 3;
 };
-const selectionSchema = z.object({ mainModel: model, reviewA: modelOrEmpty, reviewB: modelOrEmpty }).strict().refine(distinctAllocation, allocationMessage);
-export const studioSettingsConfigSchema = z.object({ baseUrl: base, apiKey: secret, mainModel: model, reviewA: modelOrEmpty, reviewB: modelOrEmpty }).strict().refine(distinctAllocation, allocationMessage);
+const selectionSchema = z.object({ mainModel: model, analysisModel: modelOrEmpty, reviewA: modelOrEmpty, reviewB: modelOrEmpty }).strict().refine(distinctAllocation, allocationMessage);
+export const studioSettingsConfigSchema = z.object({ baseUrl: base, apiKey: secret, mainModel: model, analysisModel: modelOrEmpty, reviewA: modelOrEmpty, reviewB: modelOrEmpty }).strict().refine(distinctAllocation, allocationMessage);
 const connectionSchema = z.object({ baseUrl: base, apiKey: secret, selection: selectionSchema.nullable() }).strict();
 const fileV1Schema = z.object({ version: z.literal(1), revision: z.number().int().positive(), config: studioSettingsConfigSchema }).strict();
 const fileV2Schema = z.object({ version: z.literal(2), revision: z.number().int().positive(), config: connectionSchema }).strict();
 const inputModel = z.string().trim().max(200).default("");
-const inputSchema = z.object({ baseUrl: base, apiKey: z.string().max(4096).default(""), mainModel: inputModel, reviewA: inputModel, reviewB: inputModel, revision: z.number().int().nonnegative() }).strict();
+const inputSchema = z.object({ baseUrl: base, apiKey: z.string().max(4096).default(""), mainModel: inputModel, analysisModel: inputModel, reviewA: inputModel, reviewB: inputModel, revision: z.number().int().nonnegative() }).strict();
 export interface ProviderConnection { baseUrl: string; apiKey: string }
-export interface SafeStudioSettings { baseUrl: string; mainModel: string; reviewA: string; reviewB: string; hasApiKey: boolean; providerConfigured: boolean; configured: boolean; analyzeReady: boolean; reviewReady: boolean; source: "environment" | "local" | "none"; revision: number; environmentLocked: boolean }
-const keys = ["STUDIO_API_BASE_URL", "STUDIO_API_KEY", "STUDIO_MAIN_MODEL", "STUDIO_REVIEW_A_MODEL", "STUDIO_REVIEW_B_MODEL"] as const;
+export interface SafeStudioSettings { baseUrl: string; mainModel: string; analysisModel: string; reviewA: string; reviewB: string; hasApiKey: boolean; providerConfigured: boolean; configured: boolean; analyzeReady: boolean; blueprintReady: boolean; reviewReady: boolean; source: "environment" | "local" | "none"; revision: number; environmentLocked: boolean }
+const keys = ["STUDIO_API_BASE_URL", "STUDIO_API_KEY", "STUDIO_MAIN_MODEL", "STUDIO_ANALYSIS_MODEL", "STUDIO_REVIEW_A_MODEL", "STUDIO_REVIEW_B_MODEL"] as const;
 function environmentPresent(env: Record<string, string | undefined>) { return keys.some(key => !!env[key]?.trim()); }
-function fromEnvironment(env: Record<string, string | undefined>) { return { baseUrl: env.STUDIO_API_BASE_URL ?? "", apiKey: env.STUDIO_API_KEY ?? "", mainModel: env.STUDIO_MAIN_MODEL ?? "", reviewA: env.STUDIO_REVIEW_A_MODEL ?? "", reviewB: env.STUDIO_REVIEW_B_MODEL ?? "" }; }
+function fromEnvironment(env: Record<string, string | undefined>) { return { baseUrl: env.STUDIO_API_BASE_URL ?? "", apiKey: env.STUDIO_API_KEY ?? "", mainModel: env.STUDIO_MAIN_MODEL ?? "", analysisModel: env.STUDIO_ANALYSIS_MODEL ?? "", reviewA: env.STUDIO_REVIEW_A_MODEL ?? "", reviewB: env.STUDIO_REVIEW_B_MODEL ?? "" }; }
 const storageError = () => new LocalApiError(503, "本机模型配置无法安全读取或保存，原配置已保留。请检查本机权限。");
 export class StudioSettingsStore {
   private file: string;
@@ -42,7 +42,7 @@ export class StudioSettingsStore {
       fd = openSync(this.file, constants.O_RDONLY | constants.O_NOFOLLOW);
       const info = fstatSync(fd); if (!info.isFile() || info.size > MAX_FILE_BYTES || (process.platform !== "win32" && (info.mode & 0o077) !== 0)) throw storageError();
       const parsed = z.union([fileV2Schema, fileV1Schema]).parse(JSON.parse(readFileSync(fd, "utf8")));
-      return parsed.version === 2 ? parsed : { version: 2 as const, revision: parsed.revision, config: { baseUrl: parsed.config.baseUrl, apiKey: parsed.config.apiKey, selection: { mainModel: parsed.config.mainModel, reviewA: parsed.config.reviewA, reviewB: parsed.config.reviewB } } };
+      return parsed.version === 2 ? parsed : { version: 2 as const, revision: parsed.revision, config: { baseUrl: parsed.config.baseUrl, apiKey: parsed.config.apiKey, selection: { mainModel: parsed.config.mainModel, analysisModel: parsed.config.analysisModel, reviewA: parsed.config.reviewA, reviewB: parsed.config.reviewB } } };
     } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw storageError(); }
     finally { if (fd !== undefined) closeSync(fd); }
   }
@@ -81,10 +81,11 @@ export class StudioSettingsStore {
     if (environmentPresent(env)) {
       const parsed = studioSettingsConfigSchema.safeParse(fromEnvironment(env));
       if (!parsed.success) throw new LocalApiError(503, "服务端环境变量中的模型配置不完整或无效，请检查后重试。");
-      return parsed.data;
+      return { ...parsed.data, analysisModel: parsed.data.analysisModel || parsed.data.mainModel };
     }
     const stored = this.read()?.config;
-    return stored?.selection ? { baseUrl: stored.baseUrl, apiKey: stored.apiKey, ...stored.selection } : null;
+    if (!stored?.selection) return null;
+    return { baseUrl: stored.baseUrl, apiKey: stored.apiKey, mainModel: stored.selection.mainModel, analysisModel: stored.selection.analysisModel || stored.selection.mainModel, reviewA: stored.selection.reviewA, reviewB: stored.selection.reviewB };
   }
   connection(env: Record<string, string | undefined> = process.env): ProviderConnection | null {
     if (environmentPresent(env)) {
@@ -98,16 +99,17 @@ export class StudioSettingsStore {
   safe(env: Record<string, string | undefined> = process.env): SafeStudioSettings {
     if (environmentPresent(env)) {
       const parsed = studioSettingsConfigSchema.safeParse(fromEnvironment(env));
-      if (!parsed.success) return { baseUrl: "", mainModel: "", reviewA: "", reviewB: "", hasApiKey: false, providerConfigured: false, configured: false, analyzeReady: false, reviewReady: false, source: "environment", revision: 0, environmentLocked: true };
+      if (!parsed.success) return { baseUrl: "", mainModel: "", analysisModel: "", reviewA: "", reviewB: "", hasApiKey: false, providerConfigured: false, configured: false, analyzeReady: false, blueprintReady: false, reviewReady: false, source: "environment", revision: 0, environmentLocked: true };
       const reviewReady = !!parsed.data.reviewA && !!parsed.data.reviewB;
-      return { baseUrl: parsed.data.baseUrl, mainModel: parsed.data.mainModel, reviewA: parsed.data.reviewA, reviewB: parsed.data.reviewB, hasApiKey: true, providerConfigured: true, configured: reviewReady, analyzeReady: true, reviewReady, source: "environment", revision: 0, environmentLocked: true };
+      return { baseUrl: parsed.data.baseUrl, mainModel: parsed.data.mainModel, analysisModel: parsed.data.analysisModel, reviewA: parsed.data.reviewA, reviewB: parsed.data.reviewB, hasApiKey: true, providerConfigured: true, configured: reviewReady, analyzeReady: true, blueprintReady: true, reviewReady, source: "environment", revision: 0, environmentLocked: true };
     }
     const stored = this.read();
-    if (!stored) return { baseUrl: "", mainModel: "", reviewA: "", reviewB: "", hasApiKey: false, providerConfigured: false, configured: false, analyzeReady: false, reviewReady: false, source: "none", revision: 0, environmentLocked: false };
+    if (!stored) return { baseUrl: "", mainModel: "", analysisModel: "", reviewA: "", reviewB: "", hasApiKey: false, providerConfigured: false, configured: false, analyzeReady: false, blueprintReady: false, reviewReady: false, source: "none", revision: 0, environmentLocked: false };
     const selection = stored.config.selection;
-    const analyzeReady = !!selection?.mainModel;
+    const analyzeReady = !!(selection?.analysisModel || selection?.mainModel);
+    const blueprintReady = !!selection?.mainModel;
     const reviewReady = !!selection?.reviewA && !!selection?.reviewB;
-    return { baseUrl: stored.config.baseUrl, mainModel: selection?.mainModel ?? "", reviewA: selection?.reviewA ?? "", reviewB: selection?.reviewB ?? "", hasApiKey: true, providerConfigured: true, configured: reviewReady, analyzeReady, reviewReady, source: "local", revision: stored.revision, environmentLocked: false };
+    return { baseUrl: stored.config.baseUrl, mainModel: selection?.mainModel ?? "", analysisModel: selection?.analysisModel ?? "", reviewA: selection?.reviewA ?? "", reviewB: selection?.reviewB ?? "", hasApiKey: true, providerConfigured: true, configured: reviewReady, analyzeReady, blueprintReady, reviewReady, source: "local", revision: stored.revision, environmentLocked: false };
   }
   save(input: unknown, env: Record<string, string | undefined> = process.env): SafeStudioSettings {
     if (environmentPresent(env)) throw new LocalApiError(409, "当前连接由服务端环境变量管理，请先调整环境变量；页面不会覆盖它。");
@@ -118,14 +120,14 @@ export class StudioSettingsStore {
       if (parsed.data.revision !== (previous?.revision ?? 0)) throw new LocalApiError(409, "模型配置已在其他页面更新，请关闭并重新打开配置窗口后再保存。");
       if (!parsed.data.apiKey.trim() && previous?.config.baseUrl !== parsed.data.baseUrl) throw new LocalApiError(400, "新服务地址需要重新填写密钥，不会把旧密钥发送到其他服务。");
       const apiKey = parsed.data.apiKey.trim() || previous?.config.apiKey;
-      const hasAnyModel = [parsed.data.mainModel, parsed.data.reviewA, parsed.data.reviewB].some(value => value.trim());
+      const hasAnyModel = [parsed.data.mainModel, parsed.data.analysisModel, parsed.data.reviewA, parsed.data.reviewB].some(value => value.trim());
       let selection: z.infer<typeof selectionSchema> | null;
       if (!hasAnyModel) {
         // 页面只更新地址或密钥时提交空模型字段：连接未变则保留已有分配，换连接才清空待重新核对。
         const sameConnection = !!previous && previous.config.baseUrl === parsed.data.baseUrl && previous.config.apiKey === apiKey;
         selection = sameConnection ? previous!.config.selection ?? null : null;
       } else {
-        const parsedSelection = selectionSchema.safeParse({ mainModel: parsed.data.mainModel, reviewA: parsed.data.reviewA, reviewB: parsed.data.reviewB });
+        const parsedSelection = selectionSchema.safeParse({ mainModel: parsed.data.mainModel, analysisModel: parsed.data.analysisModel, reviewA: parsed.data.reviewA, reviewB: parsed.data.reviewB });
         if (!parsedSelection.success) throw new LocalApiError(400, parsedSelection.error.issues[0]?.message || "模型分配格式不正确。");
         selection = parsedSelection.data;
       }

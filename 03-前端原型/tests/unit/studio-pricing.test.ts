@@ -31,6 +31,8 @@ it("兼容蚂蚁新目录：价格移到 priceInfo 分档时取最高档作预�
   const [result] = await readAntQuotes(baseUrl, ["model-a"], { fetcher, now: () => 1000 });
   expect(result.inputPriceMicroCnyPerMillion).toBe(2_000_000);
   expect(result.outputPriceMicroCnyPerMillion).toBe(8_000_000);
+  expect(result.offPeakInputPriceMicroCnyPerMillion).toBe(1_000_000);
+  expect(result.offPeakOutputPriceMicroCnyPerMillion).toBe(4_000_000);
 });
 it("整数微元和BigInt按用量向上取整，不把微小正价格变成零", () => {
   expect(parseFlatMicroPrice("¥1.25/M")).toBe(1_250_000);

@@ -17,7 +17,12 @@ export function useStudioBudget(projectId: string, offset = 0) {
   });
 }
 export function QuoteList({ quotes }: { quotes: StudioQuote[] }) {
-  return <ul className="space-y-2 text-sm">{quotes.map(quote => <li key={quote.modelId} className="break-all">{quote.modelId}：输入 ¥{quote.inputPriceMicroCnyPerMillion / 1_000_000}/百万 Token，输出 ¥{quote.outputPriceMicroCnyPerMillion / 1_000_000}/百万 Token。有效至 {new Date(quote.expiresAt).toLocaleTimeString()}。</li>)}</ul>;
+  return <ul className="space-y-2 text-sm">{quotes.map(quote => {
+    const off = quote.offPeakInputPriceMicroCnyPerMillion != null && quote.offPeakOutputPriceMicroCnyPerMillion != null && (quote.offPeakInputPriceMicroCnyPerMillion !== quote.inputPriceMicroCnyPerMillion || quote.offPeakOutputPriceMicroCnyPerMillion !== quote.outputPriceMicroCnyPerMillion);
+    return <li key={quote.modelId} className="break-all">{quote.modelId}：{off
+      ? `闲时 输入 ¥${quote.offPeakInputPriceMicroCnyPerMillion! / 1_000_000}、输出 ¥${quote.offPeakOutputPriceMicroCnyPerMillion! / 1_000_000}；忙时 输入 ¥${quote.inputPriceMicroCnyPerMillion / 1_000_000}、输出 ¥${quote.outputPriceMicroCnyPerMillion / 1_000_000}（预留按忙时，实际按用量结算）`
+      : `输入 ¥${quote.inputPriceMicroCnyPerMillion / 1_000_000}、输出 ¥${quote.outputPriceMicroCnyPerMillion / 1_000_000}`}。有效至 {new Date(quote.expiresAt).toLocaleTimeString()}。</li>;
+  })}</ul>;
 }
 const labels: Record<StudioCharge["state"], string> = { prepared: "已预留未发送", dispatched: "调用中", settled: "按用量核算", uncertain: "待核对", reconciled: "已核对账单", released: "未发送已释放" };
 export function StudioBudgetPanel({ projectId, open, onOpenChange }: { projectId: string; open: boolean; onOpenChange(open: boolean): void }) {

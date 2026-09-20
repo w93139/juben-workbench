@@ -24,7 +24,7 @@ import { blueprintDataSchema, checkBlueprint } from "@/domain/blueprint";
 import { studioArtifactSchema, studioAnalysisSchema, studioAuditSchema, studioScopedAuditSchema, studioInputs, type StudioScopedAudit, type StudioCallDiagnostic, type StudioOperation, type StudioJobView, type StudioResult, type StudioReviewResult } from "@/domain/studio";
 
 export class StudioError extends Error { constructor(public code: string, message: string, public status = 400) { super(message); this.name = "StudioError"; } }
-export interface StudioConfig { baseUrl: string; apiKey: string; mainModel: string; reviewA: string; reviewB: string }
+export interface StudioConfig { baseUrl: string; apiKey: string; mainModel: string; analysisModel?: string; reviewA: string; reviewB: string }
 export type ModelTransport = (config: StudioConfig, model: string, instructions: string, payload: unknown, schema: z.ZodType, signal: AbortSignal, overrides?: { maxTokens?: number; billing?: { service: StudioBilling; jobId: string; phase: string; prepared?: (callId: string) => void } }) => Promise<unknown>;
 const CONTEXT_BYTES = SINGLE_CONTEXT_BYTES;
 const RESPONSE_BYTES = 2000000;
@@ -42,9 +42,10 @@ export function readStudioConfig(env: Record<string, string | undefined> = proce
   const baseUrl = env.STUDIO_API_BASE_URL?.trim(), apiKey = env.STUDIO_API_KEY?.trim(), mainModel = env.STUDIO_MAIN_MODEL?.trim(), reviewA = env.STUDIO_REVIEW_A_MODEL?.trim() ?? "", reviewB = env.STUDIO_REVIEW_B_MODEL?.trim() ?? "";
   if (![baseUrl, apiKey, mainModel].every((value) => value?.trim())) throw unavailable();
   if ((reviewA || reviewB) && (!reviewA || !reviewB || new Set([mainModel, reviewA, reviewB]).size !== 3)) throw unavailable();
+  const analysisModel = env.STUDIO_ANALYSIS_MODEL?.trim() || mainModel!;
   let url: URL; try { url = new URL(baseUrl!); } catch { throw unavailable(); }
   if (url.username || url.password || url.search || url.hash || (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)))) throw unavailable();
-  return { baseUrl: baseUrl!.replace(/\/+$/, ""), apiKey: apiKey!, mainModel: mainModel!, reviewA, reviewB };
+  return { baseUrl: baseUrl!.replace(/\/+$/, ""), apiKey: apiKey!, mainModel: mainModel!, analysisModel, reviewA, reviewB };
 }
 function context(value: unknown) { const serialized = JSON.stringify(value); if (Buffer.byteLength(serialized) > CONTEXT_BYTES) throw new StudioError("CONTEXT_TOO_LARGE", "当前步骤超出单次上下文容量，本次超限请求未发起，已有资料保留。此前步骤可能已产生模型费用；正文已按模块保存，超长审查尚待分段支持。", 413); return serialized; }
 async function responseText(response: Response, signal: AbortSignal, collectLateUsage = false) {
@@ -249,15 +250,16 @@ export class StudioEngine {
     const phase = (value: string) => { job.execution?.check(); job.view.phase = value; this.store?.save(job.view); };
     if (operation === "analyze") {
       const data = studioInputs.analyze.parse(input); phase("主模型正在读取全文、拆解结构并提出方向");
+      const analysisModel = config.analysisModel || config.mainModel;
       const analysis = Buffer.byteLength(JSON.stringify(data)) > ANALYSIS_DIRECT_BYTES
         ? await analyzeLongSource(data, {
-          call: (instructions, payload, schema, maxTokens) => this.call(config, config.mainModel, instructions, payload, schema, job, maxTokens),
+          call: (instructions, payload, schema, maxTokens) => this.call(config, analysisModel, instructions, payload, schema, job, maxTokens),
           phase,
-          modelIdentity: JSON.stringify({ baseUrl: config.baseUrl, model: config.mainModel, profile: evaluationResponseProfile(config.mainModel) }),
+          modelIdentity: JSON.stringify({ baseUrl: config.baseUrl, model: analysisModel, profile: evaluationResponseProfile(analysisModel) }),
           readCheckpoint: key => this.store?.readAnalysisNote(key),
           writeCheckpoint: (key, note) => this.store?.saveAnalysisNote(key, note),
         })
-        : await this.call(config, config.mainModel, "读取全部输入材料，拆解真相因果、时间线、人物关系、知识分配、线索支持与轮次节奏。每项原文事实要给可核对摘录；保留未确认内容。提出2至5个原创写作方向和三幕大纲，说明迁移机制及风险，不得只换名。outline中按明确事实/推断/原创/待定区分。", data, studioAnalysisSchema, job, ANALYSIS_EXTRACT_TOKENS);
+        : await this.call(config, analysisModel, "读取全部输入材料，拆解真相因果、时间线、人物关系、知识分配、线索支持与轮次节奏。每项原文事实要给可核对摘录；保留未确认内容。提出2至5个原创写作方向和三幕大纲，说明迁移机制及风险，不得只换名。outline中按明确事实/推断/原创/待定区分。", data, studioAnalysisSchema, job, ANALYSIS_EXTRACT_TOKENS);
       if (Buffer.byteLength(JSON.stringify(data)) <= ANALYSIS_DIRECT_BYTES) delete analysis.coverage;
       if (new Set(analysis.directions.map((d) => d.id)).size !== analysis.directions.length || analysis.sourceRefs.some((ref) => !data.documents.some((doc) => doc.id === ref.documentId && doc.text.includes(ref.quote)))) throw new StudioError("SOURCE_REFERENCE_INVALID", "分析中的原文引用无法在输入材料核对，结果未采纳。", 502);
       return { kind: "analysis", analysis };

@@ -8,6 +8,8 @@ export const studioQuoteSchema = z.object({
   modelId: z.string().min(1).max(200), currency: z.literal("CNY"),
   inputPriceMicroCnyPerMillion: integer.max(1_000_000_000_000),
   outputPriceMicroCnyPerMillion: integer.max(1_000_000_000_000),
+  offPeakInputPriceMicroCnyPerMillion: integer.max(1_000_000_000_000).optional(),
+  offPeakOutputPriceMicroCnyPerMillion: integer.max(1_000_000_000_000).optional(),
   checkedAt: integer, expiresAt: integer,
 }).strict();
 export type StudioQuote = z.infer<typeof studioQuoteSchema>;

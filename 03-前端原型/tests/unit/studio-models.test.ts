@@ -177,6 +177,11 @@ describe("真实模型编排服务（只用假transport，不访问网络）", (
     await expect(engine.start("analyze", { documents: [{ id: "doc", name: "剧本.txt", text: "原始全文" }] })).rejects.toMatchObject({ code: "MODEL_NOT_CONFIGURED", status: 503 }); expect(call).not.toHaveBeenCalled();
     expect(() => readStudioConfig({ STUDIO_API_BASE_URL: config.baseUrl, STUDIO_API_KEY: "test", STUDIO_MAIN_MODEL: " x ", STUDIO_REVIEW_A_MODEL: "x", STUDIO_REVIEW_B_MODEL: "z" })).toThrow(StudioError);
   });
+  it("拆解使用拆解模型，蓝图/审查仍用主模型", async () => {
+    const calls: string[] = []; const engine = new StudioEngine(() => ({ ...config, analysisModel: "cheap" }), transport(calls));
+    const done = await wait(engine, (await engine.start("analyze", { documents: [{ id: "doc", name: "剧本.txt", text: "原始全文" }] })).jobId);
+    expect(done.status).toBe("completed"); expect(calls).toEqual(["cheap"]);
+  });
   it("只配主模型时可拆解、交叉验证被明确拒绝且零外呼", async () => {
     const mainOnly: StudioConfig = { ...config, reviewA: "", reviewB: "" };
     const call = vi.fn(transport()); const engine = new StudioEngine(() => mainOnly, call);

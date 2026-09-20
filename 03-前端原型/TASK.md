@@ -1,5 +1,14 @@
 # Task：阶段B · 参考研究与原创方向
 
+## Current contract · 拆解成本优化（分级模型/真实估算/双价）· 2026-09-21
+
+- Goal：降低拆解费用并让费用预估更贴近真实；新增“拆解模型”槽位（留空回退主模型），拆解默认用便宜的 `deepseek-flash`，主模型继续用于蓝图与正文/审查；费用估算按真实批次大小而非 128KB 上限；报价同时展示闲时/忙时，预留按忙时。
+- Non-goals：不改写生成/审查算法与三模型交叉验证；不自动切换主模型；不改已授权预算；不改引用回填。
+- Done when：连接配置可单独指定拆解模型；只配拆解模型即可拆解，蓝图需主模型，交叉验证需三个不同模型；长拆解估算调用数与输入按真实批次计算；报价含闲时/忙时且预留按忙时。
+- Scope：analysis-limits、model-evaluation、long-analysis、studio-settings、studio-models、studio-cost-preview、studio-pricing、studio-budget、capability 路由、budget 路由、studio/index、studio/connection、studio/budget 及对应单测。
+- Verify：`npx vitest run tests/unit`（496 通过）；`npm run build -- --webpack` 通过；Playwright 单 worker 全量 88 项通过（3 worker 时 blueprint 草稿用例因本机多个 next-server 资源竞争超时，非代码回归）；本机预览已重启并设置拆解模型=`deepseek-flash`；真实报价返回闲时/忙时两档。
+- Risks and assumptions：`deepseek-flash` 已内置 16384 输出/240 秒档位；其他未内置模型仍走默认 4096/90 秒（后续如需再补）。估算为“保守上界但按真实批次”，不保证与实际账单一致。
+
 ## Current contract · 拆解输出预算修复 · 2026-09-21
 
 - Goal：修复长原剧本分段拆解时“模型输出以 length 结束、结果不被采用”的问题。分批、逐层汇总与最终统一大纲属同一失败模式：推理型主模型把输出预算耗在思考上，JSON 未写完即被截断。
