@@ -29,6 +29,7 @@ export function StudioConnection() {
   const [open, setOpen] = useState(false); const [settings, setSettings] = useState<SafeStudioSettings | null>(null);
   const [evaluation, setEvaluation] = useState<EvaluationView | null>(null);
   const [draft, setDraft] = useState<Draft>({ baseUrl: ANT_BASE_URL, mainModel: "", reviewA: "", reviewB: "" });
+  const [modelsDirty, setModelsDirty] = useState(false);
   const [apiKey, setApiKey] = useState(""); const [error, setError] = useState<unknown>(null);
   const [actionError, setActionError] = useState<unknown>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
@@ -40,7 +41,7 @@ export function StudioConnection() {
   const [report, setReport] = useState<EvaluationReport | null>(null); const [showReport, setShowReport] = useState(false);
 
   const applyConnection = useCallback(({ safe, view }: Awaited<ReturnType<typeof fetchConnection>>) => {
-    setSettings(safe); setDraft({ baseUrl: safe.baseUrl || ANT_BASE_URL, mainModel: safe.mainModel, reviewA: safe.reviewA, reviewB: safe.reviewB }); acceptView(view); setLastSyncedAt(Date.now());
+    setSettings(safe); setDraft({ baseUrl: safe.baseUrl || ANT_BASE_URL, mainModel: safe.mainModel, reviewA: safe.reviewA, reviewB: safe.reviewB }); setModelsDirty(false); acceptView(view); setLastSyncedAt(Date.now());
   }, [acceptView]);
   useEffect(() => {
     if (!open) return;
@@ -79,7 +80,9 @@ export function StudioConnection() {
     event.preventDefault(); if (locked || !settings) return;
     setBusy(true); setError(null); setSaved(false);
     try {
-      const value: SafeStudioSettings = await localJson("/api/studio/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...draft, mainModel: "", reviewA: "", reviewB: "", apiKey, revision: settings.revision }) });
+      const models = modelsDirty ? { mainModel: draft.mainModel, reviewA: draft.reviewA, reviewB: draft.reviewB } : { mainModel: "", reviewA: "", reviewB: "" };
+      const value: SafeStudioSettings = await localJson("/api/studio/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ baseUrl: draft.baseUrl, ...models, apiKey, revision: settings.revision }) });
+      setModelsDirty(false);
       setApiKey(""); setSettings(value); setDraft({ baseUrl: value.baseUrl, mainModel: value.mainModel, reviewA: value.reviewA, reviewB: value.reviewB }); setSaved(true);
       await cache.invalidateQueries({ queryKey: ["studio-capability"] });
     } catch (failure) { setError(failure); } finally { setBusy(false); }
@@ -134,20 +137,27 @@ export function StudioConnection() {
 
 
   return <>
-    <Button size="sm" variant="outline" onClick={() => { setSettings(null); setEvaluation(null); setReport(null); setShowReport(false); setLoading(true); setError(null); setActionError(null); setSyncError(false); setSaved(false); setApiKey(""); setOpen(true); }}><Settings2 size={15} />配置模型</Button>
+    <Button size="sm" variant="outline" onClick={() => { setSettings(null); setEvaluation(null); setReport(null); setShowReport(false); setLoading(true); setError(null); setActionError(null); setSyncError(false); setSaved(false); setModelsDirty(false); setApiKey(""); setOpen(true); }}><Settings2 size={15} />配置模型</Button>
     <Dialog open={open} onOpenChange={value => { if (busy) return; setOpen(value); if (!value) { setApiKey(""); setError(null); } }}><DialogContent className="sm:max-w-2xl"><DialogTitle>连接蚂蚁平台并自动选型</DialogTitle><DialogDescription>先保存连接，再读取候选模型。只有你点击“开始测评”后才会产生费用；工作台按平台公开价估算并保留安全余量。</DialogDescription>
       {loading ? <p role="status">正在读取连接设置…</p> : <div className="space-y-5">
-        {settings?.environmentLocked && <p className="stage-callout">当前配置由服务端环境变量管理，页面只读。{!settings.configured && "环境变量尚不完整，请在服务端补齐。"}</p>}
+        {settings?.environmentLocked && <p className="stage-callout">当前配置由服务端环境变量管理，页面只读。{!settings.reviewReady && "环境变量尚不完整，请在服务端补齐主模型（正文+交叉验证还需两路审查模型）。"}</p>}
         <form onSubmit={save} className="space-y-4 rounded-xl border border-[var(--border)] p-4">
           <div><p className="field-label">1 · 连接蚂蚁平台</p><p className="field-hint mt-1">保存连接不会调用模型，也不会产生模型费用。</p></div>
           <label className="field-label">服务器地址<Input aria-label="模型服务地址" className="mt-2" type="url" autoComplete="off" value={draft.baseUrl} maxLength={2048} disabled={locked} required onChange={event => { setDraft({ ...draft, baseUrl: event.target.value }); setSaved(false); }} /></label>
           <label className="field-label">API Key<Input aria-label="模型API密钥" className="mt-2" type="password" autoComplete="new-password" spellCheck={false} value={apiKey} maxLength={4096} disabled={locked} required={!settings?.hasApiKey} placeholder={settings?.hasApiKey ? "已安全保存；不更换时留空" : "粘贴蚂蚁平台创建的API Key"} onChange={event => { setApiKey(event.target.value); setSaved(false); }} /></label>
           <p className="field-hint">Key只保存在这台电脑的服务端受限文件中，不会返回页面、写入浏览器存储或上传GitHub。</p>
+          <div className="rounded-lg bg-[var(--muted)] p-3">
+            <p className="field-label">模型分配（可先只填主模型）</p>
+            <p className="field-hint mt-1">拆解与生成蓝图只需要主模型；正文生成和交叉验证需要三个不同模型。留空并保存会保留当前分配，不会清空。</p>
+            <label className="field-label mt-2 block">主模型<Input aria-label="主模型编号" className="mt-1" autoComplete="off" value={draft.mainModel} maxLength={200} disabled={locked} placeholder="例如 deepseek-v4-pro-0813" onChange={event => { setDraft({ ...draft, mainModel: event.target.value }); setModelsDirty(true); setSaved(false); }} /></label>
+            <label className="field-label mt-2 block">审查 A<Input aria-label="审查A模型编号" className="mt-1" autoComplete="off" value={draft.reviewA} maxLength={200} disabled={locked} placeholder="正文与交叉验证用" onChange={event => { setDraft({ ...draft, reviewA: event.target.value }); setModelsDirty(true); setSaved(false); }} /></label>
+            <label className="field-label mt-2 block">审查 B<Input aria-label="审查B模型编号" className="mt-1" autoComplete="off" value={draft.reviewB} maxLength={200} disabled={locked} placeholder="正文与交叉验证用" onChange={event => { setDraft({ ...draft, reviewB: event.target.value }); setModelsDirty(true); setSaved(false); }} /></label>
+          </div>
           {!settings?.environmentLocked && <Button type="submit" disabled={locked || !settings}>{busy ? "正在保存…" : settings?.providerConfigured ? "更新平台连接" : "保存平台连接"}</Button>}
           {saved && <p role="status" className="success-message">平台连接已保存。尚未调用模型，也未产生费用。</p>}
         </form>
 
-        {settings?.configured && !evaluation?.allocation && <section className="rounded-xl border border-[var(--border)] p-4 text-sm"><p className="field-label">当前模型分配</p><p className="mt-2 break-all">主模型：{settings.mainModel}</p><p className="break-all">审查 A：{settings.reviewA}</p><p className="break-all">审查 B：{settings.reviewB}</p></section>}
+        {settings?.analyzeReady && !evaluation?.allocation && <section className="rounded-xl border border-[var(--border)] p-4 text-sm"><p className="field-label">当前模型分配</p><p className="mt-2 break-all">主模型：{settings.mainModel}</p>{settings.reviewA && <p className="break-all">审查 A：{settings.reviewA}</p>}{settings.reviewB && <p className="break-all">审查 B：{settings.reviewB}</p>}{!settings.reviewReady && <p className="field-hint mt-1">仅主模型：拆解与生成蓝图可用；正文生成和交叉验证还需补齐审查 A、B 两个不同模型。</p>}</section>}
 
         {settings?.providerConfigured && <section className="space-y-3 rounded-xl border border-[var(--border)] p-4">
           <details className="rounded-lg bg-[#f1eee8] p-3 text-sm"><summary className="cursor-pointer font-medium">根据公开资料筛选：3 个首选＋1 个替补</summary><p className="field-hint mt-2">资料核对：2026-09-09。先研究，再用三道剧本小样验证；公开榜单不等于剧本创作效果，推荐分工尚待验证。</p>{MODEL_SHORTLIST.map(item => <div className="mt-3" key={item.id}><strong>{item.name} · {item.focus}</strong><p className="field-hint">{item.reason}</p><a className="underline" href={item.url} target="_blank" rel="noreferrer">官方资料</a></div>)}<p className="mt-3"><a className="underline" href="https://arena.ai/leaderboard/text/creative-writing" target="_blank" rel="noreferrer">公开创意写作评测</a> · 评测版本和推理设置可能与平台不同。</p></details>

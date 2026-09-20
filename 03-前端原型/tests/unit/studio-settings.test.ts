@@ -28,6 +28,20 @@ describe("本机模型配置安全保存", () => {
     expect(() => store.setSelection({ mainModel: "m1", reviewA: "m1", reviewB: "m3" }, 2, {})).toThrow("不同");
     expect(() => store.setSelection({ mainModel: "new1", reviewA: "new2", reviewB: "new3" }, 1, {})).toThrow("连接已变化");
   });
+  it("分级就绪：只配主模型可拆解，补齐三个不同模型才可交叉验证", () => {
+    const { store } = setup();
+    const partial = store.save({ ...input, reviewA: "", reviewB: "" }, {});
+    expect(partial).toMatchObject({ analyzeReady: true, reviewReady: false, configured: false, mainModel: "main", reviewA: "", reviewB: "" });
+    const full = store.setSelection({ mainModel: "m1", reviewA: "m2", reviewB: "m3" }, 1, {});
+    expect(full).toMatchObject({ analyzeReady: true, reviewReady: true, configured: true, mainModel: "m1", reviewA: "m2", reviewB: "m3" });
+  });
+  it("同一连接提交空模型字段保留已有分配，换地址才清空", () => {
+    const { store } = setup(); store.save(input, {});
+    const kept = store.save({ ...input, revision: 1, mainModel: "", reviewA: "", reviewB: "", apiKey: "" }, {});
+    expect(kept).toMatchObject({ configured: true, analyzeReady: true, reviewReady: true, mainModel: "main", reviewA: "review-a", reviewB: "review-b" });
+    const switched = store.save({ ...input, revision: 2, baseUrl: "https://another.invalid/v1", apiKey: "test-only-new-placeholder", mainModel: "", reviewA: "", reviewB: "" }, {});
+    expect(switched).toMatchObject({ configured: false, analyzeReady: false, mainModel: "" });
+  });
   it("留空保留同地址密钥，换服务强制新密钥；过期revision不覆盖", () => {
     const { store, root } = setup(); store.save(input, {});
     const next = store.save({ ...input, revision: 1, apiKey: "", mainModel: "main-v2" }, {}); expect(next.revision).toBe(2); expect(store.config({})?.apiKey).toBe(input.apiKey);

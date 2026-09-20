@@ -35,6 +35,11 @@ describe("蚂蚁模型发现", () => {
     const result = await discoverAntModels(connection, fetcher() as typeof fetch, undefined, ["premium"]);
     expect(result.map(model => model.id)).toEqual(["premium", ids[0], ids[1]]);
   });
+  it("接受蚂蚁新目录的 priceInfo 分档价格", async () => {
+    const call = fetcher(undefined, { [ids[0]!]: { inPrice: null, outPrice: null, priceInfo: { prices: [{ price: [{ priceCode: "INPUT", priceValue: "0.500000" }, { priceCode: "OUTPUT", priceValue: "1.500000" }] }] } } });
+    const result = await discoverAntModels(connection, call as typeof fetch);
+    expect(result[0]).toMatchObject({ inputPriceMicroCnyPerMillion: 500_000, outputPriceMicroCnyPerMillion: 1_500_000 });
+  });
   it("错误地址、无价格或认证失败均不进入付费测评", async () => {
     await expect(discoverAntModels({ ...connection, baseUrl: "https://other.invalid/v1" }, fetcher() as typeof fetch)).rejects.toThrow("只支持蚂蚁数科");
     const unauthorized = vi.fn(async () => new Response("secret-detail", { status: 401 }));

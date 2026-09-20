@@ -19,6 +19,19 @@ it("精确匹配配置模型，仅查询固定公开目录，不发送密钥或�
   expect(new Headers(init.headers).has("authorization")).toBe(false);
   expect(init.redirect).toBe("error");
 });
+it("兼容蚂蚁新目录：价格移到 priceInfo 分档时取最高档作预算上限", async () => {
+  const tiered = { name: "model-a", inPrice: null, outPrice: null, status: "RELEASED", type: "TEXT_GENERATE", offShelfFlag: 0,
+    modelProtocolCompatibility: { openai_chat_completions: true },
+    protocolParameters: [{ protocolName: "openai_chat_completions", parameters: { response_format: true } }],
+    priceInfo: { prices: [
+      { price: [{ priceCode: "INPUT", priceValue: "1.000000" }, { priceCode: "OUTPUT", priceValue: "4.000000" }, { priceCode: "INPUT_CACHE_HIT", priceValue: "0.020000" }] },
+      { price: [{ priceCode: "INPUT", priceValue: "2.000000" }, { priceCode: "OUTPUT", priceValue: "8.000000" }] },
+    ] } };
+  const fetcher = vi.fn<typeof fetch>().mockResolvedValue(catalog([tiered]));
+  const [result] = await readAntQuotes(baseUrl, ["model-a"], { fetcher, now: () => 1000 });
+  expect(result.inputPriceMicroCnyPerMillion).toBe(2_000_000);
+  expect(result.outputPriceMicroCnyPerMillion).toBe(8_000_000);
+});
 it("整数微元和BigInt按用量向上取整，不把微小正价格变成零", () => {
   expect(parseFlatMicroPrice("¥1.25/M")).toBe(1_250_000);
   expect(parseFlatMicroPrice("¥0/M")).toBe(0);

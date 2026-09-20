@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { GET, POST } from "@/app/api/studio/[operation]/route";
-vi.mock("@/server/studio-settings", () => ({ studioSettingsStore: { config: () => null } }));
+vi.mock("@/server/studio-settings", () => ({ studioSettingsStore: { config: () => null, safe: () => ({ providerConfigured: false, analyzeReady: false, reviewReady: false }) } }));
 vi.mock("@/server/studio-job-store", async importOriginal => {
   const original = await importOriginal<typeof import("@/server/studio-job-store")>();
   return { StudioJobStore: class extends original.StudioJobStore { constructor() { super(":memory:"); } } };
@@ -11,7 +11,7 @@ afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 it("未配置模型接口返回503且零外呼，capability仅暴露布尔状态和安全提示", async () => {
   vi.stubEnv("STUDIO_API_KEY", ""); const fetchMock = vi.fn(); vi.stubGlobal("fetch", fetchMock);
   const status = await GET(new Request(`${address}/api/studio/capability`, { headers: { host: "127.0.0.1:3107" } }), context("capability"));
-  expect(status.status).toBe(200); const body = await status.json(); expect(body.configured).toBe(false); expect(Object.keys(body).sort()).toEqual(["configured", "message"]);
+  expect(status.status).toBe(200); const body = await status.json(); expect(body.configured).toBe(false); expect(body.analyzeReady).toBe(false); expect(body.reviewReady).toBe(false); expect(Object.keys(body).sort()).toEqual(["analyzeReady", "configured", "message", "providerConfigured", "reviewReady"]);
   const response = await POST(new Request(`${address}/api/studio/analyze`, { method: "POST", headers: { host: "127.0.0.1:3107", origin: address, "content-type": "application/json" }, body: JSON.stringify({ documents: [{ id: "a", name: "剧本", text: "自有测试资料" }] }) }), context("analyze"));
   expect(response.status).toBe(503); expect((await response.json()).error.code).toBe("MODEL_NOT_CONFIGURED"); expect(fetchMock).not.toHaveBeenCalled();
   expect(response.headers.get("cache-control")).toBe("no-store");

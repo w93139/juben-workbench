@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { modelCandidateSchema, type ModelCandidate } from "@/domain/model-evaluation";
 import type { ProviderConnection } from "./studio-settings";
+import { readCatalogMicroPrices } from "./studio-pricing";
 import { LocalApiError } from "./local-security";
 import { RESEARCH_SELECTION_POLICY, type CandidateSelectionPolicy } from "@/domain/model-shortlist";
 
@@ -13,7 +14,8 @@ const modelId = z.string().trim().min(1).max(200).refine(value => !/[\x00-\x20\x
 const upstreamSchema = z.object({ data: z.array(z.object({ id: modelId }).passthrough()).max(1000) }).passthrough();
 const priceItemSchema = z.object({
   name: modelId, displayName: z.string().trim().min(1).max(300), provider: z.string().trim().min(1).max(120), status: z.string(),
-  contextLength: z.union([z.string(), z.number()]).nullable().optional(), inPrice: z.string(), outPrice: z.string(), type: z.string().nullable().optional(),
+  contextLength: z.union([z.string(), z.number()]).nullable().optional(), inPrice: z.string().max(300).nullable().optional(), outPrice: z.string().max(300).nullable().optional(), type: z.string().nullable().optional(),
+  priceInfo: z.object({ prices: z.array(z.object({ price: z.array(z.object({ priceCode: z.string().max(40), priceValue: z.string().max(40) })).max(20) })).max(10) }).partial().optional(),
   offShelfFlag: z.union([z.boolean(), z.number(), z.string()]).nullable().optional(),
   modelProtocolCompatibility: z.record(z.string(), z.boolean()).optional(),
   protocolParameters: z.array(z.object({ protocolName: z.string(), parameters: z.record(z.string(), z.boolean()) }).passthrough()).optional(),
@@ -32,14 +34,6 @@ async function limitedJson(response: Response) {
   } finally { await reader.cancel().catch(() => {}); }
   const text = Buffer.concat(chunks).toString("utf8");
   try { return JSON.parse(text); } catch { throw new LocalApiError(502, "模型服务返回格式无法识别。"); }
-}
-function parsePrice(value: string) {
-  // Tiered, cached or minimum-charge descriptions need a richer billing model.
-  // Reject them instead of silently using the first number as a flat price.
-  const matched = value.match(/^\s*(?:¥|￥)\s*([0-9]+(?:\.[0-9]+)?)\s*\/\s*M\s*$/i);
-  if (!matched) return null;
-  const micro = Math.round(Number(matched[1]) * 1_000_000);
-  return Number.isSafeInteger(micro) && micro >= 0 ? micro : null;
 }
 function context(value: string | number | null | undefined) { const parsed = Number(value); return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : null; }
 function available(item: z.infer<typeof priceItemSchema>) {
@@ -65,9 +59,9 @@ export async function discoverAntModels(connection: ProviderConnection, fetcher:
   if (!models.success || !catalog.success) throw new LocalApiError(502, "蚂蚁平台模型清单格式发生变化，未进行付费测评。");
   const permitted = new Set(models.data.data.map(item => item.id));
   const priced = catalog.data.data.items.flatMap((item): ModelCandidate[] => {
-    const input = parsePrice(item.inPrice), output = parsePrice(item.outPrice);
-    if (!permitted.has(item.name) || !available(item) || !supportsRequiredFormat(item) || input == null || output == null || excluded.test(item.name)) return [];
-    const candidate = modelCandidateSchema.safeParse({ id: item.name, displayName: item.displayName, provider: item.provider, contextLength: context(item.contextLength), inputPriceMicroCnyPerMillion: input, outputPriceMicroCnyPerMillion: output });
+    const prices = readCatalogMicroPrices(item);
+    if (!permitted.has(item.name) || !available(item) || !supportsRequiredFormat(item) || !prices || excluded.test(item.name)) return [];
+    const candidate = modelCandidateSchema.safeParse({ id: item.name, displayName: item.displayName, provider: item.provider, contextLength: context(item.contextLength), inputPriceMicroCnyPerMillion: prices.input, outputPriceMicroCnyPerMillion: prices.output });
     return candidate.success ? [candidate.data] : [];
   });
   const excludedSet = new Set(excludedIds); const usable = priced.filter(candidate => (candidate.contextLength ?? 0) >= 64_000 && !excludedSet.has(candidate.id));

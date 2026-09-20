@@ -6,18 +6,50 @@ export const STUDIO_QUOTE_TTL = 10 * 60 * 1000;
 export const ANT_PRICE_URL = "https://maas.antdigital.com/api/v1/model-service/public/page-list?page=1&pageSize=500";
 const BASE_URL = "https://maas-api.antdigital.com/v1";
 const error = () => new LocalApiError(409, "无法核对当前模型的有效人民币报价，未发起付费调用。请免费刷新报价后重试。");
-const catalogSchema = z.object({ success: z.literal(true), data: z.object({ items: z.array(z.object({
-  name: z.string().max(200), inPrice: z.string().max(300), outPrice: z.string().max(300),
+const catalogItemSchema = z.object({
+  name: z.string().max(200), inPrice: z.string().max(300).nullable().optional(), outPrice: z.string().max(300).nullable().optional(),
   status: z.string(), type: z.string().nullable().optional(), offShelfFlag: z.unknown().optional(),
   modelProtocolCompatibility: z.record(z.string(), z.boolean()).optional(),
   protocolParameters: z.array(z.object({ protocolName: z.string(), parameters: z.record(z.string(), z.boolean()) })).optional(),
-})).max(1000) }) });
+  priceInfo: z.object({ prices: z.array(z.object({ price: z.array(z.object({ priceCode: z.string().max(40), priceValue: z.string().max(40) })).max(20) })).max(10) }).partial().optional(),
+});
+const catalogSchema = z.object({ success: z.literal(true), data: z.object({ items: z.array(catalogItemSchema).max(1000) }) });
 
 export function parseFlatMicroPrice(value: string): number | null {
   const match = value.match(/^\s*[¥￥]\s*([0-9]{1,7})(?:\.([0-9]{1,6}))?\s*\/\s*M\s*$/i);
   if (!match) return null;
   const micro = BigInt(match[1]) * 1_000_000n + BigInt((match[2] ?? "").padEnd(6, "0"));
   return micro <= 1_000_000_000_000n ? Number(micro) : null;
+}
+type CatalogPriceItem = { inPrice?: string | null; outPrice?: string | null; priceInfo?: { prices?: { price: { priceCode: string; priceValue: string }[] }[] } };
+function microFromYuanText(value: string): number | null {
+  const matched = value.trim().match(/^([0-9]{1,7})(?:\.([0-9]{1,6}))?$/);
+  if (!matched) return null;
+  const micro = BigInt(matched[1]) * 1_000_000n + BigInt((matched[2] ?? "").padEnd(6, "0"));
+  return micro <= 1_000_000_000_000n ? Number(micro) : null;
+}
+/**
+ * Reads one input/output CNY-per-million price pair from an Ant catalog item.
+ * Legacy flat `¥x/M` fields keep working unchanged. When only the newer
+ * `priceInfo.prices[]` tiers are present, the highest published tier is used so a
+ * budget reservation never under-estimates the platform charge. Cached or
+ * malformed tiers are rejected instead of silently picking an arbitrary number.
+ */
+export function readCatalogMicroPrices(item: CatalogPriceItem): { input: number; output: number } | null {
+  if (typeof item.inPrice === "string" || typeof item.outPrice === "string") {
+    const input = item.inPrice ? parseFlatMicroPrice(item.inPrice) : null;
+    const output = item.outPrice ? parseFlatMicroPrice(item.outPrice) : null;
+    return input == null || output == null ? null : { input, output };
+  }
+  const rows = (item.priceInfo?.prices ?? []).flatMap(stage => stage.price ?? []);
+  let input: number | null = null, output: number | null = null;
+  for (const row of rows) {
+    const micro = microFromYuanText(row.priceValue);
+    if (micro == null) return null;
+    if (row.priceCode === "INPUT") input = input == null ? micro : Math.max(input, micro);
+    else if (row.priceCode === "OUTPUT") output = output == null ? micro : Math.max(output, micro);
+  }
+  return input == null || output == null ? null : { input, output };
 }
 export function assertFreshQuote(quote: StudioQuote, baseUrl: string, model: string, now: number) {
   if (!studioQuoteSchema.safeParse(quote).success || quote.baseUrl !== baseUrl || quote.modelId !== model
@@ -64,9 +96,9 @@ export async function readAntQuotes(baseUrl: string, modelIds: readonly string[]
         || ![undefined, null, false, 0, "0", "false"].some(flag => flag === item.offShelfFlag)
         || item.modelProtocolCompatibility?.openai_chat_completions !== true
         || item.protocolParameters?.find(p => p.protocolName === "openai_chat_completions")?.parameters.response_format !== true) throw error();
-      const input = parseFlatMicroPrice(item.inPrice), output = parseFlatMicroPrice(item.outPrice);
-      if (input == null || output == null) throw error();
-      return studioQuoteSchema.parse({ provider: "ant", baseUrl: BASE_URL, modelId, currency: "CNY", inputPriceMicroCnyPerMillion: input, outputPriceMicroCnyPerMillion: output, checkedAt, expiresAt: checkedAt + STUDIO_QUOTE_TTL });
+      const prices = readCatalogMicroPrices(item);
+      if (!prices) throw error();
+      return studioQuoteSchema.parse({ provider: "ant", baseUrl: BASE_URL, modelId, currency: "CNY", inputPriceMicroCnyPerMillion: prices.input, outputPriceMicroCnyPerMillion: prices.output, checkedAt, expiresAt: checkedAt + STUDIO_QUOTE_TTL });
     });
   } catch { throw error(); }
 }

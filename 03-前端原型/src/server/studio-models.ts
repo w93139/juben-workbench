@@ -32,14 +32,19 @@ const CALL_TIMEOUT = 240000;
 const JOB_TTL = 2 * 60 * 60 * 1000;
 const MAX_JOBS = 24;
 const MAX_RUNNING = 2;
-const unavailable = () => new StudioError("MODEL_NOT_CONFIGURED", "尚未配置主模型及两路审查模型。请在服务端设置模型连接后重试。", 503);
+const unavailable = () => new StudioError("MODEL_NOT_CONFIGURED", "尚未配置可用的模型连接。请在本机设置平台地址、密钥和主模型后重试。", 503);
+const reviewUnavailable = () => new StudioError("MODEL_NOT_CONFIGURED", "正文生成与交叉验证需要三个不同的模型（主模型、审查A、审查B）。请先补齐模型分配再重试。", 503);
+export function reviewModelsReady(config: Pick<StudioConfig, "mainModel" | "reviewA" | "reviewB">) {
+  return !!config.reviewA && !!config.reviewB && new Set([config.mainModel, config.reviewA, config.reviewB]).size === 3;
+}
 export function readStudioConfig(env: Record<string, string | undefined> = process.env): StudioConfig {
   if (env === process.env) { try { const configured = studioSettingsStore.config(env); if (configured) return configured; } catch { throw unavailable(); } throw unavailable(); }
-  const baseUrl = env.STUDIO_API_BASE_URL?.trim(), apiKey = env.STUDIO_API_KEY?.trim(), mainModel = env.STUDIO_MAIN_MODEL?.trim(), reviewA = env.STUDIO_REVIEW_A_MODEL?.trim(), reviewB = env.STUDIO_REVIEW_B_MODEL?.trim();
-  if (![baseUrl, apiKey, mainModel, reviewA, reviewB].every((value) => value?.trim()) || new Set([mainModel, reviewA, reviewB]).size !== 3) throw unavailable();
+  const baseUrl = env.STUDIO_API_BASE_URL?.trim(), apiKey = env.STUDIO_API_KEY?.trim(), mainModel = env.STUDIO_MAIN_MODEL?.trim(), reviewA = env.STUDIO_REVIEW_A_MODEL?.trim() ?? "", reviewB = env.STUDIO_REVIEW_B_MODEL?.trim() ?? "";
+  if (![baseUrl, apiKey, mainModel].every((value) => value?.trim())) throw unavailable();
+  if ((reviewA || reviewB) && (!reviewA || !reviewB || new Set([mainModel, reviewA, reviewB]).size !== 3)) throw unavailable();
   let url: URL; try { url = new URL(baseUrl!); } catch { throw unavailable(); }
   if (url.username || url.password || url.search || url.hash || (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)))) throw unavailable();
-  return { baseUrl: baseUrl!.replace(/\/+$/, ""), apiKey: apiKey!, mainModel: mainModel!, reviewA: reviewA!, reviewB: reviewB! };
+  return { baseUrl: baseUrl!.replace(/\/+$/, ""), apiKey: apiKey!, mainModel: mainModel!, reviewA, reviewB };
 }
 function context(value: unknown) { const serialized = JSON.stringify(value); if (Buffer.byteLength(serialized) > CONTEXT_BYTES) throw new StudioError("CONTEXT_TOO_LARGE", "当前步骤超出单次上下文容量，本次超限请求未发起，已有资料保留。此前步骤可能已产生模型费用；正文已按模块保存，超长审查尚待分段支持。", 413); return serialized; }
 async function responseText(response: Response, signal: AbortSignal, collectLateUsage = false) {
@@ -119,6 +124,7 @@ export class StudioEngine {
       return structuredClone(existing.view);
     }
     const config = this.config();
+    if (operation === "review" && !reviewModelsReady(config)) throw reviewUnavailable();
     const duplicate = !requestId ? [...this.jobs.values()].find((job) => job.fingerprint === fingerprint && job.view.status === "running") : undefined;
     if (duplicate) return structuredClone(duplicate.view);
     if (this.jobs.size >= MAX_JOBS || [...this.jobs.values()].filter((job) => job.view.status === "running").length >= MAX_RUNNING) throw new StudioError("BUSY", "当前已有处理任务或保留记录达到上限，请稍后重试。", 429);
@@ -263,6 +269,7 @@ export class StudioEngine {
       return { kind: "blueprint", blueprint };
     }
     const { blueprint } = studioInputs.review.parse(input);
+    if (!reviewModelsReady(config)) throw reviewUnavailable();
     const reports: StudioReviewResult["reports"] = {}; const structural = checkBlueprint(blueprint).filter(issue => issue.severity === "error").map((issue) => issue.message);
     const result: StudioReviewResult = { kind: "review", passed: false, issues: structural, artifacts: [], reports, blueprint, blueprintFingerprint: createHash("sha256").update(JSON.stringify(blueprint)).digest("hex"), humanPlaytest: "not-run" };
     if (structural.length) return result;

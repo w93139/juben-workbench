@@ -177,6 +177,15 @@ describe("真实模型编排服务（只用假transport，不访问网络）", (
     await expect(engine.start("analyze", { documents: [{ id: "doc", name: "剧本.txt", text: "原始全文" }] })).rejects.toMatchObject({ code: "MODEL_NOT_CONFIGURED", status: 503 }); expect(call).not.toHaveBeenCalled();
     expect(() => readStudioConfig({ STUDIO_API_BASE_URL: config.baseUrl, STUDIO_API_KEY: "test", STUDIO_MAIN_MODEL: " x ", STUDIO_REVIEW_A_MODEL: "x", STUDIO_REVIEW_B_MODEL: "z" })).toThrow(StudioError);
   });
+  it("只配主模型时可拆解、交叉验证被明确拒绝且零外呼", async () => {
+    const mainOnly: StudioConfig = { ...config, reviewA: "", reviewB: "" };
+    const call = vi.fn(transport()); const engine = new StudioEngine(() => mainOnly, call);
+    const done = await wait(engine, (await engine.start("analyze", { documents: [{ id: "doc", name: "剧本.txt", text: "原始全文" }] })).jobId);
+    expect(done.status).toBe("completed"); expect(call).toHaveBeenCalledTimes(1);
+    const reviewCall = vi.fn(transport()); const reviewEngine = new StudioEngine(() => mainOnly, reviewCall);
+    await expect(reviewEngine.start("review", { blueprint: blueprint() })).rejects.toMatchObject({ code: "MODEL_NOT_CONFIGURED", status: 503 });
+    expect(reviewCall).not.toHaveBeenCalled();
+  });
   it("完整材料无截断，引用必须可回查；未知字段和超限上下文不外呼", async () => {
     const call = vi.fn(transport()); const engine = new StudioEngine(() => config, call);
     const input = { documents: [{ id: "doc", name: "剧本.txt", text: "原始全文" }] };

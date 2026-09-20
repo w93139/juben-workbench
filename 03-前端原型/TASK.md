@@ -1,5 +1,16 @@
 # Task：阶段B · 参考研究与原创方向
 
+## Current contract · 模型配置分级与连接保存修复 · 2026-09-21
+
+- Goal：修复“保存平台连接即清空三个模型分配”的缺陷；模型配置分级——拆解与生成蓝图只需「平台地址+密钥+主模型」，正文生成与交叉验证需要三个不同模型；适配蚂蚁平台已变更的价格目录（价格从 inPrice/outPrice 迁到 priceInfo.prices[] 分档），让费用预览与自动选型恢复可用；免费恢复已完成的测评分配。
+- Non-goals：不改变生成/审查算法与三模型交叉验证设计；不改费用结算口径与已授权预算；不重跑测评、不发起新的付费调用；不切换到 DeepSeek V4.1-Flash。
+- Done when：同一连接重存不再清空分配；仅配主模型时拆解/蓝图可点、交叉验证被明确拦截并给出原因；费用预览能从新目录读到人民币单价；恢复后的分配写入本机配置且刷新/重启后保留。
+- Scope：studio-settings、studio-models、capability 路由、budget 路由、studio-pricing、model-discovery、studio/index、studio/connection 及对应单测；本机 runtime-data 的分配数据修复；TASK 记录。
+- Verify：`npx vitest run tests/unit`（492 通过）；`npm run build -- --webpack` 通过；Playwright `model-connection`/`four-stage`/`studio-budget` 共 21 项通过；重启本机预览后 capability 返回 analyzeReady/reviewReady；免费读取真实报价成功（未调用付费端点）。
+- Risks and assumptions：新目录价格分「闲时/忙时」两档，本轮按最高档（忙时）预留，属保守上界，实际按返回用量结算；未建模缓存命中价与分时调度。密钥不外显；分配恢复为数据修复，不产生费用。
+
+> 当前任务：本批为 M6 真实联调前置修复，用户已批准（2026-09-21）。真实整本联调仍需材料范围、费用上限与付费授权。
+
 ## Current contract · 蚂蚁模型自动选型与 LiteLLM · 2026-09-09
 
 - Goal：用户只提供蚂蚁数科平台地址和 API Key，系统发现可用文本模型，用有金标核对的固定小样完成初筛，在工作台人民币 10 元估算限额内推荐并分配主模型与两路独立审查模型；同时生成后续 LiteLLM 网关所需的无密钥别名配置。
