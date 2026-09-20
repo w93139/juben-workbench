@@ -2,7 +2,7 @@ import { expect, it, vi } from "vitest";
 import { z } from "zod";
 import { analysisBatches, ANALYSIS_BATCH_BYTES, analyzeLongSource, sourceNoteSchema, sourceSelectionSchema, type LongAnalysisOptions, type CitationSegment } from "@/server/long-analysis";
 import { studioInputs } from "@/domain/studio";
-import { ANALYSIS_CALL_BYTES } from "@/domain/analysis-limits";
+import { ANALYSIS_CALL_BYTES, ANALYSIS_EXTRACT_TOKENS } from "@/domain/analysis-limits";
 type Note = z.infer<typeof sourceNoteSchema>;
 type Payload = { segments?: CitationSegment[]; notes?: { sourceRefs: { citationId: string; quote: string }[] }[] };
 const documents = () => Array.from({ length: 4 }, (_, i) => ({ id: `d${i}`, name: `角色${i}.txt`, text: `角色${i}的开篇。` + "中文与😀换行\n引号\"\\".repeat(14000) + `角色${i}的结尾。` }));
@@ -35,6 +35,13 @@ it("中文、emoji、换行及转义原文分段无损，不切代理对，编�
   expect(result.coverage).toEqual({ method: "segmented", documents: 4, parts: batches.length });
   expect(result.unknowns).toContain("测试未确认项"); expect(result.unknowns.join("")).toContain("仍需结合原文复核");
   for (const ref of result.sourceRefs) expect(docs.find(d => d.id === ref.documentId)!.text).toContain(ref.quote);
+});
+it("分批与汇总请求使用足够推理的输出预算，避免被 length 截断", async () => {
+  const seen: (number | undefined)[] = [];
+  const call: LongAnalysisOptions["call"] = async (_prompt, payload, schema, maxTokens) => { seen.push(maxTokens); return schema.parse(response(payload, schema)); };
+  await analyzeLongSource({ documents: documents(), instructions: "" }, { call, phase: () => {}, modelIdentity: "test" });
+  expect(seen.length).toBeGreaterThan(0);
+  expect(seen.every(value => value === ANALYSIS_EXTRACT_TOKENS)).toBe(true);
 });
 it("重复摘录可指定后一次真实位置，模型无需复写UUID、空白或摘录", async () => {
   const repeated = "相同证言\r\n".padEnd(160, " "); const doc = { id: "11111111-1111-4111-8111-111111111111", name: "角色本", text: repeated + repeated };

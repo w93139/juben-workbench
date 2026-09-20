@@ -1,5 +1,14 @@
 # Task：阶段B · 参考研究与原创方向
 
+## Current contract · 拆解输出预算修复 · 2026-09-21
+
+- Goal：修复长原剧本分段拆解时“模型输出以 length 结束、结果不被采用”的问题。分批、逐层汇总与最终统一大纲属同一失败模式：推理型主模型把输出预算耗在思考上，JSON 未写完即被截断。
+- Non-goals：不切换主模型、不改价格口径、不改估算算法；不改变分段阈值与引用回填规则。
+- Done when：分段提取、逐层汇总和最终统一大纲的输出预算一致提高，至少容纳推理+正文；费用预留与新上限一致，不因提高上限而低估。
+- Scope：`analysis-limits` 新增 `ANALYSIS_EXTRACT_TOKENS=16384`；`long-analysis` 的分批/汇总/最终调用与 `studio-models` 直读分析调用使用该预算；`studio-cost-preview` 的拆解预留下限对齐；新增单测。
+- Verify：`npx vitest run tests/unit`（493 通过）；`npm run build -- --webpack` 通过；Playwright 全量 88 项通过；本机预览已重启到新构建。
+- Risks and assumptions：提高的是输出上限而非实际计费，实际仍按返回用量结算；更大预算不保证一次通过，但消除“必然截断”。若主模型换成未内置档位的便宜模型，仍需补该模型的输出/超时档位（待定）。
+
 ## Current contract · 模型配置分级与连接保存修复 · 2026-09-21
 
 - Goal：修复“保存平台连接即清空三个模型分配”的缺陷；模型配置分级——拆解与生成蓝图只需「平台地址+密钥+主模型」，正文生成与交叉验证需要三个不同模型；适配蚂蚁平台已变更的价格目录（价格从 inPrice/outPrice 迁到 priceInfo.prices[] 分档），让费用预览与自动选型恢复可用；免费恢复已完成的测评分配。

@@ -15,7 +15,7 @@ import { assertReviewDeliveryCapacity } from "./review-delivery";
 import { LocalApiError } from "./local-security";
 import { studioBudgetClaimSchema, type StudioBudgetClaim } from "@/domain/studio-budget";
 import { evaluationResponseProfile } from "@/domain/model-evaluation";
-import { ANALYSIS_INPUT_BYTES, ANALYSIS_DIRECT_BYTES, SINGLE_CONTEXT_BYTES } from "@/domain/analysis-limits";
+import { ANALYSIS_INPUT_BYTES, ANALYSIS_DIRECT_BYTES, ANALYSIS_EXTRACT_TOKENS, SINGLE_CONTEXT_BYTES } from "@/domain/analysis-limits";
 import { analyzeLongSource, LongAnalysisError } from "./long-analysis";
 import { studioSettingsStore } from "./studio-settings";
 import { createHash, randomUUID } from "node:crypto";
@@ -257,7 +257,7 @@ export class StudioEngine {
           readCheckpoint: key => this.store?.readAnalysisNote(key),
           writeCheckpoint: (key, note) => this.store?.saveAnalysisNote(key, note),
         })
-        : await this.call(config, config.mainModel, "读取全部输入材料，拆解真相因果、时间线、人物关系、知识分配、线索支持与轮次节奏。每项原文事实要给可核对摘录；保留未确认内容。提出2至5个原创写作方向和三幕大纲，说明迁移机制及风险，不得只换名。outline中按明确事实/推断/原创/待定区分。", data, studioAnalysisSchema, job);
+        : await this.call(config, config.mainModel, "读取全部输入材料，拆解真相因果、时间线、人物关系、知识分配、线索支持与轮次节奏。每项原文事实要给可核对摘录；保留未确认内容。提出2至5个原创写作方向和三幕大纲，说明迁移机制及风险，不得只换名。outline中按明确事实/推断/原创/待定区分。", data, studioAnalysisSchema, job, ANALYSIS_EXTRACT_TOKENS);
       if (Buffer.byteLength(JSON.stringify(data)) <= ANALYSIS_DIRECT_BYTES) delete analysis.coverage;
       if (new Set(analysis.directions.map((d) => d.id)).size !== analysis.directions.length || analysis.sourceRefs.some((ref) => !data.documents.some((doc) => doc.id === ref.documentId && doc.text.includes(ref.quote)))) throw new StudioError("SOURCE_REFERENCE_INVALID", "分析中的原文引用无法在输入材料核对，结果未采纳。", 502);
       return { kind: "analysis", analysis };

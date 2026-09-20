@@ -1,4 +1,4 @@
-import { ANALYSIS_CALL_BYTES, ANALYSIS_DIRECT_BYTES, ANALYSIS_INPUT_BYTES, SINGLE_CONTEXT_BYTES } from "@/domain/analysis-limits";
+import { ANALYSIS_CALL_BYTES, ANALYSIS_DIRECT_BYTES, ANALYSIS_EXTRACT_TOKENS, ANALYSIS_INPUT_BYTES, SINGLE_CONTEXT_BYTES } from "@/domain/analysis-limits";
 import { evaluationResponseProfile } from "@/domain/model-evaluation";
 import { studioInputs, studioAnalysisSchema, studioAuditSchema, studioArtifactSchema, studioScopedAuditSchema, type StudioOperation } from "@/domain/studio";
 import { blueprintDataSchema } from "@/domain/blueprint";
@@ -40,7 +40,7 @@ export async function previewStudioCost(billing: StudioBilling, config: StudioCo
   const schemas = operation === "analyze" ? [studioAnalysisSchema, sourceSelectionSchema, analysisSelectionSchema]
     : operation === "blueprint" ? [blueprintDataSchema] : [studioAuditSchema, studioArtifactSchema, studioScopedAuditSchema];
   const requestCeiling = studioRequestBytesCeiling(contextLimit, schemas);
-  const perModel = quotes.map(quote => reserveQuotedFen(quote, requestCeiling, Math.max(evaluationResponseProfile(quote.modelId).maxTokens, operation === "analyze" ? 8192 : 0)));
+  const perModel = quotes.map(quote => reserveQuotedFen(quote, requestCeiling, Math.max(evaluationResponseProfile(quote.modelId).maxTokens, operation === "analyze" ? ANALYSIS_EXTRACT_TOKENS : 0)));
   const estimateFen = operation === "review" ? perModel[0] * (plan!.targets.length + (scopes === undefined ? 2 : 1 + scopes)) + perModel[1] * (scopes === undefined ? 2 : scopes * 2) + perModel[2] * (scopes === undefined ? 2 : scopes * 2) : perModel[0] * callsMax;
   const checkpoint = plan ? inspectProductionReuse(plan, saved, studioInputs.review.parse(parsed.data).blueprint, config) : undefined;
   const previewId = billing.ledger.preparePreview(projectId, budget.revision, inputFingerprint, reviewApprovalFingerprint(executionFingerprint, saved?.reviewPlan ? reviewPlanDigest(saved.reviewPlan) : undefined));
