@@ -18,6 +18,7 @@ import { evaluationResponseProfile } from "@/domain/model-evaluation";
 import { ANALYSIS_INPUT_BYTES, ANALYSIS_DIRECT_BYTES, ANALYSIS_EXTRACT_TOKENS, SINGLE_CONTEXT_BYTES } from "@/domain/analysis-limits";
 import { analyzeLongSource, LongAnalysisError } from "./long-analysis";
 import { studioSettingsStore } from "./studio-settings";
+import { authorMemoryStore, NO_AUTHOR_MEMORY, type AuthorMemoryReader } from "./author-memory";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { blueprintDataSchema, checkBlueprint } from "@/domain/blueprint";
@@ -103,7 +104,7 @@ interface Job { view: StudioJobView; expiresAt: number; fingerprint: string; ope
 export class StudioEngine {
   private jobs = new Map<string, Job>();
   private validations = new Map<string, { jobId: string; result: StudioReviewResult; expiresAt: number }>();
-  constructor(private config: () => StudioConfig = readStudioConfig, private transport: ModelTransport = openAITransport, private now: () => number = Date.now, private store?: StudioJobStore, private acquirePower: () => Promise<TaskPower> = acquireTaskPower, readonly billing?: StudioBilling) {
+  constructor(private config: () => StudioConfig = readStudioConfig, private transport: ModelTransport = openAITransport, private now: () => number = Date.now, private store?: StudioJobStore, private acquirePower: () => Promise<TaskPower> = acquireTaskPower, readonly billing?: StudioBilling, private memory: AuthorMemoryReader = NO_AUTHOR_MEMORY) {
     if (billing && (!store || billing.ledger !== store.budget)) throw new Error("Budget and jobs must share one store");
   }
   private clean() { for (const [id, job] of this.jobs) if (job.expiresAt <= this.now() && job.view.status !== "running") this.jobs.delete(id); for (const [id, value] of this.validations) if (value.expiresAt <= this.now()) this.validations.delete(id); }
@@ -111,10 +112,19 @@ export class StudioEngine {
     if (requestId !== undefined && !z.string().uuid().safeParse(requestId).success) throw new StudioError("INVALID_REQUEST_ID", "任务编号无效，请刷新后重试。", 400);
     const parsed = studioInputs[operation].safeParse(input);
     if (!parsed.success) throw new StudioError("INVALID_INPUT", "请求资料不完整或格式不正确，请检查当前步骤的输入。", 400);
-    const serialized = JSON.stringify(parsed.data);
+    // 作者记忆只并入拆解输入：它改变被哈希的 instructions，因此记忆变化会产生新指纹，不会错误复用旧结果。
+    let working: unknown = parsed.data;
+    let memoryIds: string[] = [];
+    if (operation === "analyze") {
+      const data = studioInputs.analyze.parse(parsed.data);
+      const memory = this.memory.render("analyze", budget?.projectId ?? "", Math.max(0, 9900 - data.instructions.length));
+      if (memory.text) working = { ...data, instructions: `${data.instructions}\n\n${memory.text}`.trim() };
+      memoryIds = memory.ids;
+    }
+    const serialized = JSON.stringify(working);
     if (operation === "analyze") {
       if (Buffer.byteLength(serialized) > ANALYSIS_INPUT_BYTES) throw new StudioError("CONTEXT_TOO_LARGE", "当前拆解材料超过12 MB本机处理上限，尚未调用模型。", 413);
-    } else context(parsed.data);
+    } else context(working);
     const productionPlan = operation === "review" ? buildArtifactPlan(studioInputs.review.parse(parsed.data).blueprint) : undefined;
     this.clean();
     if (this.billing && (!studioBudgetClaimSchema.safeParse(budget).success || !budget?.previewId)) throw new StudioError("BUDGET_REQUIRED", "请先设置并预览当前项目的创作费用。", 409);
@@ -148,7 +158,8 @@ export class StudioEngine {
       job.productionId = claimed.productionId;
     }
     this.jobs.set(jobId, job);
-    void this.runProtected(operation, parsed.data, config, job).then(result => {
+    if (memoryIds.length) this.memory.record?.(memoryIds, budget?.projectId ?? "", operation);
+    void this.runProtected(operation, working, config, job).then(result => {
       if (job.view.status !== "running") return;
       const view: StudioJobView = { ...job.view, status: "completed", phase: result.kind === "review" && !result.passed ? "审查结束，有待处理问题" : "本步处理完成", result };
       delete view.reviewProgress;
@@ -349,7 +360,7 @@ const globalStudio = globalThis as typeof globalThis & { __studioEngine?: Studio
 export function getStudioEngine() {
   if (!globalStudio.__studioEngine) {
     const store = new StudioJobStore();
-    globalStudio.__studioEngine = new StudioEngine(readStudioConfig, openAITransport, Date.now, store, acquireTaskPower, new StudioBilling(store.budget));
+    globalStudio.__studioEngine = new StudioEngine(readStudioConfig, openAITransport, Date.now, store, acquireTaskPower, new StudioBilling(store.budget), authorMemoryStore);
   }
   return globalStudio.__studioEngine;
 }

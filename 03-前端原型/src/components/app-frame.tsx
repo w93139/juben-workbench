@@ -3,19 +3,21 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ArrowUpRight, ChevronRight, FolderClosed, Menu } from "lucide-react";
+import { ArrowUpRight, BrainCircuit, ChevronRight, FolderClosed, Menu } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { UploadProjectButton } from "./create-project";
 import { useService } from "./providers";
 import { DeleteProjectButton } from "./delete-project";
 import { StudioConnection } from "./studio/connection";
+import { fetchMemory } from "@/services/author-memory-client";
 
 export function AppFrame({ children, title, projectId, workspace = false }: { children: React.ReactNode; title: string; projectId?: string; workspace?: boolean }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const service = useService();
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => service.list() });
+  const memory = useQuery({ queryKey: ["author-memory"], queryFn: fetchMemory, staleTime: 30_000 });
   function nav(href: string, label: string, icon: React.ReactNode, active = pathname === href) {
     return <Link href={href} className={`nav-item ${active ? "active" : ""}`} aria-current={active ? "page" : undefined} onClick={() => setOpen(false)} key={href}>{icon}{label}{active && <ChevronRight className="nav-arrow" size={13} />}</Link>;
   }
@@ -27,6 +29,7 @@ export function AppFrame({ children, title, projectId, workspace = false }: { ch
       {projects.isPending && <p className="field-hint px-3">正在读取项目…</p>}
       {projects.error && <button className="nav-item" onClick={() => void projects.refetch()}>项目读取失败，点击重试</button>}
       {projects.isSuccess && !projects.data.some((project) => !project.readOnly) && <p className="field-hint px-3">当前浏览器和地址下暂无项目。之前上传过？请用原浏览器和相同网址打开。</p>}
+      {nav("/memory", memory.data?.enabled ? `作者记忆 · ${memory.data.enabled}` : "作者记忆", <BrainCircuit size={15} />)}
     </nav>
     <div className="sidebar-footer"><span className="local-dot" />本机工作区<br />作者材料请勿直接展示给玩家</div>
   </>;
