@@ -878,3 +878,12 @@
 - Review：独立只读复审与隔离专项通过（21.43秒），无Blocker/Important；两项Suggestion已落实为未消费旧预览、逐角色目录断言。首跑在测试fixture同时填写旧rootPath与directory处被schema正确拒绝；清空旧手写路径后通过，不改变生产校验。最终增强断言专项+ESLint再通过（13.39秒），最终文件独立typecheck通过。
 - Fresh：统一隔离目录juben-verify-7bwr8gew完成56文件487项单元、ESLint、Webpack生产构建、独立typecheck、88项单worker浏览器回归全部通过（2.2分钟）；20项Python同步/隔离保护通过。工程测试直接调用实际路由与领域函数，浏览器持久化/跨页另行验证，不声称供应商替身是真实模型或同一浏览器HTTP全栈联调。0真实模型调用。
 - Preview：只读聚合确认创作0运行、测评0运行；保留旧构建并更新127.0.0.1:3107，/projects HTTP200，实际14个脚本均与验证构建哈希一致，buildId=b9P6_M5yijpcYEWfAZ6jG。更新前后capability均为configured=false，未修改模型配置、材料、浏览器数据或账本。M0–M5工程交付完成，按本批同步；M6需要具体材料/额度与本机连接，真实整本、用户验收、真人试玩仍分别未完成。
+
+### M6-0 · 价格目录兼容修复（2026-09-28，工程完成）
+
+- Found：M6执行前核对阶段发现，当前蚂蚁公开价格目录新增两个图像模型（`ming-image-0.1-design-layer`、`ming-image-0.1-design`），其`priceInfo`为`null`。`catalogItemSchema`只允许`undefined`不允许`null`，**一个不相关条目就让整批目录解析失败**，导致所有模型都取不到人民币报价，费用预览与任何付费步骤均无法启动（错误“无法核对当前模型的有效人民币报价”）。
+- Fix：`priceInfo`改为`.partial().nullable().optional()`，并同步放宽`CatalogPriceItem`类型；`null`条目进入后续类型/价格检查时仍被拒绝，不会造成少计费或误用。
+- Evidence：新增单元回归“目录含 priceInfo 为 null 的图像模型时仍能取出文本模型报价”，并验证该图像模型本身仍被拒绝。16项价格单测通过。
+- Observed preview：修复后对真实小范围材料（`孽岛疑云`完整剧本 v1.0，67份可读文本+1份`.py`不支持项，输入约162KB）调用应用自身预览接口，拆解`callsMax=10`、估算`¥2.19`（保守忙时价），远低于¥20上限。该数字来自应用费用预览接口，不是UI点击截图，也不是付费调用。
+- Fresh：隔离统一检查通过（单元/ESLint/Webpack构建/独立typecheck/88项浏览器回归）；无真实模型调用。
+- Note：仅在本地试算接口为探针项目`probe-niedao-5p`创建了一条额度记录（¥20），不属任何浏览器项目，不影响用户项目列表。

@@ -11,7 +11,7 @@ const catalogItemSchema = z.object({
   status: z.string(), type: z.string().nullable().optional(), offShelfFlag: z.unknown().optional(),
   modelProtocolCompatibility: z.record(z.string(), z.boolean()).optional(),
   protocolParameters: z.array(z.object({ protocolName: z.string(), parameters: z.record(z.string(), z.boolean()) })).optional(),
-  priceInfo: z.object({ prices: z.array(z.object({ price: z.array(z.object({ priceCode: z.string().max(40), priceValue: z.string().max(40) })).max(20) })).max(10) }).partial().optional(),
+  priceInfo: z.object({ prices: z.array(z.object({ price: z.array(z.object({ priceCode: z.string().max(40), priceValue: z.string().max(40) })).max(20) })).max(10) }).partial().nullable().optional(),
 });
 const catalogSchema = z.object({ success: z.literal(true), data: z.object({ items: z.array(catalogItemSchema).max(1000) }) });
 
@@ -21,7 +21,7 @@ export function parseFlatMicroPrice(value: string): number | null {
   const micro = BigInt(match[1]) * 1_000_000n + BigInt((match[2] ?? "").padEnd(6, "0"));
   return micro <= 1_000_000_000_000n ? Number(micro) : null;
 }
-type CatalogPriceItem = { inPrice?: string | null; outPrice?: string | null; priceInfo?: { prices?: { price: { priceCode: string; priceValue: string }[] }[] } };
+type CatalogPriceItem = { inPrice?: string | null; outPrice?: string | null; priceInfo?: { prices?: { price: { priceCode: string; priceValue: string }[] }[] } | null };
 function microFromYuanText(value: string): number | null {
   const matched = value.trim().match(/^([0-9]{1,7})(?:\.([0-9]{1,6}))?$/);
   if (!matched) return null;
