@@ -923,3 +923,10 @@
 - Fix：`openAITransport` 系统提示由“输出JSON必须满足此结构”改为“只输出符合结构的数据实例（JSON对象），绝对不要输出结构定义本身，不要出现 $schema/type/properties/required/additionalProperties 等结构关键词”。
 - Note：同日另有一次 301 秒**传输层**失败（无契约日志，归 MODEL_UNAVAILABLE），疑似上游连接中断，非本地 600 秒上限；本次未改该路径。
 - Fresh：隔离统一检查通过；无付费调用验证。
+
+### M6-4 · 主模型输出上限提高（2026-09-29，工程完成）
+
+- Found：真实联调“生成蓝图”第三次失败为 `finish_reason=length`（MODEL_RESPONSE_INCOMPLETE，192秒，prompt 17090 / completion 16384 tokens，计费¥0.45）：一份5人完整蓝图超过本地为 deepseek-v4-pro-0813 预留的 16384 输出上限。目录标注该模型 maxCompletionTokens=384000，限制来自本地 profile 而非模型。
+- Fix：`evaluationResponseProfile("deepseek-v4-pro-0813").maxTokens` 16384 → 49152（仅为上限，不强制输出；同时惠及正文生成同样使用主模型的调用）。timeoutMs 保持 600000。
+- Risk：更大输出会使单次调用更久，仍可能触及上游约300秒的连接时限（M6-3已记录一次301秒传输失败）；若再现将改为拆分生成。
+- Fresh：隔离统一检查通过；无付费调用验证。

@@ -127,7 +127,7 @@ describe("真实模型编排服务（只用假transport，不访问网络）", (
   it("三模型正式请求复用已测输出额度，Kimi携带low且不发送不支持的参数", async () => {
     const fetchMock = vi.fn(async () => Response.json({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify(audit()) } }] }));
     vi.stubGlobal("fetch", fetchMock);
-    for (const [model, maximum] of [["deepseek-v4-pro-0813", 16384], ["kimi-k3", 8192], ["qwen3.8-max", 4096]] as const) {
+    for (const [model, maximum] of [["deepseek-v4-pro-0813", 49152], ["kimi-k3", 8192], ["qwen3.8-max", 4096]] as const) {
       await openAITransport(config, model, "审查", {}, studioAuditSchema, new AbortController().signal);
       const request = JSON.parse((fetchMock.mock.calls.at(-1) as unknown as [string, RequestInit])[1].body as string);
       expect(request.max_tokens).toBe(maximum); expect(request.response_format).toEqual({ type: "json_object" });

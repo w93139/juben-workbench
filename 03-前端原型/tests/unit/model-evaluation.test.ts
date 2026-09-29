@@ -322,7 +322,7 @@ describe("剧本领域小样测评", () => {
       for (const model of RESEARCH_SELECTION_POLICY.ids) await antEvaluationTransport({ baseUrl: "https://maas-api.antdigital.com/v1", apiKey: "test-only" }, model, "system", "prompt", new AbortController().signal);
       for (const body of captured.slice(0, 3)) expect(body).not.toHaveProperty("temperature");
       expect(captured[3]?.temperature).toBe(0);
-      expect(captured.map(body => body.max_tokens)).toEqual([4096, 16384, 8192, 4096]);
+      expect(captured.map(body => body.max_tokens)).toEqual([4096, 49152, 8192, 4096]);
       expect(captured[2]?.reasoning_effort).toBe("low");
       expect(captured[1]).not.toHaveProperty("reasoning_effort");
       expect(captured.every(body => (body.response_format as { type: string }).type === "json_object")).toBe(true);
