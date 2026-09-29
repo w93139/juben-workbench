@@ -8,7 +8,7 @@ function storedRecord(value: unknown) {
   const put = vi.fn(); const close = vi.fn();
   const transactions: Array<{ abort: ReturnType<typeof vi.fn> }> = [];
   const db = {
-    close,
+    close, version: 1, objectStoreNames: { contains: (name: string) => name === "projects" },
     transaction: vi.fn(() => {
       const tx = {
         onabort: null as null | (() => void),

@@ -894,3 +894,10 @@
 - Fix：外层只校验 `success=true` 和不超过1000项的 `data.items` 数组，保留2 MB响应上限；每项独立 `catalogItemSchema.safeParse`。无效或无关项不影响正常模型；先按原始严格字符串名称记录被选模型，任何畸形或重复同名项均拒绝报价。被选项原有状态、类型、下架、协议及价格检查保持不变；忙时最高档预留与闲时最低档展示口径不变。
 - Evidence：价格专项回归23/23通过，覆盖混入非对象与畸形无关项、被选项畸形、字段超长、合法与畸形同名的两种顺序；失败只返回通用报价错误。模型发现及费用相邻专项25/25通过。独立只读复审无 Blocker/Important。全程假响应，0真实模型调用。
 - Fresh：隔离 `python3 scripts/verify-app.py` 退出0：56文件504项单元、ESLint、Webpack生产构建、独立typecheck、88项单worker浏览器回归全部通过（2.0分钟）；检查目录 `juben-verify-gtib7jap`。真实整本调用、作品验收与真人试玩仍分别待记录。
+
+### M6-2 · IndexedDB 缺仓自愈（2026-09-29）
+
+- Found：外部或历史浏览器环境若已有 `juben-workbench:authoring:v1` v1 数据库却缺少 `projects` 对象仓库，原 `indexedDB.open(DB, 1)` 不触发升级；项目列表在 `browserProjectRecovery.pending()` 开事务时抛 `NotFoundError`，刷新和重试均不能恢复。全新标准 Chromium 不复现；E2E 用 `addInitScript` 预置空 v1 后，修复前两条场景均复现侧栏错误。
+- Fix：正常打开不指定版本，新库在 `onupgradeneeded` 中按需建 `projects`；已有库缺仓时先关闭，再按其实际版本加一升级并建仓。保留数据库名称、键、schema 和业务行为，不删库；`onerror`/`onblocked` 仍拒绝，升级后仍缺仓也显式拒绝。
+- Evidence：新增 E2E 覆盖空 v1 恢复后首页空项目提示及自造 TXT 创建项目、已有 v3 其他仓库/记录升级到 v4 后保留数据、正常 v1 `projects` 仓库及记录保持版本与内容。旧版构建上的前两项先按预期失败；首次完整检查暴露旧单元夹具缺少标准 `objectStoreNames` 属性，补齐夹具后原删除/损坏/竞争路径专项6/6通过。独立只读复审无 Blocker/Important。全程没有真实模型调用。
+- Fresh：隔离 `python3 scripts/verify-app.py` 退出0：56文件504项单元、ESLint、Webpack生产构建、独立typecheck、91项单worker浏览器回归（含新增3项）全部通过（2.0分钟）；检查目录 `juben-verify-zqlr_b6p`。本机3107用户预览未因本批重建。

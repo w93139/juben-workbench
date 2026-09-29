@@ -14,14 +14,25 @@ class DeletedWorkbenchError extends Error {}
 function assertAvailable(value: unknown) {
   if (isDeleted(value)) throw new DeletedWorkbenchError("项目已删除或删除尚未完成，请返回项目列表。原文件不受影响。");
 }
-export async function openWorkbenchDatabase(): Promise<IDBDatabase> {
+function openDatabase(version?: number): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     let settled = false;
-    const request = indexedDB.open(WORKBENCH_DB, 1);
-    request.onupgradeneeded = () => request.result.createObjectStore(STORE);
+    const request = version === undefined ? indexedDB.open(WORKBENCH_DB) : indexedDB.open(WORKBENCH_DB, version);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(STORE)) request.result.createObjectStore(STORE);
+    };
     request.onsuccess = () => { if (settled) request.result.close(); else { settled = true; resolve(request.result); } };
     request.onerror = request.onblocked = () => { settled = true; reject(new Error("无法打开本机创作数据，原数据未改变。")); };
   });
+}
+export async function openWorkbenchDatabase(): Promise<IDBDatabase> {
+  const db = await openDatabase();
+  if (db.objectStoreNames.contains(STORE)) return db;
+  const nextVersion = db.version + 1;
+  db.close();
+  const upgraded = await openDatabase(nextVersion);
+  if (!upgraded.objectStoreNames.contains(STORE)) { upgraded.close(); throw new Error("无法打开本机创作数据，原数据未改变。"); }
+  return upgraded;
 }
 export async function readWorkbench(id: string): Promise<WorkbenchState> {
   return (await readWorkbenchSnapshot(id)).state;
