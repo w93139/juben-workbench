@@ -887,3 +887,10 @@
 - Observed preview：修复后对真实小范围材料（`孽岛疑云`完整剧本 v1.0，67份可读文本+1份`.py`不支持项，输入约162KB）调用应用自身预览接口，拆解`callsMax=10`、估算`¥2.19`（保守忙时价），远低于¥20上限。该数字来自应用费用预览接口，不是UI点击截图，也不是付费调用。
 - Fresh：隔离统一检查通过（单元/ESLint/Webpack构建/独立typecheck/88项浏览器回归）；无真实模型调用。
 - Note：仅在本地试算接口为探针项目`probe-niedao-5p`创建了一条额度记录（¥20），不属任何浏览器项目，不影响用户项目列表。
+
+### M6-1 · 价格目录逐条校验加固（2026-09-29）
+
+- Found：M6-0 解决了 `priceInfo=null`，但 `readAntQuotes` 仍用 `catalogSchema.parse` 校验整批条目。新增回归先复现：正常文本模型旁只要混入一个 `priceInfo` 非对象、`status=null` 等无关畸形项，整批报价就报通用错误。
+- Fix：外层只校验 `success=true` 和不超过1000项的 `data.items` 数组，保留2 MB响应上限；每项独立 `catalogItemSchema.safeParse`。无效或无关项不影响正常模型；先按原始严格字符串名称记录被选模型，任何畸形或重复同名项均拒绝报价。被选项原有状态、类型、下架、协议及价格检查保持不变；忙时最高档预留与闲时最低档展示口径不变。
+- Evidence：价格专项回归23/23通过，覆盖混入非对象与畸形无关项、被选项畸形、字段超长、合法与畸形同名的两种顺序；失败只返回通用报价错误。模型发现及费用相邻专项25/25通过。独立只读复审无 Blocker/Important。全程假响应，0真实模型调用。
+- Fresh：隔离 `python3 scripts/verify-app.py` 退出0：56文件504项单元、ESLint、Webpack生产构建、独立typecheck、88项单worker浏览器回归全部通过（2.0分钟）；检查目录 `juben-verify-gtib7jap`。真实整本调用、作品验收与真人试玩仍分别待记录。

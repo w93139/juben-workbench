@@ -43,6 +43,31 @@ it("目录含 priceInfo 为 null 的图像模型时仍能取出文本模型报�
   expect(result.inputPriceMicroCnyPerMillion).toBe(1_250_000);
   await expect(readAntQuotes(baseUrl, ["ming-image-0.1-design"], { fetcher })).rejects.toThrow("报价");
 });
+it("无关畸形条目不影响正常文本模型报价", async () => {
+  const malformed = [
+    { ...item("other-price"), priceInfo: "MALFORMED_PRIVATE" },
+    { ...item("other-status"), status: null },
+    { ...item("other-name"), name: "x".repeat(201) },
+    { ...item("other-type"), type: { unexpected: true } },
+    null,
+  ];
+  const [result] = await readAntQuotes(baseUrl, ["model-a"], {
+    fetcher: vi.fn<typeof fetch>().mockResolvedValue(catalog([...malformed, item()])), now: () => 1000,
+  });
+  expect(result.modelId).toBe("model-a");
+  expect(result.inputPriceMicroCnyPerMillion).toBe(1_250_000);
+});
+it.each([
+  [{ ...item(), priceInfo: "MALFORMED_PRIVATE" }],
+  [{ ...item(), status: null }],
+  [{ ...item(), inPrice: "x".repeat(301) }],
+  [{ ...item(), priceInfo: { prices: [{ price: [{ priceCode: "x".repeat(41), priceValue: "1.000000" }] }] } }],
+  [item(), { ...item(), status: null }],
+  [{ ...item(), status: null }, item()],
+])("被选模型存在非法条目时拒绝报价且只返回通用错误 %#", async (...items) => {
+  const request = readAntQuotes(baseUrl, ["model-a"], { fetcher: vi.fn<typeof fetch>().mockResolvedValue(catalog(items)) });
+  await expect(request).rejects.toMatchObject({ message: "无法核对当前模型的有效人民币报价，未发起付费调用。请免费刷新报价后重试。" });
+});
 it("整数微元和BigInt按用量向上取整，不把微小正价格变成零", () => {
   expect(parseFlatMicroPrice("¥1.25/M")).toBe(1_250_000);
   expect(parseFlatMicroPrice("¥0/M")).toBe(0);

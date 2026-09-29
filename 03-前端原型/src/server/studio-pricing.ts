@@ -13,7 +13,7 @@ const catalogItemSchema = z.object({
   protocolParameters: z.array(z.object({ protocolName: z.string(), parameters: z.record(z.string(), z.boolean()) })).optional(),
   priceInfo: z.object({ prices: z.array(z.object({ price: z.array(z.object({ priceCode: z.string().max(40), priceValue: z.string().max(40) })).max(20) })).max(10) }).partial().nullable().optional(),
 });
-const catalogSchema = z.object({ success: z.literal(true), data: z.object({ items: z.array(catalogItemSchema).max(1000) }) });
+const catalogSchema = z.object({ success: z.literal(true), data: z.object({ items: z.array(z.unknown()).max(1000) }) });
 
 export function parseFlatMicroPrice(value: string): number | null {
   const match = value.match(/^\s*[¥￥]\s*([0-9]{1,7})(?:\.([0-9]{1,6}))?\s*\/\s*M\s*$/i);
@@ -88,11 +88,18 @@ export async function readAntQuotes(baseUrl: string, modelIds: readonly string[]
       }
     } finally { await reader.cancel().catch(() => {}); }
     const catalog = catalogSchema.parse(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+    const requested = new Set(modelIds);
+    const selected = new Map<string, z.infer<typeof catalogItemSchema> | null>();
+    for (const rawItem of catalog.data.items) {
+      const parsed = catalogItemSchema.safeParse(rawItem);
+      if (!rawItem || typeof rawItem !== "object" || !("name" in rawItem)
+        || typeof rawItem.name !== "string" || !requested.has(rawItem.name)) continue;
+      selected.set(rawItem.name, selected.has(rawItem.name) ? null : parsed.success ? parsed.data : null);
+    }
     const checkedAt = now();
     return [...new Set(modelIds)].map(modelId => {
-      const matches = catalog.data.items.filter(item => item.name === modelId);
-      if (matches.length !== 1) throw error();
-      const item = matches[0];
+      const item = selected.get(modelId);
+      if (!item) throw error();
       if (item.status !== "RELEASED" || !["TEXT_GENERATE", "VISUAL_UNDERSTANDING"].includes(item.type ?? "")
         || ![undefined, null, false, 0, "0", "false"].some(flag => flag === item.offShelfFlag)
         || item.modelProtocolCompatibility?.openai_chat_completions !== true
