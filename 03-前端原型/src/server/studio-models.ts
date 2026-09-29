@@ -1,3 +1,4 @@
+import { Agent, setGlobalDispatcher } from "undici";
 import { acquireTaskPower, TaskPowerError, type TaskPower } from "./task-power";
 import { TaskExecution, TaskExecutionError } from "./task-execution";
 import { StudioJobStore } from "./studio-job-store";
@@ -24,6 +25,9 @@ import { blueprintDataSchema, checkBlueprint } from "@/domain/blueprint";
 import { studioArtifactSchema, studioAnalysisSchema, studioAuditSchema, studioScopedAuditSchema, studioInputs, type StudioScopedAudit, type StudioCallDiagnostic, type StudioOperation, type StudioJobView, type StudioResult, type StudioReviewResult } from "@/domain/studio";
 
 export class StudioError extends Error { constructor(public code: string, message: string, public status = 400) { super(message); this.name = "StudioError"; } }
+// Node 内置 fetch（undici）默认约 300 秒中断无数据的响应（headersTimeout/bodyTimeout），
+// 会把需要更久的单次长结构化生成误杀。这里放宽传输层超时；每次调用仍由 StudioEngine.call 的 AbortSignal 截止时间兜底。
+setGlobalDispatcher(new Agent({ headersTimeout: 900_000, bodyTimeout: 900_000, connectTimeout: 30_000, keepAliveTimeout: 60_000 }));
 export interface StudioConfig { baseUrl: string; apiKey: string; mainModel: string; analysisModel?: string; reviewA: string; reviewB: string }
 export type ModelTransport = (config: StudioConfig, model: string, instructions: string, payload: unknown, schema: z.ZodType, signal: AbortSignal, overrides?: { maxTokens?: number; billing?: { service: StudioBilling; jobId: string; phase: string; prepared?: (callId: string) => void } }) => Promise<unknown>;
 const CONTEXT_BYTES = SINGLE_CONTEXT_BYTES;

@@ -938,3 +938,10 @@
 - Fix：在蓝图调用指令中补充引用契约：characters 只含玩家角色、NPC 只写文本；fromId/toId、characterId、characterIds 只引用 characters；causes 与 factId 只引用 events（禁止自造 F-编号）；supports 只引用 claims；roundId 只引用 rounds；所有引用必须指向本次输出中已定义的条目。
 - Recovery：既有蓝图被保留；修复后重新生成一版蓝图（1次调用），旧版本仍在草稿/历史。
 - Fresh：隔离统一检查通过；无付费调用验证。
+
+### M6-6 · 放宽 Node fetch 传输层超时，修复长蓝图被 300 秒误杀（2026-09-30，工程完成）
+
+- Found：蓝图生成两次在**正好 301 秒**中断（MODEL_UNAVAILABLE，USAGE_UNKNOWN）。用一个本机延迟响应的服务做**免费确定性验证**：Node 内置 fetch（undici）在 **301.1 秒**报 `UND_ERR_HEADERS_TIMEOUT`——这是 undici 默认约 300 秒的 headers/body 空闲上限，**不是上游限制**。历史成功的一次蓝图恰好 246 秒，正好卡在刀口。
+- Fix：引入 `undici` 依赖，并在 `studio-models.ts` 模块加载时 `setGlobalDispatcher(new Agent({ headersTimeout: 900_000, bodyTimeout: 900_000, connectTimeout: 30_000, keepAliveTimeout: 60_000 }))`。已用 2 秒超时 + 5 秒延迟响应的本机试验验证 dispatcher 确实接管全局 fetch（2.5 秒即 `UND_ERR_BODY_TIMEOUT`）。每次调用仍由 `StudioEngine.call` 的 AbortSignal 截止时间兜底。
+- Impact：蓝图与正文等长结构化调用不再被 300 秒传输层误杀；无需拆分生成。
+- Fresh：隔离统一检查通过；无付费调用验证。
