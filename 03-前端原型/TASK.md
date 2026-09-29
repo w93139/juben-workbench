@@ -916,3 +916,10 @@
 - Fix：`evaluationResponseProfile("deepseek-v4-pro-0813").timeoutMs` 240000 → 600000。仅延长等待，不改模型、maxTokens、计费口径或校验。
 - Note：该 profile 同时用于模型小样测评与正式创作；延长只增加容错等待，不影响结果判定。
 - Recovery：蓝图分区无检查点，需重新发起；失败调用产生的待核对费用必须先核对，否则预览会被“存在待核对费用”挡住。
+
+### M6-3 · 禁止模型回显 JSON Schema（2026-09-29，工程完成）
+
+- Found：真实联调“生成蓝图”失败，服务端日志 `[契约校验失败] raw_keys=['$schema','type','properties','required','additionalProperties']`——模型把**JSON Schema 结构本身**当答案返回，未产出蓝图数据（MODEL_RESPONSE_INVALID，116秒，已计费¥0.32）。历史仅处理过“模型多加 $schema 字段”，未处理“回显整份结构”。
+- Fix：`openAITransport` 系统提示由“输出JSON必须满足此结构”改为“只输出符合结构的数据实例（JSON对象），绝对不要输出结构定义本身，不要出现 $schema/type/properties/required/additionalProperties 等结构关键词”。
+- Note：同日另有一次 301 秒**传输层**失败（无契约日志，归 MODEL_UNAVAILABLE），疑似上游连接中断，非本地 600 秒上限；本次未改该路径。
+- Fresh：隔离统一检查通过；无付费调用验证。

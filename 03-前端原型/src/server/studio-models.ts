@@ -63,7 +63,7 @@ export function studioRequestBytesCeiling(contextBytes: number, schemas: z.ZodTy
 export const openAITransport: ModelTransport = async (config, model, instructions, payload, schema, signal, overrides) => {
   if (Buffer.byteLength(instructions) > INSTRUCTION_BYTES || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(instructions)) throw new StudioError("CONTEXT_TOO_LARGE", "任务指令超过费用预检范围，未发起调用。", 413);
   const profile = evaluationResponseProfile(model);
-  const body = { model, messages: [{ role: "system", content: `${PRINCIPLES}\n${instructions}\n输出JSON必须满足此结构（本地会再次严格验证）：${JSON.stringify(z.toJSONSchema(schema))}` }, { role: "user", content: context(payload) }], response_format: { type: "json_object" }, max_tokens: overrides?.maxTokens ?? profile.maxTokens, ...(profile.reasoningEffort ? { reasoning_effort: profile.reasoningEffort } : {}) };
+  const body = { model, messages: [{ role: "system", content: `${PRINCIPLES}\n${instructions}\n只输出符合下面结构的数据实例（一个JSON对象，字段名与结构一致）；绝对不要输出这份结构定义本身，不要出现 $schema、type、properties、required、additionalProperties 等结构关键词。结构如下（本地会再次严格验证）：${JSON.stringify(z.toJSONSchema(schema))}` }, { role: "user", content: context(payload) }], response_format: { type: "json_object" }, max_tokens: overrides?.maxTokens ?? profile.maxTokens, ...(profile.reasoningEffort ? { reasoning_effort: profile.reasoningEffort } : {}) };
   const serialized = JSON.stringify(body);
   const billing = overrides?.billing;
   const ticket = billing ? await billing.service.prepare(billing.jobId, billing.phase, config, model, serialized, body.max_tokens, signal) : undefined;
