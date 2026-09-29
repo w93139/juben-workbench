@@ -6,8 +6,8 @@ export const ANALYSIS_DIRECT_BYTES = 20000;
 export const ANALYSIS_BATCH_BYTES = 30000;
 export const ANALYSIS_SEGMENT_BYTES = 20000;
 export const ANALYSIS_MAX_BATCHES = 512;
-/** Full analysis payload, including escaped author instructions and summaries. */
-export const ANALYSIS_CALL_BYTES = 128000;
+/** Full analysis payload, including escaped author instructions and summaries. Sized so a merge of the relaxed per-note caps (4000-char summary plus 8x300-char unknowns) stays within one call. */
+export const ANALYSIS_CALL_BYTES = 160000;
 /**
  * Output budget for each long-analysis source/merge call. Must leave room for
  * reasoning tokens: a reasoning model spends part of this budget before emitting

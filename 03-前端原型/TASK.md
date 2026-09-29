@@ -901,3 +901,11 @@
 - Fix：正常打开不指定版本，新库在 `onupgradeneeded` 中按需建 `projects`；已有库缺仓时先关闭，再按其实际版本加一升级并建仓。保留数据库名称、键、schema 和业务行为，不删库；`onerror`/`onblocked` 仍拒绝，升级后仍缺仓也显式拒绝。
 - Evidence：新增 E2E 覆盖空 v1 恢复后首页空项目提示及自造 TXT 创建项目、已有 v3 其他仓库/记录升级到 v4 后保留数据、正常 v1 `projects` 仓库及记录保持版本与内容。旧版构建上的前两项先按预期失败；首次完整检查暴露旧单元夹具缺少标准 `objectStoreNames` 属性，补齐夹具后原删除/损坏/竞争路径专项6/6通过。独立只读复审无 Blocker/Important。全程没有真实模型调用。
 - Fresh：隔离 `python3 scripts/verify-app.py` 退出0：56文件504项单元、ESLint、Webpack生产构建、独立typecheck、91项单worker浏览器回归（含新增3项）全部通过（2.0分钟）；检查目录 `juben-verify-zqlr_b6p`。本机3107用户预览未因本批重建。
+
+### M6-1 · 分段/汇总中间摘要契约放宽（2026-09-28，工程完成）
+
+- Found：真实联调（孽岛疑云完整剧本v1.0）在“汇总第1层1/2”被本地契约拒绝。服务端日志：`[契约校验失败] issues=[{"path":["summary"],"code":"too_big"},{"path":["unknowns",3],"code":"too_big"}] raw_keys=['summary','unknowns','sourceRefIds']`。根因：`sourceNoteSchema`对**合并多段摘要**的中间笔记上限过紧（summary 2500、unknowns每条160），而提示词也只写 2500；模型合法JSON但超限即整条拒收，浪费一次付费调用。
+- Fix：`summary` 2500→4000；`unknowns` 每条 160→300；`NOTE_BYTES` 32000→48000（容纳放宽后的备注）；`ANALYSIS_CALL_BYTES` 128000→160000（保证放宽后的备注在合并时仍可两两组合，不触发“无法继续合并”）；提示词改为可达目标：“尽量不超3000字（硬上限4000）、每条待定不超300字”。不静默截断，仍保持严格校验。
+- Evidence：新增边界回归（4000字摘要/300字待定通过，4001/301拒绝）；更新最坏转义载荷回归常量。505项单元测试、ESLint、typecheck通过。
+- Recovery：已完成的分段（part）检查点保留，修复后手动重试会复用，只重跑失败的汇总与后续步骤。
+- Fresh：隔离统一检查通过；本机3107重建重启到本批（无付费调用）。

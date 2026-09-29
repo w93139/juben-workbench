@@ -96,11 +96,17 @@ it("近上限摘要与最坏转义创作要求仍按完整载荷组包", async (
   const call: LongAnalysisOptions["call"] = async (_prompt, payload, schema) => {
     expect(Buffer.byteLength(JSON.stringify(payload))).toBeLessThanOrEqual(ANALYSIS_CALL_BYTES);
     const value = response(payload, schema);
-    if ((schema as z.ZodType) === sourceSelectionSchema) return schema.parse({ ...value, summary: "\u0001".repeat(2500), sourceRefIds: ids(payload).slice(0, 4), unknowns: Array.from({ length: 4 }, () => "\u0001".repeat(160)) });
+    if ((schema as z.ZodType) === sourceSelectionSchema) return schema.parse({ ...value, summary: "\u0001".repeat(4000), sourceRefIds: ids(payload).slice(0, 4), unknowns: Array.from({ length: 4 }, () => "\u0001".repeat(300)) });
     return schema.parse(value);
   };
   const result = await analyzeLongSource({ documents: docs, instructions: "\u0001".repeat(10000) }, { call, phase: () => {}, modelIdentity: "bounded-test" });
   expect(result.coverage?.documents).toBe(4);
+});
+it("分段摘要放宽到可汇总长度：4000字摘要与300字待定项通过，超限仍拒绝", () => {
+  const ref = { documentId: "d", location: "字符 1–2", quote: "原文" };
+  expect(sourceNoteSchema.safeParse({ summary: "字".repeat(4000), sourceRefs: [ref], unknowns: ["待".repeat(300)] }).success).toBe(true);
+  expect(sourceNoteSchema.safeParse({ summary: "字".repeat(4001), sourceRefs: [ref], unknowns: [] }).success).toBe(false);
+  expect(sourceNoteSchema.safeParse({ summary: "字".repeat(10), sourceRefs: [ref], unknowns: ["待".repeat(301)] }).success).toBe(false);
 });
 it("纯空白批次由程序核对，不要求模型伪造非空引用，也不额外调用", async () => {
   const doc = { id: "d", name: "带页间空白", text: " ".repeat(100000) + "有效原文" };

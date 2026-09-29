@@ -5,15 +5,15 @@ import { ANALYSIS_BATCH_BYTES, ANALYSIS_SEGMENT_BYTES, ANALYSIS_MAX_BATCHES, ANA
 
 export { ANALYSIS_BATCH_BYTES } from "@/domain/analysis-limits";
 const SEGMENT_BYTES = ANALYSIS_SEGMENT_BYTES;
-const NOTE_BYTES = 32000;
+const NOTE_BYTES = 48000;
 const VERSION = "source-analysis/3-citation-selection";
 const size = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
 type Document = { id: string; name: string; text: string };
 export type Segment = { documentId: string; name: string; start: number; end: number; text: string };
 export const sourceNoteSchema = z.object({
-  summary: z.string().trim().min(1).max(2500),
+  summary: z.string().trim().min(1).max(4000),
   sourceRefs: z.array(z.object({ documentId: z.string().min(1).max(120), location: z.string().min(1).max(100), quote: z.string().trim().min(1).max(160) }).strip()).min(1).max(4),
-  unknowns: z.array(z.string().min(1).max(160)).max(8),
+  unknowns: z.array(z.string().min(1).max(300)).max(8),
 }).strip();
 export const sourceSelectionSchema = sourceNoteSchema.omit({ sourceRefs: true }).extend({ sourceRefIds: z.array(z.string().min(1).max(40)).min(1).max(4) }).strip();
 export const analysisSelectionSchema = studioAnalysisSchema.omit({ sourceRefs: true, coverage: true }).extend({ sourceRefIds: z.array(z.string().min(1).max(40)).min(1).max(100) }).strip();
@@ -146,7 +146,7 @@ export async function analyzeLongSource(data: { documents: Document[]; instructi
     const prompt = kind === "part"
       ? "这是完整原剧本的一批原文片段，不是全部故事。每个segment的passages按顺序拼接就是原文，必须读完全部passages。summary保留真相/时间因果、角色关系与私人认知、关键线索、轮次机制和跨片段待核对关系，区分明确事实与推断。不要提出原创方向。unknowns保留矛盾、缺失和暂不能确定的事项。"
       : "合并以下全部分段研究摘要，不是重新阅读全部原文。保留人物同一性、事件先后与因果、信息差、线索到结论、轮次节奏及跨片段矛盾；不能用后出现的断言静默覆盖旧矛盾。区分原文事实与推断，丢失细节或冲突写unknowns。不要提出原创方向。";
-    const selected = await boundedCall(prompt + " sourceRefIds只选择本次输入明确列出的citationId，不能自己写编号、摘录或位置；摘录由程序从所选编号对应的原文精确回填。摘要不超过2500字，最多4个来源编号与4条待定事项；未能保留的关键关系列为待核对。", { ...payload as object, instructions: data.instructions }, sourceSelectionSchema, ANALYSIS_EXTRACT_TOKENS);
+    const selected = await boundedCall(prompt + " sourceRefIds只选择本次输入明确列出的citationId，不能自己写编号、摘录或位置；摘录由程序从所选编号对应的原文精确回填。摘要尽量不超过3000字（硬上限4000字），最多4个来源编号与4条待定事项，每条待定不超过300字；未能保留的关键关系列为待核对。未能保留的关键关系列为待核对。", { ...payload as object, instructions: data.instructions }, sourceSelectionSchema, ANALYSIS_EXTRACT_TOKENS);
     const { sourceRefIds, ...content } = selected;
     const note: Note = { ...content, sourceRefs: selectedReferences(sourceRefIds, catalog) };
     validateNote(note, ref => validRefs.has(refKey(ref)));
