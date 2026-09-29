@@ -267,7 +267,7 @@ export class StudioEngine {
     if (operation === "blueprint") {
       const data = studioInputs.blueprint.parse(input); if (!data.analysis.directions.some((direction) => direction.id === data.choiceId)) throw new StudioError("INVALID_DIRECTION", "请选择当前分析中的原创方向。", 400);
       phase("主模型正在建立原创真相、人物、线索与轮次蓝图");
-      const blueprint = await this.call(config, config.mainModel, "依据已选方向及作者要求生成完整原创蓝图。所有字段是正式设计内容，不可用待补充占位；重建人物、事实、因果和线索。保留推断与待定说明；准确关联角色/事实/轮次/证据ID。", data, blueprintDataSchema, job);
+      const blueprint = await this.call(config, config.mainModel, "依据已选方向及作者要求生成完整原创蓝图。所有字段是正式设计内容，不可用待补充占位；重建人物、事实、因果和线索。保留推断与待定说明。\n引用契约（必须严格遵守，否则本地会判定引用失效）：characters 只包含玩家角色；周怀诚等非玩家角色只写在文本描述里，不得建成角色、不得作为关系端点。relationships.fromId/toId、knowledge.characterId、clues.characterIds 只能引用 characters 的 id；events.causes 与 knowledge.factId 只能引用 events 的 id（不要另造 F- 开头或其它事实编号，事实与因果统一用 events 表达）；clues.supports 只能引用 claims 的 id；clues.roundId 与 triggers.roundId 只能引用 rounds 的 id。所有引用必须指向你在本次输出中已定义的同一数组条目。", data, blueprintDataSchema, job);
       return { kind: "blueprint", blueprint };
     }
     const { blueprint } = studioInputs.review.parse(input);

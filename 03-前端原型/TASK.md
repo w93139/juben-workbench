@@ -930,3 +930,11 @@
 - Fix：`evaluationResponseProfile("deepseek-v4-pro-0813").maxTokens` 16384 → 49152（仅为上限，不强制输出；同时惠及正文生成同样使用主模型的调用）。timeoutMs 保持 600000。
 - Risk：更大输出会使单次调用更久，仍可能触及上游约300秒的连接时限（M6-3已记录一次301秒传输失败）；若再现将改为拆分生成。
 - Fresh：隔离统一检查通过；无付费调用验证。
+
+### M6-5 · 蓝图引用契约写入提示词（2026-09-29，工程完成）
+
+- Found：真实联调生成的蓝图结构与内容完整（5角色/10关系/16事件/31知情/8结论/20线索/8轮次/5终局），但本机 `checkBlueprint` 报 66 条 error：模型自造了应用不存在的 ID 体系——把 周怀诚/N07/罗培生/陈国平 当作 characters（关系端点），把 `F-xxx` 当作事件/事实（events.causes、knowledge.factId、clues.supports 均引用之）。根因是蓝图提示词只说“准确关联角色/事实/轮次/证据ID”，未给出引用契约。
+- Impact：审查在**设计门之前**先跑 `checkBlueprint` 结构检查，存在 error 会立即返回，**不发起任何模型调用、不产生费用**，因此第4步被挡且零成本。
+- Fix：在蓝图调用指令中补充引用契约：characters 只含玩家角色、NPC 只写文本；fromId/toId、characterId、characterIds 只引用 characters；causes 与 factId 只引用 events（禁止自造 F-编号）；supports 只引用 claims；roundId 只引用 rounds；所有引用必须指向本次输出中已定义的条目。
+- Recovery：既有蓝图被保留；修复后重新生成一版蓝图（1次调用），旧版本仍在草稿/历史。
+- Fresh：隔离统一检查通过；无付费调用验证。
