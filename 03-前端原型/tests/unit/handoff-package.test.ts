@@ -41,7 +41,7 @@ describe("策划交接包", () => {
     const pkg = await build();
     expect(pkg.format).toBe(HANDOFF_FORMAT);
     expect(pkg.version).toBe(HANDOFF_VERSION);
-    expect(pkg.readiness).toEqual({ state: "ready", blockers: [], referencesChecked: true });
+    expect(pkg.readiness).toEqual({ state: "ready", blockers: [], sourceRefsLocated: true });
     expect(pkg.disclosure).toEqual({ playerSafe: false, containsHostSecrets: true, note: expect.any(String) });
     expect(checkHandoffPackage(pkg)).toEqual([]);
     expect(pkg.writingTasks.length).toBe(deriveTaskCards(reviewBlueprint()).length);
@@ -63,11 +63,11 @@ describe("策划交接包", () => {
   it("结构阻断或缺少可核对来源时不得标记 ready；伪造 ready 会被自检拒绝", async () => {
     const broken = await build({ analysis: studioAnalysisSchema.parse({ ...analysis(), sourceRefs: [{ documentId: "不存在", location: "未知", quote: "x" }] }) });
     expect(broken.readiness.state).toBe("draft");
-    expect(broken.readiness.referencesChecked).toBe(false);
-    expect(broken.readiness.blockers.join("")).toContain("来源定位无法在当前材料中核对");
-    const forged = { ...broken, readiness: { state: "ready", blockers: [], referencesChecked: false } } as HandoffPackage;
+    expect(broken.readiness.sourceRefsLocated).toBe(false);
+    expect(broken.readiness.blockers.join("")).toContain("来源定位无法在当前材料中对应");
+    const forged = { ...broken, readiness: { state: "ready", blockers: [], sourceRefsLocated: false } } as HandoffPackage;
     expect(checkHandoffPackage(forged).map((issue) => issue.code)).toContain("ready-references");
-    const noBlueprintReady = { ...(await build({ blueprint: null, blueprintSourceRevision: null, blueprintChoiceId: null })), readiness: { state: "ready", blockers: [], referencesChecked: false } } as HandoffPackage;
+    const noBlueprintReady = { ...(await build({ blueprint: null, blueprintSourceRevision: null, blueprintChoiceId: null })), readiness: { state: "ready", blockers: [], sourceRefsLocated: false } } as HandoffPackage;
     expect(checkHandoffPackage(noBlueprintReady).map((issue) => issue.code)).toContain("ready-no-blueprint");
   });
 
@@ -83,6 +83,19 @@ describe("策划交接包", () => {
     expect(updatesB.blueprintScope).not.toContain("C2");
     expect(isPublicClue(bp.clues.find((clue) => clue.id === "C1")!)).toBe(true);
     expect(isPublicClue(bp.clues.find((clue) => clue.id === "C2")!)).toBe(false);
+    const pkg = await build({ blueprint: bp });
+    expect(checkHandoffPackage(pkg)).toEqual([]);
+  });
+
+  it("限定获取方式的线索不进入公共卡；角色开场卡不含各轮知情记录", async () => {
+    const bp = restrictedClueBlueprint();
+    bp.clues.push({ id: "C3", name: "限定线索", content: "只有甲能领", supports: ["Q1"], roundId: "R1", characterIds: [], cost: 1, access: "仅甲可领" });
+    const cards = deriveTaskCards(bp);
+    expect(cards.find((card) => card.id === "task-R1-clues")!.blueprintScope).not.toContain("C3");
+    expect(isPublicClue(bp.clues.find((clue) => clue.id === "C3")!)).toBe(false);
+    // 角色开场卡不得含各轮知识；B 在 R1 的知情只进 B 的 updates。
+    expect(cards.find((card) => card.id === "task-B-character")!.blueprintScope).not.toContain("K1");
+    expect(cards.find((card) => card.id === "task-B-R1-updates")!.blueprintScope).toContain("K1");
     const pkg = await build({ blueprint: bp });
     expect(checkHandoffPackage(pkg)).toEqual([]);
   });

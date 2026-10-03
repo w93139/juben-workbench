@@ -30,7 +30,7 @@ export type HandoffSourceRef = z.infer<typeof handoffSourceRefSchema>;
 export const handoffTaskCardSchema = z.object({
   id: ref, module: z.enum(moduleIds), label: short(500), audience: z.enum(["player", "host"]),
   characterId: ref.nullable(), roundId: ref.nullable(), endingId: ref.nullable(),
-  blueprintScope: z.array(ref).max(1000),
+  blueprintScope: z.array(ref).max(5000),
   outputRequirements: z.array(short(500)).min(1).max(30),
   mustNotReveal: z.array(short(500)).max(100),
   acceptance: z.array(short(500)).min(1).max(30),
@@ -56,12 +56,12 @@ export const handoffPackageSchema = z.object({
     blueprintChoiceId: ref.nullable(), blueprintFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
   }).strict(),
   readiness: z.object({
-    state: z.enum(["draft", "ready"]), blockers: z.array(short(500)).max(50), referencesChecked: z.boolean(),
+    state: z.enum(["draft", "ready"]), blockers: z.array(short(500)).max(50), sourceRefsLocated: z.boolean(),
   }).strict(),
   disclosure: z.object({ playerSafe: z.literal(false), containsHostSecrets: z.literal(true), note: short(500) }).strict(),
   executionStatus: z.object({ manuscript: z.literal("not-generated"), crossReview: z.literal("not-run"), playtest: z.literal("not-run") }).strict(),
   scope: z.object({
-    players: z.number().int().positive().max(40).nullable(), minutes: z.number().int().positive().max(1440).nullable(),
+    players: z.number().int().positive().max(200).nullable(), minutes: z.number().int().positive().max(200000).nullable(),
     instructions: z.string().trim().max(10000), boundaries: z.array(short(500)).max(50),
   }).strict(),
   materials: z.array(handoffMaterialSchema).max(2000),
@@ -74,7 +74,7 @@ export const handoffPackageSchema = z.object({
     unknowns: z.array(short(2000)).max(100),
   }).strict().nullable(),
   blueprint: blueprintDataSchema.nullable(),
-  writingTasks: z.array(handoffTaskCardSchema).max(2000),
+  writingTasks: z.array(handoffTaskCardSchema).max(6000),
   reviewPlan: handoffReviewPlanSchema,
   openQuestions: z.array(short(2000)).max(200),
   checks: z.object({
@@ -112,9 +112,10 @@ export function blueprintFingerprintHex(blueprint: BlueprintData): Promise<strin
   return sha256Hex(JSON.stringify(blueprint));
 }
 
-/** characterIds 为空的线索才是可公开的公共线索。 */
+/** 公共线索：无指定角色，且获取方式不是“仅/指定/私人”等限定描述。 */
+const RESTRICTED_ACCESS = /仅|只有|限|指定|私人|本人|单独|秘密/;
 export function isPublicClue(clue: BlueprintData["clues"][number]): boolean {
-  return clue.characterIds.length === 0;
+  return clue.characterIds.length === 0 && !RESTRICTED_ACCESS.test(clue.access);
 }
 /** 该角色在该轮可获得的线索：公共线索，或被明确授予该角色的线索。 */
 export function clueAllowedFor(clue: BlueprintData["clues"][number], characterId: string, roundId: string): boolean {
@@ -131,9 +132,9 @@ export function deriveTaskCards(blueprint: BlueprintData): HandoffTaskCard[] {
   const cards: HandoffTaskCard[] = [];
   for (const character of blueprint.characters) {
     const relations = blueprint.relationships.filter((relation) => relation.fromId === character.id || relation.toId === character.id).map((relation) => relation.id);
-    const knowledge = blueprint.knowledge.filter((item) => item.characterId === character.id).map((item) => item.id);
-    cards.push(card(`task-${character.id}-character`, "character", `${character.name} · 角色本`, "player", character.id, null, null, [character.id, ...relations, ...knowledge]));
-    cards.push(card(`task-${character.id}-private`, "private", `${character.name} · 私人信息`, "player", character.id, null, null, [character.id, ...knowledge]));
+    // 开场材料不纳入各轮知情记录，避免提前给出未来轮次信息；轮次信息只进对应 updates。
+    cards.push(card(`task-${character.id}-character`, "character", `${character.name} · 角色本`, "player", character.id, null, null, [character.id, ...relations]));
+    cards.push(card(`task-${character.id}-private`, "private", `${character.name} · 私人信息`, "player", character.id, null, null, [character.id]));
     for (const round of blueprint.rounds) {
       const scope = [character.id, round.id,
         ...blueprint.knowledge.filter((item) => item.characterId === character.id && item.roundId === round.id).map((item) => item.id),
@@ -162,6 +163,7 @@ export interface HandoffPackageInput {
     instructions: string; documents: HandoffMaterialInput[];
   };
   authorEditedOutline?: string | null;
+  authorDirections?: { id: string; title: string; summary: string; outline: string; risk: string }[] | null;
   packageId: string;
   exportedAt: string;
 }
@@ -183,13 +185,14 @@ export async function buildHandoffPackage(input: HandoffPackageInput): Promise<H
   const errors = structural.filter((issue) => issue.severity === "error").length;
   const warnings = structural.length - errors;
   const directions = input.state.analysis?.directions ?? [];
-  const readable = new Set(input.state.documents.filter((document) => !document.excluded).map((document) => document.id));
+  const readable = new Set(input.state.documents.filter((document) => !document.excluded && document.status === "read").map((document) => document.id));
   const sourceRefs = input.state.analysis?.sourceRefs ?? [];
-  const referencesChecked = sourceRefs.length > 0 && sourceRefs.every((reference) => readable.has(reference.documentId) && reference.location.trim().length > 0);
+  const sourceRefsLocated = sourceRefs.length > 0 && sourceRefs.every((reference) => readable.has(reference.documentId) && reference.location.trim().length > 0);
+  const effectiveDirections = input.authorDirections ?? directions;
   const blockers = checkHandoffCurrentness(input.state);
   if (errors > 0) blockers.push(`蓝图存在 ${errors} 项结构阻断，请先在应用内修正。`);
   if (!input.state.analysis) blockers.push("缺少拆解大纲，无法形成交接方案。");
-  if (sourceRefs.length && !referencesChecked) blockers.push("来源定位无法在当前材料中核对。");
+  if (sourceRefs.length && !sourceRefsLocated) blockers.push("来源定位无法在当前材料中对应；请回原稿核对后再导出。");
   return handoffPackageSchema.parse({
     format: HANDOFF_FORMAT, version: HANDOFF_VERSION, packageId: input.packageId, exportedAt: input.exportedAt,
     project: { id: input.project.id, title: input.project.title, note: input.project.note },
@@ -200,12 +203,12 @@ export async function buildHandoffPackage(input: HandoffPackageInput): Promise<H
       blueprintChoiceId: input.state.blueprintChoiceId,
       blueprintFingerprint: blueprint ? await blueprintFingerprintHex(blueprint) : "0".repeat(64),
     },
-    readiness: { state: blockers.length ? "draft" : "ready", blockers, referencesChecked },
+    readiness: { state: blockers.length ? "draft" : "ready", blockers, sourceRefsLocated },
     disclosure: { ...HANDOFF_DISCLOSURE },
     executionStatus: { ...HANDOFF_EXECUTION_STATUS },
     scope: { players: blueprint?.characters.length ?? null, minutes: blueprint ? blueprint.rounds.reduce((sum, round) => sum + round.minutes, 0) : null, instructions: input.state.instructions, boundaries: blueprint ? [blueprint.premise.slice(0, 500)] : [] },
     materials: input.state.documents.map((document) => ({ id: document.id, name: document.name, status: document.status, excluded: document.excluded, sourceNote: document.excluded ? "本轮不使用" : document.status === "read" ? "已读取，正文不入包" : "未读取或不受支持" })),
-    analysis: input.state.analysis ? { outline: input.state.analysis.outline, directions, authorEditedOutline: input.authorEditedOutline ?? null, chosenDirectionId: input.state.choiceId, sourceRefs: sourceRefs.map((reference) => ({ documentId: reference.documentId, location: reference.location })), unknowns: input.state.analysis.unknowns } : null,
+    analysis: input.state.analysis ? { outline: input.state.analysis.outline, directions: effectiveDirections, authorEditedOutline: input.authorEditedOutline ?? null, chosenDirectionId: input.state.choiceId, sourceRefs: sourceRefs.map((reference) => ({ documentId: reference.documentId, location: reference.location })), unknowns: input.state.analysis.unknowns } : null,
     blueprint,
     writingTasks: blueprint ? deriveTaskCards(blueprint) : [],
     reviewPlan: {
@@ -246,7 +249,7 @@ export function checkHandoffPackage(pkg: HandoffPackage): HandoffIssue[] {
     if (pkg.revision.blueprintRevision === null) add("revision", "包含蓝图但未记录蓝图修订。");
     if (pkg.readiness.state === "ready" && (pkg.revision.blueprintSourceRevision !== pkg.revision.sourceRevision || pkg.revision.blueprintChoiceId !== pkg.revision.chosenDirectionId)) add("stale", "标记为就绪但蓝图不对应当前材料或方向。");
     if (pkg.readiness.state === "ready" && pkg.readiness.blockers.length) add("ready-blockers", "标记为就绪但仍存在阻断项。");
-    if (pkg.readiness.state === "ready" && !pkg.readiness.referencesChecked) add("ready-references", "标记为就绪但来源引用未核对。");
+    if (pkg.readiness.state === "ready" && !pkg.readiness.sourceRefsLocated) add("ready-references", "标记为就绪但来源引用未能对应到材料。");
   } else if (pkg.readiness.state === "ready") add("ready-no-blueprint", "没有正式蓝图不得标记为就绪。");
   return issues;
 }
@@ -258,7 +261,7 @@ export function renderHandoffMarkdown(pkg: HandoffPackage): string {
   lines.push(`- 包格式/版本：\`${pkg.format}\` v${pkg.version}`);
   lines.push(`- 包编号：\`${pkg.packageId}\`　导出时间：${pkg.exportedAt}`);
   lines.push(`- 项目修订：workbench ${pkg.revision.workbenchRevision} · 材料 ${pkg.revision.sourceRevision} · 蓝图 ${pkg.revision.blueprintRevision ?? "—"}`);
-  lines.push(`- 就绪状态：**${pkg.readiness.state}**　来源核对：${pkg.readiness.referencesChecked ? "已完成" : "未完成"}`);
+  lines.push(`- 就绪状态：**${pkg.readiness.state}**　来源定位：${pkg.readiness.sourceRefsLocated ? "已对应到材料（未逐条核对原文）" : "未对应到材料"}`);
   if (pkg.readiness.blockers.length) { lines.push("- 待处理阻断："); for (const blocker of pkg.readiness.blockers) lines.push(`  - ${blocker}`); }
   lines.push(`- 分发限制：**${pkg.disclosure.note}**`);
   lines.push(`- 状态：**正文未生成 · 交叉验证未执行 · 真人试玩 not-run**（本包不是成品，也不是审查通过）`, "");

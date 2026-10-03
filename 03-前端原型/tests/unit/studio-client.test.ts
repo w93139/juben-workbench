@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { emptyWorkbench, blueprintCurrent, type WorkbenchState } from "@/domain/workbench";
 import { emptyBlueprintData } from "@/domain/blueprint";
-import { pollStudioJob, startStudioJob } from "@/services/studio-client";
+import { pollStudioJob, startStudioJob, effectiveAnalysis, studioJobInput } from "@/services/studio-client";
 import { applyStudioJobView, applyMissingStudioJob } from "@/domain/studio-job-update";
 import type { StudioJobView } from "@/domain/studio";
 let saved: WorkbenchState;
@@ -16,6 +16,18 @@ vi.mock("@/services/workbench-store", () => ({
 }));
 beforeEach(() => { saved = emptyWorkbench(); saved.documents = [{ id: "d", name: "测试.txt", size: 10, text: "自有测试文本", status: "read", excluded: false, method: "text", warnings: [] }]; });
 afterEach(() => { vi.unstubAllGlobals(); });
+it("作者修订的大纲与方向进入蓝图请求，无修订时用模型原版", () => {
+  const state = emptyWorkbench();
+  state.analysis = { outline: "模型大纲", directions: ["one", "two"].map(id => ({ id, title: id, summary: "s", outline: "o", risk: "r" })), sourceRefs: [{ documentId: "d", location: "正文", quote: "x" }], unknowns: [] } as WorkbenchState["analysis"];
+  const original = studioJobInput(state, "blueprint") as { analysis: { outline: string } };
+  expect(original.analysis.outline).toBe("模型大纲");
+  state.authorOutline = "作者大纲"; state.authorDirections = [{ id: "one", title: "作者方向", summary: "as", outline: "ao", risk: "ar" }];
+  const effective = studioJobInput(state, "blueprint") as { analysis: { outline: string; directions: { title: string }[]; sourceRefs: unknown[] } };
+  expect(effective.analysis.outline).toBe("作者大纲");
+  expect(effective.analysis.directions[0].title).toBe("作者方向");
+  expect(effective.analysis.sourceRefs).toHaveLength(1);
+  expect(effectiveAnalysis(state)!.outline).toBe("作者大纲");
+});
 it("同源重拆后选择相同方向ID不能重新启用旧蓝图，旧稿仍保留", async () => {
   const analysis = { outline: "新的拆解", directions: ["one", "two"].map(id => ({ id, title: id, summary: "新故事方向", outline: "新结构", risk: "待测试" })), sourceRefs: [{ documentId: "d", location: "正文", quote: "自有测试文本" }], unknowns: [] };
   saved.analysis = analysis; saved.analysisSourceRevision = 0; saved.choiceId = "one";

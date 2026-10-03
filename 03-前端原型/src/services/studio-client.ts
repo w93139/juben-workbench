@@ -44,9 +44,14 @@ export function replaceMaterials(id: string, revision: number, documents: Materi
     state.documents = documents; state.sourceRevision++; state.error = null;
   });
 }
+/** 作者修订后的大纲与方向进入主流程，保证选择页、蓝图请求与交接包使用作者版本。 */
+export function effectiveAnalysis(state: WorkbenchState) {
+  if (!state.analysis) return null;
+  return { ...state.analysis, ...(state.authorOutline != null ? { outline: state.authorOutline } : {}), ...(state.authorDirections ? { directions: state.authorDirections } : {}) };
+}
 export function studioJobInput(state: WorkbenchState, operation: StudioOperation) {
   return operation === "analyze" ? { documents: state.documents.filter(d => !d.excluded).map(({ id, name, text }) => ({ id, name, text })), instructions: state.instructions }
-    : operation === "blueprint" ? { analysis: state.analysis, choiceId: state.choiceId, instructions: state.instructions }
+    : operation === "blueprint" ? { analysis: effectiveAnalysis(state), choiceId: state.choiceId, instructions: state.instructions }
     : { blueprint: state.blueprint };
 }
 export async function startStudioJob(projectId: string, state: WorkbenchState, operation: StudioOperation, budgetRevision?: number, previewId?: string) {
