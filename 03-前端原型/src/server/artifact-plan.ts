@@ -15,9 +15,6 @@ export type ArtifactTarget = z.infer<typeof artifactTargetSchema>;
 export const artifactPlanSchema = z.object({ version: z.literal("modular-artifacts/1"), targets: z.array(artifactTargetSchema).max(240) }).strict()
   .refine(plan => new Set(plan.targets.map(target => target.id)).size === plan.targets.length, "生成单元不能重复");
 export type ArtifactPlan = z.infer<typeof artifactPlanSchema>;
-export const artifactInstructions = `按target生成且仅生成一份完整正文JSON，不返回整包。逐字保留目标id/module/audience/characterId/roundId；完整叙事和操作写content，不能是摘要、字段表或占位。sourceIds必须由你根据正文明确填写，涵盖requiredSourceIds且只用allowedSourceIds；关联编号只表示设计依据，不代表读者已获知该事实。完整蓝图是冻结依据，不得改写其他单元或杜撰规则。
-玩家视角按角色与蓝图rounds数组顺序限制：known已经知道；partial只知道detail表达的片段；hidden知道但隐瞒，写在该角色私有视角，不自动公开；false保留角色的错误认识，不用客观event.action纠正；unknown不得透露相关事实。factId仅关联设计事实，并不授予揭露权。不能提前泄漏未来轮次、别人的秘密或主持真相；开场材料也须与知识矩阵一致。
-character写角色开场经历/关系/目标/有后果的选择；private写允许开场知道的私人记忆及可隐瞒事项，不提前发放后续轮次线索；updates只写该角色该轮的发现/行动/选择。限定角色线索只能放在允许角色的指定轮次updates中，按原access/cost及触发条件制作分别发放的线索卡，未达条件不发放，不把多个可获得角色当作都已知晓。clues只写该轮公共线索及原获取方式/成本；updates可回顾前轮已公开线索，仍须遵守原获取条件，不提前揭露未来轮次公共线索；开场材料不发放轮次线索；无公共线索则写本轮无统一公开线索卡的发放说明与已有合法公共行动，不能捏造线索。host开场含适配/选角/座次/物料/安全/流程/真相复盘和复位；host分轮含进入状态/行动/结算/发放/触发/兜底。ending仅写target.endingId终局的条件/选择/后果/执行。host/ending仅主持查阅。体验效果标待真人试玩。`;
 export function artifactPayload(blueprint: BlueprintData, target: ArtifactTarget) {
   const rows = [...blueprint.characters, ...blueprint.relationships, ...blueprint.events, ...blueprint.knowledge, ...blueprint.claims, ...blueprint.clues, ...blueprint.rounds, ...blueprint.triggers, ...blueprint.endings];
   const roundIndex = blueprint.rounds.findIndex(round => round.id === target.roundId);

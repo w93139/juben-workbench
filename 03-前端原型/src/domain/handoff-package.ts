@@ -41,7 +41,7 @@ export const handoffReviewPlanSchema = z.object({
   independentReaders: z.array(z.object({ id: ref, focus: short(500) }).strict()).min(2).max(4),
   mutualCheck: short(800),
   consolidation: short(800),
-  playtest: z.array(short(500)).min(1).max(30),
+  playtest: z.array(short(500)).max(30),
   status: z.literal("not-run"),
 }).strict();
 
@@ -76,7 +76,7 @@ export const handoffPackageSchema = z.object({
   blueprint: blueprintDataSchema.nullable(),
   writingTasks: z.array(handoffTaskCardSchema).max(6000),
   reviewPlan: handoffReviewPlanSchema,
-  openQuestions: z.array(short(2000)).max(200),
+  openQuestions: z.array(short(2000)).max(300),
   checks: z.object({
     blueprintErrors: z.number().int().nonnegative(), blueprintWarnings: z.number().int().nonnegative(),
     materialsExcluded: z.number().int().nonnegative(), taskCards: z.number().int().nonnegative(),
@@ -95,7 +95,7 @@ const moduleRequirements: Record<(typeof moduleIds)[number], string[]> = {
   character: ["写该角色开场经历、重要关系、目标、可隐瞒内容与有后果的选择", "行为必须与蓝图角色本一致，不得新增未登记的秘密", "不出现其他角色私人信息与主持真相"],
   private: ["写开场即可知道的私人记忆与可隐瞒事项", "不提前发放后续轮次线索", "不泄露其他角色秘密与未来公共线索"],
   updates: ["只写该角色该轮的发现、行动与选择", "按知识矩阵的五种知情状态处理", "限定角色线索只在允许角色与轮次发放"],
-  clues: ["只写该轮公共线索（characterIds 为空的线索）及获取方式与成本", "未达触发条件不发放", "不得捏造蓝图外的线索，也不得把仅特定角色可得的线索写成公共卡"],
+  clues: ["只写该轮已明确公共且未限定角色的线索及获取方式与成本", "未达触发条件不发放", "不得捏造蓝图外的线索，也不得把仅特定角色可得的线索写成公共卡"],
   host: ["写进入状态、合法行动、结算、发放、触发与兜底", "含安全边界与复位说明", "仅主持查阅，可含谜底"],
   ending: ["写该终局的条件、选择、后果与执行", "仅主持查阅", "不改变已判定的事实与责任"],
 };
@@ -112,17 +112,18 @@ export function blueprintFingerprintHex(blueprint: BlueprintData): Promise<strin
   return sha256Hex(JSON.stringify(blueprint));
 }
 
-function publicAccessOnly(): RegExp { return /公开|公共|所有|全体|不限|无限制|开轮即?公开/; }
+// 封闭的完整标记集合；不从自由叙述中的关键词推断发放权限。
+const publicAccessLabels = new Set(["公开", "公共", "全员公开", "全体公开", "所有玩家可见", "开轮公开", "开轮即公开", "主持公开发放"]);
 /**
  * 线索分发分类（只看可验证的结构与显式公共标记，不猜测自由文本含义）：
  * - character：指定了角色，只在这些角色与轮次发放；
- * - public：未指定角色且 access 显式声明公共；
+ * - public：未指定角色且 access 完整匹配约定公共标记；
  * - undetermined：其余（含“仅甲可领”“交给甲”等限定或无法确定的描述），不得作为公共线索发放。
  */
 export type ClueDistribution = "public" | "character" | "undetermined";
 export function classifyClue(clue: BlueprintData["clues"][number]): ClueDistribution {
   if (clue.characterIds.length > 0) return "character";
-  return publicAccessOnly().test(clue.access) ? "public" : "undetermined";
+  return publicAccessLabels.has(clue.access.trim()) ? "public" : "undetermined";
 }
 /** 只有能确定为公共的线索才可以进入公共玩家卡。 */
 export function isPublicClue(clue: BlueprintData["clues"][number]): boolean {
@@ -154,7 +155,7 @@ export function deriveTaskCards(blueprint: BlueprintData): HandoffTaskCard[] {
     }
   }
   for (const round of blueprint.rounds) {
-    // 公共线索卡只收 characterIds 为空的线索；仅特定角色可得的线索不得进入公共范围。
+    // 公共线索卡只收明确公共且未限定角色的线索；仅特定角色可得的线索不得进入公共范围。
     const scope = [round.id, ...blueprint.clues.filter((clue) => clue.roundId === round.id && isPublicClue(clue)).map((clue) => clue.id)];
     cards.push(card(`task-${round.id}-clues`, "clues", `${round.name} · 公共线索`, "player", null, round.id, null, scope));
   }
@@ -190,6 +191,10 @@ export function checkHandoffCurrentness(state: HandoffPackageInput["state"]): st
     if (state.blueprintChoiceId !== state.choiceId) blockers.push("蓝图所依据的创作方向与当前选择不一致，请重新提交蓝图。");
     if (state.analysisSourceRevision !== state.sourceRevision || state.analysisSourceRevision === null) blockers.push("拆解结果不对应当前材料版本。");
   }
+  if (!state.analysis) blockers.push("缺少拆解大纲，无法形成交接方案。");
+  const readable = new Set(state.documents.filter((document) => !document.excluded && document.status === "read").map((document) => document.id));
+  const references = state.analysis?.sourceRefs ?? [];
+  if (!references.length || references.some((reference) => !readable.has(reference.documentId) || !reference.location.trim())) blockers.push("来源定位无法在当前材料中对应；请回原稿核对后再导出。");
   return blockers;
 }
 
@@ -205,10 +210,9 @@ export async function buildHandoffPackage(input: HandoffPackageInput): Promise<H
   const effectiveDirections = input.authorDirections ?? directions;
   const blockers = checkHandoffCurrentness(input.state);
   if (errors > 0) blockers.push(`蓝图存在 ${errors} 项结构阻断，请先在应用内修正。`);
-  if (!input.state.analysis) blockers.push("缺少拆解大纲，无法形成交接方案。");
-  if (sourceRefs.length && !sourceRefsLocated) blockers.push("来源定位无法在当前材料中对应；请回原稿核对后再导出。");
   const undeterminedClues = blueprint ? blueprint.clues.filter((clue) => classifyClue(clue) === "undetermined") : [];
-  const openQuestions = [...(input.state.analysis?.unknowns ?? []), ...undeterminedClues.map((clue) => `线索 ${clue.id}（${clue.name}）的发放方式无法判定为公共或指定角色，导出前请明确；当前未作为公共线索发放。`)];
+  const openQuestions = [...(input.state.analysis?.unknowns ?? []), ...undeterminedClues.map((clue) => `线索 ${clue.id}（${clue.name}）的发放方式无法判定为公共或指定角色，请指定角色或使用完整公共标记“公开”；当前保留在主持任务，未作为公共线索发放。`)];
+  const writingTasks = blueprint ? deriveTaskCards(blueprint) : [];
   return handoffPackageSchema.parse({
     format: HANDOFF_FORMAT, version: HANDOFF_VERSION, packageId: input.packageId, exportedAt: input.exportedAt,
     project: { id: input.project.id, title: input.project.title, note: input.project.note },
@@ -226,16 +230,17 @@ export async function buildHandoffPackage(input: HandoffPackageInput): Promise<H
     materials: input.state.documents.map((document) => ({ id: document.id, name: document.name, status: document.status, excluded: document.excluded, sourceNote: document.excluded ? "本轮不使用" : document.status === "read" ? "已读取，正文不入包" : "未读取或不受支持" })),
     analysis: input.state.analysis ? { outline: input.state.analysis.outline, directions: effectiveDirections, authorEditedOutline: input.authorEditedOutline ?? null, chosenDirectionId: input.state.choiceId, sourceRefs: sourceRefs.map((reference) => ({ documentId: reference.documentId, location: reference.location })), unknowns: input.state.analysis.unknowns } : null,
     blueprint,
-    writingTasks: blueprint ? deriveTaskCards(blueprint) : [],
+    writingTasks,
     reviewPlan: {
       independentReaders: [{ id: "reader-A", focus: "叙事、人物、关系与体验一致性" }, { id: "reader-B", focus: "证据链、轮次状态、规则与主持可执行性" }],
       mutualCheck: "两位独立审读者交换报告，逐条核对分歧与证据，不得只看结论。",
       consolidation: "统稿者按蓝图范围合并修订，问题回填到对应任务卡；未解决项保留在未决问题。",
-      playtest: [`${blueprint?.characters.length ?? "全部"}席发言是否均衡`, "时长与节奏", "线索强度与推理链是否闭合", "角色情绪安全", "主持执行与兜底是否可行"],
+      // v1 字段保留以兼容旧包；当前策划产品不产生试玩待办。
+      playtest: [],
       status: "not-run",
     },
     openQuestions,
-    checks: { blueprintErrors: errors, blueprintWarnings: warnings, materialsExcluded: input.state.documents.filter((document) => document.excluded).length, taskCards: blueprint ? deriveTaskCards(blueprint).length : 0 },
+    checks: { blueprintErrors: errors, blueprintWarnings: warnings, materialsExcluded: input.state.documents.filter((document) => document.excluded).length, taskCards: writingTasks.length },
   });
 }
 
@@ -254,7 +259,6 @@ export function checkHandoffPackage(pkg: HandoffPackage): HandoffIssue[] {
       if (task.characterId && !characters.has(task.characterId)) add("task-character", `${task.id} 引用了不存在的角色。`);
       if (task.roundId && !rounds.has(task.roundId)) add("task-round", `${task.id} 引用了不存在的轮次。`);
       if (task.endingId && !endings.has(task.endingId)) add("task-ending", `${task.id} 引用了不存在的终局。`);
-      if (task.audience === "player" && task.acceptance.some((item) => /主持真相|谜底/.test(item))) add("task-leak", `${task.id} 的验收条件混入主持专用词语。`);
       if (task.module === "clues") {
         for (const scopeId of task.blueprintScope) {
           const clue = clues.get(scopeId);
@@ -280,7 +284,7 @@ export function renderHandoffMarkdown(pkg: HandoffPackage): string {
   lines.push(`- 就绪状态：**${pkg.readiness.state}**　来源定位：${pkg.readiness.sourceRefsLocated ? "已对应到材料（未逐条核对原文）" : "未对应到材料"}`);
   if (pkg.readiness.blockers.length) { lines.push("- 待处理阻断："); for (const blocker of pkg.readiness.blockers) lines.push(`  - ${blocker}`); }
   lines.push(`- 分发限制：**${pkg.disclosure.note}**`);
-  lines.push(`- 状态：**正文未生成 · 交叉验证未执行 · 真人试玩 not-run**（本包不是成品，也不是审查通过）`, "");
+  lines.push(`- 状态：**策划方案已导出 · 正文未生成**（后续写作与核验建议可选，不是产品验收条件）`, "");
   lines.push(`> ${pkg.project.note || "（无项目备注）"}`, "");
   lines.push("## 一、项目范围与创作约束", "");
   lines.push(`- 人数：${pkg.scope.players ?? "待定"}　时长：${pkg.scope.minutes ?? "待定"} 分钟`);
@@ -313,20 +317,19 @@ export function renderHandoffMarkdown(pkg: HandoffPackage): string {
     if (task.characterId) lines.push(`- 角色：${task.characterId}`);
     if (task.roundId) lines.push(`- 轮次：${task.roundId}`);
     if (task.endingId) lines.push(`- 终局：${task.endingId}`);
-    lines.push(`- 允许引用范围（${task.blueprintScope.length} 项）：${task.blueprintScope.slice(0, 12).join("、") || "（无额外范围）"}`);
+    lines.push(`- 允许引用范围（${task.blueprintScope.length} 项）：${task.blueprintScope.join("、") || "（无额外范围）"}`);
     lines.push("- 输出要求："); for (const item of task.outputRequirements) lines.push(`  - ${item}`);
     if (task.mustNotReveal.length) { lines.push("- 禁止泄露："); for (const item of task.mustNotReveal) lines.push(`  - ${item}`); }
     lines.push("- 验收："); for (const item of task.acceptance) lines.push(`  - ${item}`);
     lines.push("");
   }
-  lines.push("## 六、交叉验证与试玩清单（产品外执行）", "");
+  lines.push("## 六、后续写作核验建议（可选）", "");
   lines.push(`- 状态：**${pkg.reviewPlan.status}**`);
   for (const reader of pkg.reviewPlan.independentReaders) lines.push(`- 独立审读 ${reader.id}：${reader.focus}`);
   lines.push(`- 互审：${pkg.reviewPlan.mutualCheck}`);
   lines.push(`- 统稿：${pkg.reviewPlan.consolidation}`);
-  for (const item of pkg.reviewPlan.playtest) lines.push(`- 试玩检查：${item}`);
   lines.push("", "## 七、未决问题", "");
   if (!pkg.openQuestions.length) lines.push("（无）"); else for (const item of pkg.openQuestions) lines.push(`- ${item}`);
-  lines.push("", "---", "", "本包由工作台从已保存的项目状态生成，只描述待执行方案；正文、独审、互审、统稿与试玩均在产品外执行，结果需人工记录。");
+  lines.push("", "---", "", "本包由工作台从已保存的项目状态生成，交付范围为大纲、蓝图与策划方案。后续写作及核验建议由作者自行选用，不属于工作台待完成任务。");
   return lines.join("\n");
 }

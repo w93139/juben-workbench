@@ -3,8 +3,8 @@ import { studioArtifactSchema } from "@/domain/studio";
 vi.mock("@/server/task-power", async importOriginal => ({ ...await importOriginal<typeof import("@/server/task-power")>(), acquireTaskPower: async () => ({ assertActive: () => {}, release: async () => {} }) }));
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { emptyBlueprintData, checkBlueprint, blueprintDataSchema } from "@/domain/blueprint";
-import { studioJobViewSchema, studioReviewResultSchema, studioAuditSchema, type StudioAudit } from "@/domain/studio";
+import { emptyBlueprintData, blueprintDataSchema } from "@/domain/blueprint";
+import { studioJobViewSchema, studioAuditSchema, type StudioAudit } from "@/domain/studio";
 import { StudioEngine, StudioError, readStudioConfig, openAITransport, type ModelTransport, type StudioConfig } from "@/server/studio-models";
 import { StudioJobStore } from "@/server/studio-job-store";
 import { sourceSelectionSchema, type CitationSegment } from "@/server/long-analysis";
@@ -134,18 +134,6 @@ describe("真实模型编排服务（只用假transport，不访问网络）", (
       expect(request.temperature).toBeUndefined(); expect(request.reasoning_effort).toBe(model === "kimi-k3" ? "low" : undefined);
     }
   });
-  it("完整审查结果持久化供新引擎导出，指纹不匹配仍拒绝", async () => {
-    const store = new StudioJobStore(":memory:");
-    try {
-      const call = vi.fn(transport()); const engine = new StudioEngine(() => config, call, Date.now, store);
-      const done = await wait(engine, (await engine.start("review", { blueprint: blueprint() })).jobId);
-      if (done.result?.kind !== "review" || !done.result.validationId) throw new Error("未通过测试审查");
-      const restarted = new StudioEngine(() => config, call, Date.now, store);
-      expect(restarted.getValidated(done.result.validationId, done.result.blueprintFingerprint)).toEqual(done.result);
-      expect(() => restarted.getValidated(done.result!.kind === "review" ? done.result!.validationId! : "", "0".repeat(64))).toThrow("不一致");
-      expect(call).toHaveBeenCalledTimes(16);
-    } finally { store.close(); }
-  });
   it("兼容接口发送JSON对象并在提示中提供Schema、无重定向，拒绝未完整生成或错误响应", async () => {
     const fetchMock = vi.fn(async (_url: unknown, _options?: RequestInit) => { void _url; void _options; return Response.json({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify(audit()) } }] }); });
     vi.stubGlobal("fetch", fetchMock);
@@ -177,7 +165,7 @@ describe("真实模型编排服务（只用假transport，不访问网络）", (
     await expect(engine.start("analyze", { documents: [{ id: "doc", name: "剧本.txt", text: "原始全文" }] })).rejects.toMatchObject({ code: "MODEL_NOT_CONFIGURED", status: 503 }); expect(call).not.toHaveBeenCalled();
     expect(() => readStudioConfig({ STUDIO_API_BASE_URL: config.baseUrl, STUDIO_API_KEY: "test", STUDIO_MAIN_MODEL: " x ", STUDIO_REVIEW_A_MODEL: "x", STUDIO_REVIEW_B_MODEL: "z" })).toThrow(StudioError);
   });
-  it("拆解使用拆解模型，蓝图/审查仍用主模型", async () => {
+  it("拆解使用拆解模型，蓝图仍用主模型", async () => {
     const calls: string[] = []; const engine = new StudioEngine(() => ({ ...config, analysisModel: "cheap" }), transport(calls));
     const done = await wait(engine, (await engine.start("analyze", { documents: [{ id: "doc", name: "剧本.txt", text: "原始全文" }] })).jobId);
     expect(done.status).toBe("completed"); expect(calls).toEqual(["cheap"]);
@@ -188,7 +176,7 @@ describe("真实模型编排服务（只用假transport，不访问网络）", (
     const done = await wait(engine, (await engine.start("analyze", { documents: [{ id: "doc", name: "剧本.txt", text: "原始全文" }] })).jobId);
     expect(done.status).toBe("completed"); expect(call).toHaveBeenCalledTimes(1);
     const reviewCall = vi.fn(transport()); const reviewEngine = new StudioEngine(() => mainOnly, reviewCall);
-    await expect(reviewEngine.start("review", { blueprint: blueprint() })).rejects.toMatchObject({ code: "MODEL_NOT_CONFIGURED", status: 503 });
+    await expect(reviewEngine.start("review", { blueprint: blueprint() })).rejects.toMatchObject({ code: "OPERATION_RETIRED", status: 409 });
     expect(reviewCall).not.toHaveBeenCalled();
   });
   it("完整材料无截断，引用必须可回查；未知字段和超限上下文不外呼", async () => {
@@ -200,24 +188,6 @@ describe("真实模型编排服务（只用假transport，不访问网络）", (
     const bad = new StudioEngine(() => config, async () => ({ ...analysis(), sourceRefs: [{ documentId: "doc", location: "未知", quote: "原文不存在" }] }));
     const invalid = await wait(bad, (await bad.start("analyze", input)).jobId); expect(invalid.error?.code).toBe("SOURCE_REFERENCE_INVALID");
   });
-  it("主Agent生成门→全案→两独审→两互审→主核对，只有全链通过才服务端解锁", async () => {
-    const calls: string[] = []; const engine = new StudioEngine(() => config, transport(calls)); expect(checkBlueprint(blueprint())).toEqual([]);
-    const done = await wait(engine, (await engine.start("review", { blueprint: blueprint() })).jobId);
-    expect(done.status).toBe("completed"); expect(calls).toEqual([...Array(11).fill("main"), "review-a", "review-b", "review-a", "review-b", "main"]);
-    if (done.result?.kind !== "review") throw new Error("wrong result"); expect(done.result.passed).toBe(true); expect(done.result.humanPlaytest).toBe("not-run");
-    expect(studioReviewResultSchema.safeParse(done.result).success).toBe(true);
-    const verified = engine.getValidated(done.result.validationId!, done.result.blueprintFingerprint); verified.artifacts[0].content = "浏览器试图替换";
-    expect(engine.getValidated(done.result.validationId!).artifacts[0].content).not.toBe("浏览器试图替换");
-    const validationId = done.result.validationId!; expect(() => engine.getValidated("fake-passed")).toThrow(StudioError); expect(() => engine.getValidated(validationId, "0".repeat(64))).toThrow(StudioError);
-  });
-  it("任何一侧阻断、正文缺类、引用虚构或不完整schema都不能获得通过令牌", async () => {
-    for (const mode of ["blocking", "missing", "quote", "schema"] as const) {
-      let count = 0; const good = transport();
-      const engine = new StudioEngine(() => config, async (...args) => { count++; if (mode === "schema") return { ok: true }; if (args[4] === studioArtifactSchema && mode === "missing") return { ...plannedArtifact(args[3] as Parameters<typeof plannedArtifact>[0]), module: "ending" }; if (args[1] === "review-a" && count === 12) return { ...audit(), ...(mode === "blocking" ? { blocking: ["证据不足"] } : mode === "quote" ? { evidence: [{ location: "原文", quote: "伪造引用", conclusion: "通过" }] } : {}) }; return good(...args); });
-      const done = await wait(engine, (await engine.start("review", { blueprint: blueprint() })).jobId);
-      if (done.result?.kind === "review") { expect(done.result.passed).toBe(false); expect(done.result.validationId).toBeUndefined(); expect(done.result.issues.length).toBeGreaterThan(0); } else expect(done.error?.code).toBe("MODEL_RESPONSE_INVALID");
-    }
-  });
   it("轮询不暴露中途正文，重复运行去重，并发有上限，错误去秘密且有超时", async () => {
     vi.useFakeTimers(); const engine = new StudioEngine(() => config, () => new Promise(() => {}));
     const input = { documents: [{ id: "doc", name: "一", text: "原始全文" }] };
@@ -228,64 +198,4 @@ describe("真实模型编排服务（只用假transport，不访问网络）", (
     const bad = new StudioEngine(() => config, async () => { throw new Error("credential-that-must-not-escape"); }); const result = await wait(bad, (await bad.start("analyze", input)).jobId);
     expect(JSON.stringify(result)).not.toContain("credential-that-must-not-escape"); expect(result.error?.code).toBe("MODEL_UNAVAILABLE");
   });
-  it("蓝图必填与关联问题阻止生成；验证快照过期后不可导出", async () => {
-    const call = vi.fn(transport()); let now = Date.now(); const engine = new StudioEngine(() => config, call, () => now);
-    const blocked = await wait(engine, (await engine.start("review", { blueprint: emptyBlueprintData() })).jobId); expect(blocked.result?.kind).toBe("review"); expect(call).not.toHaveBeenCalled();
-    const done = await wait(engine, (await engine.start("review", { blueprint: blueprint() })).jobId); if (done.result?.kind !== "review") throw new Error("wrong result"); now += 3 * 60 * 60 * 1000;
-    expect(() => engine.getValidated(done.result!.kind === "review" ? done.result!.validationId! : "")).toThrow(StudioError);
-  });
-});
-
-it("合法关系来源可通过，未知来源仍拒绝", async () => {
-  for (const sourceId of ["rel", "missing-relation"]) {
-    const call: ModelTransport = async (...args) => {
-      if (args[4] === studioArtifactSchema) { const artifact = plannedArtifact(args[3] as Parameters<typeof plannedArtifact>[0]); if (!artifact.sourceIds.includes(sourceId)) artifact.sourceIds.push(sourceId); return artifact; }
-      return transport()(...args);
-    };
-    const engine = new StudioEngine(() => config, call);
-    const done = await wait(engine, (await engine.start("review", { blueprint: blueprint() })).jobId);
-    const review = done.result?.kind === "review" ? done.result : done.reviewProgress?.review;
-    expect(review?.passed).toBe(sourceId === "rel");
-    if (sourceId !== "rel") expect(done.error?.code).toBe("MODEL_RESPONSE_INVALID");
-  }
-});
-it("仅体验提示的蓝图仍进入完整审查，结构错误仍零外呼", async () => {
-  const bp = blueprint(); bp.clues.push({ ...bp.clues[0], id: "experience", supports: [], content: "情感体验纸条" });
-  expect(checkBlueprint(bp).map(i => i.severity)).toEqual(["warning"]);
-  const calls = vi.fn<ModelTransport>(async (...args) => {
-    return transport()(...args);
-  });
-  const engine = new StudioEngine(() => config, calls);
-  const done = await wait(engine, (await engine.start("review", { blueprint: bp })).jobId);
-  expect(done.result?.kind === "review" && done.result.passed).toBe(true); expect(calls).toHaveBeenCalledTimes(16);
-  calls.mockClear(); bp.truth = "";
-  const rejected = await wait(engine, (await engine.start("review", { blueprint: bp })).jobId);
-  expect(rejected.result?.kind === "review" && rejected.result.passed).toBe(false); expect(calls).not.toHaveBeenCalled();
-});
-it.each(["missing", "host", "wrong-role", "wrong-round", "null-round", "public", "extra-leak", "valid", "allowed-recipient"])("私人线索覆盖与发放边界：%s", async mode => {
-  const bp = blueprint();
-  bp.rounds.push({ ...bp.rounds[0], id: "r2", name: "复核" });
-  bp.claims.push({ id: "private-claim", statement: "仅私人证词支持的必要结论", required: true });
-  bp.clues.push({ id: "private-clue", name: "个人证词", content: "仅在复核轮允许持有人看到的证词", supports: ["private-claim"], roundId: "r2", characterIds: mode === "allowed-recipient" ? ["a", "b"] : ["a"], cost: 0, access: "复核轮由任一允许持有人取得" });
-  expect(checkBlueprint(bp)).toEqual([]);
-  const engine = new StudioEngine(() => config, async (...args) => {
-    if (args[4] !== studioArtifactSchema) return transport()(...args);
-    const artifact = plannedArtifact(args[3] as Parameters<typeof plannedArtifact>[0]);
-    const valid = ["valid", "allowed-recipient"].includes(mode);
-    if (!valid && artifact.module === "updates" && artifact.characterId === "a" && artifact.roundId === "r2") {
-      if (["missing", "host"].includes(mode)) artifact.sourceIds = artifact.sourceIds.filter(id => id !== "private-clue");
-      if (mode === "wrong-role") artifact.characterId = "b";
-      if (mode === "wrong-round") artifact.roundId = "r1";
-      if (mode === "null-round") artifact.roundId = null;
-      if (mode === "public") artifact.module = "clues";
-      if (mode === "extra-leak") artifact.characterId = "b";
-    }
-    if (mode === "host" && artifact.module === "host") artifact.sourceIds.push("private-clue");
-    return artifact;
-  });
-  const done = await wait(engine, (await engine.start("review", { blueprint: bp })).jobId);
-  const review = done.result?.kind === "review" ? done.result : done.reviewProgress?.review;
-  const passes = ["valid", "allowed-recipient"].includes(mode);
-  expect(review?.passed).toBe(passes);
-  if (!passes) { expect(done.result).toBeUndefined(); expect(done.error?.code).toBe("MODEL_RESPONSE_INVALID"); expect(review?.issues.length).toBeGreaterThan(0); }
 });

@@ -39,6 +39,6 @@ export async function POST(request: Request) {
     if (body.action === "reconcile") return localJson({ budget: billing.ledger.reconcile(body.projectId, body.callId, body.version, body.actualFen, body.note) });
     const config = readStudioConfig();
     if (body.action === "prices") return localJson({ quotes: await billing.prices.get(config.baseUrl, [config.mainModel, config.reviewA, config.reviewB].filter(Boolean), undefined, true) });
-    return localJson(await previewStudioCost(billing, config, body.projectId, body.operation, body.input, getStudioEngine().production));
+    return localJson(await previewStudioCost(billing, config, body.projectId, body.operation, body.input));
   } catch (error) { return failure(error); }
 }

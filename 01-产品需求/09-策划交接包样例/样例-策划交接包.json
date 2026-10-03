@@ -1,18 +1,32 @@
 {
   "format": "juben-workbench/plan-handoff",
   "version": 1,
-  "packageId": "sample-plan-handoff-0001",
+  "packageId": "sample-planning-v1",
   "exportedAt": "2026-10-03T00:00:00.000Z",
   "project": {
-    "id": "project-sample-plan",
-    "title": "【自造样例】策划交接包",
-    "note": "本样例完全自造，仅用于演示交接包结构与验收口径，不代表任何真实作品或真人试玩结论。"
+    "id": "synthetic-planning-example",
+    "title": "自造档案馆策划样例",
+    "note": "全部为测试自造资料，仅展示导出格式。"
   },
   "revision": {
-    "workbenchRevision": 12,
-    "sourceRevision": 3,
-    "blueprintRevision": 2,
+    "workbenchRevision": 7,
+    "sourceRevision": 2,
+    "analysisSourceRevision": 2,
+    "chosenDirectionId": "d1",
+    "blueprintRevision": 3,
+    "blueprintSourceRevision": 2,
+    "blueprintChoiceId": "d1",
     "blueprintFingerprint": "7c1c6d684a60988d255dd1237c0f9f3d94d6fb0fcf3cbb581a939f8b506f4e2c"
+  },
+  "readiness": {
+    "state": "ready",
+    "blockers": [],
+    "sourceRefsLocated": true
+  },
+  "disclosure": {
+    "playerSafe": false,
+    "containsHostSecrets": true,
+    "note": "本包含主持专用信息与谜底，不得作为玩家材料分发；玩家可见内容需另行按角色切分。"
   },
   "executionStatus": {
     "manuscript": "not-generated",
@@ -22,64 +36,48 @@
   "scope": {
     "players": 2,
     "minutes": 20,
-    "instructions": "【自造样例】目标体验以推理还原为主，控制阅读负担，强化后置处理链的三层责任区分。",
+    "instructions": "保留双人档案馆框架，梳理信息先后与行动后果。",
     "boundaries": [
       "两人的档案馆"
     ]
   },
   "materials": [
     {
-      "id": "doc-a",
-      "name": "01-角色本/CH-A-甲.md",
+      "id": "doc",
+      "name": "自造档案馆材料.md",
       "status": "read",
       "excluded": false,
       "sourceNote": "已读取，正文不入包"
-    },
-    {
-      "id": "doc-b",
-      "name": "01-角色本/CH-B-乙.md",
-      "status": "read",
-      "excluded": false,
-      "sourceNote": "已读取，正文不入包"
-    },
-    {
-      "id": "doc-c",
-      "name": "05-主持人材料/01-完整主持人手册.md",
-      "status": "read",
-      "excluded": false,
-      "sourceNote": "已读取，正文不入包"
-    },
-    {
-      "id": "doc-py",
-      "name": "08-成品审查/静态检查.py",
-      "status": "unsupported",
-      "excluded": true,
-      "sourceNote": "本轮不使用"
     }
   ],
   "analysis": {
-    "outline": "【自造样例】两案镜像与三层责任：近案 20:18 一次钝器伤造成原伤，20:23 之后多人清理/删改/迟报/自动发布使证据链变形；旧案以机构违规与验收签字为主因。",
+    "outline": "甲藏档案，乙目击；以公开与隐瞒的选择推进调查。",
     "directions": [
       {
         "id": "d1",
-        "title": "误判与匿名方案",
-        "summary": "【自造样例】保留核心悲剧，强化误判与匿名公开的张力。",
-        "outline": "起因—误判—选择",
-        "risk": "情绪负荷较高，需真人试玩观察。"
+        "title": "公开的代价",
+        "summary": "梳理证据和选择后果",
+        "outline": "藏档案—发现照片—决定公开",
+        "risk": "需作者核对角色动机"
       },
       {
         "id": "d2",
-        "title": "后置处理链",
-        "summary": "【自造样例】把「谁改变了证据」做成第二主谜。",
-        "outline": "发现—对照—揭示",
-        "risk": "可能稀释主案情绪。"
+        "title": "合作的边界",
+        "summary": "围绕两人的信任关系",
+        "outline": "隐瞒—质询—重建合作",
+        "risk": "需作者确定信息节奏"
       }
     ],
-    "authorEditedOutline": null,
+    "authorEditedOutline": "先呈现空柜，再梳理藏档案的动机和公开后果。",
     "chosenDirectionId": "d1",
+    "sourceRefs": [
+      {
+        "documentId": "doc",
+        "location": "自造材料/事件表"
+      }
+    ],
     "unknowns": [
-      "【自造样例】某角色的知情时间需回原稿核对",
-      "真人试玩未执行"
+      "公开后的责任边界待作者决定。"
     ]
   },
   "blueprint": {
@@ -202,7 +200,8 @@
       "roundId": null,
       "endingId": null,
       "blueprintScope": [
-        "A"
+        "A",
+        "AB"
       ],
       "outputRequirements": [
         "写该角色开场经历、重要关系、目标、可隐瞒内容与有后果的选择",
@@ -281,7 +280,8 @@
       "roundId": null,
       "endingId": null,
       "blueprintScope": [
-        "B"
+        "B",
+        "AB"
       ],
       "outputRequirements": [
         "写该角色开场经历、重要关系、目标、可隐瞒内容与有后果的选择",
@@ -365,13 +365,13 @@
         "C1"
       ],
       "outputRequirements": [
-        "写该轮公共线索及获取方式与成本",
+        "只写该轮已明确公共且未限定角色的线索及获取方式与成本",
         "未达触发条件不发放",
-        "不得捏造蓝图外的线索"
+        "不得捏造蓝图外的线索，也不得把仅特定角色可得的线索写成公共卡"
       ],
       "mustNotReveal": [
         "玩家视角：公共线索卡",
-        "禁止：未公开主持真相与其他角色私密"
+        "禁止：未公开主持真相、其他角色私密、仅特定角色可得的线索"
       ],
       "acceptance": [
         "蓝图范围与来源可追溯",
@@ -470,23 +470,16 @@
     ],
     "mutualCheck": "两位独立审读者交换报告，逐条核对分歧与证据，不得只看结论。",
     "consolidation": "统稿者按蓝图范围合并修订，问题回填到对应任务卡；未解决项保留在未决问题。",
-    "playtest": [
-      "时长与节奏",
-      "五席发言是否均衡",
-      "线索强度与推理链是否闭合",
-      "角色情绪安全",
-      "主持执行与兜底是否可行"
-    ],
+    "playtest": [],
     "status": "not-run"
   },
   "openQuestions": [
-    "【自造样例】某角色的知情时间需回原稿核对",
-    "真人试玩未执行"
+    "公开后的责任边界待作者决定。"
   ],
   "checks": {
     "blueprintErrors": 0,
     "blueprintWarnings": 0,
-    "referencesChecked": true,
-    "materialsExcluded": 1
+    "materialsExcluded": 0,
+    "taskCards": 10
   }
 }

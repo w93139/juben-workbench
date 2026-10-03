@@ -18,9 +18,6 @@ export function studioExecutionFingerprint(config: StudioConfig, operation: stri
   const configuration = studioConfigFingerprint(config);
   return operation === "review" ? createHash("sha256").update(configuration + REVIEW_PROTOCOL + planHash).digest("hex") : configuration;
 }
-export function studioProductionKey(inputFingerprint: string, executionFingerprint: string) {
-  return createHash("sha256").update(inputFingerprint + executionFingerprint).digest("hex");
-}
 const usageSchema = z.object({ model: z.string(), usage: z.object({ prompt_tokens: tokens.positive(), completion_tokens: tokens, total_tokens: tokens.optional(),
   completion_tokens_details: z.object({ reasoning_tokens: tokens.optional() }).passthrough().nullable().optional(),
 }).passthrough() }).passthrough();

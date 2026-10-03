@@ -93,7 +93,7 @@ def main():
         if result.returncode:
             print(f"检查失败，现场保留于：{root}", flush=True)
             return result.returncode
-    print("无模型应用检查通过；真实整本与用户验收另行记录。", flush=True)
+    print("无模型应用检查通过；作者对大纲与蓝图内容的验收另行记录。", flush=True)
     return 0
 
 

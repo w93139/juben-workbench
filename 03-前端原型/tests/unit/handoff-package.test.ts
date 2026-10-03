@@ -7,7 +7,7 @@ import { studioAnalysisSchema } from "@/domain/studio";
 const analysis = () => studioAnalysisSchema.parse({
   outline: "自造拆解大纲：两案镜像与三层责任。",
   directions: [
-    { id: "d1", title: "方向一", summary: "自造方向一概要", outline: "起因—选择", risk: "待真人试玩" },
+    { id: "d1", title: "方向一", summary: "自造方向一概要", outline: "起因—选择", risk: "待核对角色动机" },
     { id: "d2", title: "方向二", summary: "自造方向二概要", outline: "发现—揭示", risk: "待核对证据" },
   ],
   sourceRefs: [{ documentId: "doc", location: "角色本/甲 · 开场", quote: "【自造原文摘录】不得入包" }],
@@ -111,6 +111,29 @@ describe("策划交接包", () => {
     expect(pkg.openQuestions.join("")).toContain("C4");
   });
 
+  it.each(["不公开，仅交给甲", "公共区域搜证后仅甲可领", "所有线索由主持保管，仅甲可领", "公开，除甲以外", "条件达成才公开", "不公开", "全体玩家中仅甲可见"])("不从自由叙述猜测公共权限：%s", async (access) => {
+    const bp = reviewBlueprint();
+    bp.clues[0]!.access = access;
+    const pkg = await build({ blueprint: bp });
+    expect(pkg.writingTasks.find((card) => card.id === "task-R1-clues")!.blueprintScope).not.toContain("C1");
+    expect(pkg.writingTasks.find((card) => card.id === "task-host-R1")!.blueprintScope).toContain("C1");
+    expect(pkg.openQuestions.join("")).toContain("C1");
+    expect(checkHandoffPackage(pkg)).toEqual([]);
+    pkg.writingTasks.find((card) => card.id === "task-R1-clues")!.blueprintScope.push("C1");
+    expect(checkHandoffPackage(pkg).map((issue) => issue.code)).toContain("clue-scope");
+  });
+
+  it("公共完整标记仍服从指定角色；核验禁令不会被当作泄密", async () => {
+    const bp = reviewBlueprint();
+    bp.clues[0]!.characterIds = ["A"];
+    bp.clues[0]!.access = "公开";
+    const pkg = await build({ blueprint: bp });
+    expect(pkg.writingTasks.find((card) => card.id === "task-R1-clues")!.blueprintScope).not.toContain("C1");
+    expect(pkg.writingTasks.find((card) => card.id === "task-A-R1-updates")!.blueprintScope).toContain("C1");
+    pkg.writingTasks[0]!.acceptance.push("不得泄露主持真相或谜底");
+    expect(checkHandoffPackage(pkg)).toEqual([]);
+  });
+
   it("来源定位保留 documentId/location，但不装原文摘录；序列化后不含材料正文", async () => {
     const pkg = await build();
     expect(pkg.analysis!.sourceRefs).toEqual([{ documentId: "doc", location: "角色本/甲 · 开场" }]);
@@ -121,7 +144,7 @@ describe("策划交接包", () => {
     for (const material of pkg.materials) expect(material).not.toHaveProperty("text");
   });
 
-  it("蓝图较大时任务卡数量随角色/轮次增长且不超上限，文案按实际人数", async () => {
+  it("蓝图较大时任务卡数量随角色/轮次增长且不超上限，不产生试玩待办", async () => {
     const big = blueprintDataSchema.parse({
       premise: "自造大蓝图", truth: "自造真相",
       characters: Array.from({ length: 6 }, (_, i) => ({ id: `P${i}`, name: `角色${i}`, publicIdentity: "身份", goal: "目标", privateInformation: "秘密", choice: "选择", contribution: "贡献" })),
@@ -135,7 +158,7 @@ describe("策划交接包", () => {
     expect(cards.length).toBe(6 * 2 + 6 * 10 + 10 + 1 + 10 + 1);
     const pkg = await build({ blueprint: big });
     expect(pkg.checks.taskCards).toBe(cards.length);
-    expect(pkg.reviewPlan.playtest[0]).toContain("6");
-    expect(pkg.reviewPlan.playtest.join("")).not.toContain("五席");
+    expect(pkg.reviewPlan.playtest).toEqual([]);
+    expect(renderHandoffMarkdown(pkg)).not.toContain("试玩");
   });
 });

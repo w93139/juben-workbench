@@ -140,7 +140,7 @@ export function StudioConnection() {
     <Button size="sm" variant="outline" onClick={() => { setSettings(null); setEvaluation(null); setReport(null); setShowReport(false); setLoading(true); setError(null); setActionError(null); setSyncError(false); setSaved(false); setModelsDirty(false); setApiKey(""); setOpen(true); }}><Settings2 size={15} />配置模型</Button>
     <Dialog open={open} onOpenChange={value => { if (busy) return; setOpen(value); if (!value) { setApiKey(""); setError(null); } }}><DialogContent className="sm:max-w-2xl"><DialogTitle>连接蚂蚁平台并自动选型</DialogTitle><DialogDescription>先保存连接，再读取候选模型。只有你点击“开始测评”后才会产生费用；工作台按平台公开价估算并保留安全余量。</DialogDescription>
       {loading ? <p role="status">正在读取连接设置…</p> : <div className="space-y-5">
-        {settings?.environmentLocked && <p className="stage-callout">当前配置由服务端环境变量管理，页面只读。{!settings.reviewReady && "环境变量尚不完整，请在服务端补齐主模型（正文+交叉验证还需两路审查模型）。"}</p>}
+        {settings?.environmentLocked && <p className="stage-callout">当前配置由服务端环境变量管理，页面只读。{!settings.mainModel && "生成蓝图需要主模型配置。"}</p>}
         <form onSubmit={save} className="space-y-4 rounded-xl border border-[var(--border)] p-4">
           <div><p className="field-label">1 · 连接蚂蚁平台</p><p className="field-hint mt-1">保存连接不会调用模型，也不会产生模型费用。</p></div>
           <label className="field-label">服务器地址<Input aria-label="模型服务地址" className="mt-2" type="url" autoComplete="off" value={draft.baseUrl} maxLength={2048} disabled={locked} required onChange={event => { setDraft({ ...draft, baseUrl: event.target.value }); setSaved(false); }} /></label>
@@ -148,17 +148,17 @@ export function StudioConnection() {
           <p className="field-hint">Key只保存在这台电脑的服务端受限文件中，不会返回页面、写入浏览器存储或上传GitHub。</p>
           <div className="rounded-lg bg-[var(--muted)] p-3">
             <p className="field-label">模型分配（可先只填主模型）</p>
-            <p className="field-hint mt-1">拆解只需拆解模型（留空则用主模型）；生成蓝图用主模型；正文生成和交叉验证需要三个不同模型。留空并保存会保留当前分配，不会清空。</p>
+            <p className="field-hint mt-1">拆解只需拆解模型（留空则用主模型）；生成蓝图用主模型；策划流程无需配置审查模型。留空并保存会保留当前分配，不会清空。</p>
             <label className="field-label mt-2 block">拆解模型<Input aria-label="拆解模型编号" className="mt-1" autoComplete="off" value={draft.analysisModel ?? ""} maxLength={200} disabled={locked} placeholder="留空=用主模型；例如 deepseek-flash" onChange={event => { setDraft({ ...draft, analysisModel: event.target.value }); setModelsDirty(true); setSaved(false); }} /></label>
             <label className="field-label mt-2 block">主模型<Input aria-label="主模型编号" className="mt-1" autoComplete="off" value={draft.mainModel} maxLength={200} disabled={locked} placeholder="例如 deepseek-v4-pro-0813" onChange={event => { setDraft({ ...draft, mainModel: event.target.value }); setModelsDirty(true); setSaved(false); }} /></label>
-            <label className="field-label mt-2 block">审查 A<Input aria-label="审查A模型编号" className="mt-1" autoComplete="off" value={draft.reviewA} maxLength={200} disabled={locked} placeholder="正文与交叉验证用" onChange={event => { setDraft({ ...draft, reviewA: event.target.value }); setModelsDirty(true); setSaved(false); }} /></label>
-            <label className="field-label mt-2 block">审查 B<Input aria-label="审查B模型编号" className="mt-1" autoComplete="off" value={draft.reviewB} maxLength={200} disabled={locked} placeholder="正文与交叉验证用" onChange={event => { setDraft({ ...draft, reviewB: event.target.value }); setModelsDirty(true); setSaved(false); }} /></label>
+            <label className="field-label mt-2 block">审查 A（历史测评分配）<Input aria-label="审查A模型编号" className="mt-1" autoComplete="off" value={draft.reviewA} maxLength={200} disabled={locked} placeholder="可留空，不用于策划流程" onChange={event => { setDraft({ ...draft, reviewA: event.target.value }); setModelsDirty(true); setSaved(false); }} /></label>
+            <label className="field-label mt-2 block">审查 B（历史测评分配）<Input aria-label="审查B模型编号" className="mt-1" autoComplete="off" value={draft.reviewB} maxLength={200} disabled={locked} placeholder="可留空，不用于策划流程" onChange={event => { setDraft({ ...draft, reviewB: event.target.value }); setModelsDirty(true); setSaved(false); }} /></label>
           </div>
           {!settings?.environmentLocked && <Button type="submit" disabled={locked || !settings}>{busy ? "正在保存…" : settings?.providerConfigured ? "更新平台连接" : "保存平台连接"}</Button>}
           {saved && <p role="status" className="success-message">平台连接已保存。尚未调用模型，也未产生费用。</p>}
         </form>
 
-        {settings?.analyzeReady && !evaluation?.allocation && <section className="rounded-xl border border-[var(--border)] p-4 text-sm"><p className="field-label">当前模型分配</p><p className="mt-2 break-all">拆解模型：{settings.analysisModel || settings.mainModel}{settings.analysisModel ? "" : "（未单独设置，使用主模型）"}</p><p className="break-all">主模型：{settings.mainModel}</p>{settings.reviewA && <p className="break-all">审查 A：{settings.reviewA}</p>}{settings.reviewB && <p className="break-all">审查 B：{settings.reviewB}</p>}{!settings.reviewReady && <p className="field-hint mt-1">拆解可用；正文生成和交叉验证还需补齐审查 A、B 两个不同模型。</p>}</section>}
+        {settings?.analyzeReady && !evaluation?.allocation && <section className="rounded-xl border border-[var(--border)] p-4 text-sm"><p className="field-label">当前模型分配</p><p className="mt-2 break-all">拆解模型：{settings.analysisModel || settings.mainModel}{settings.analysisModel ? "" : "（未单独设置，使用主模型）"}</p><p className="break-all">主模型：{settings.mainModel}</p>{!settings.mainModel && <p className="field-hint mt-1">拆解可用；生成蓝图还需配置主模型。</p>}</section>}
 
         {settings?.providerConfigured && <section className="space-y-3 rounded-xl border border-[var(--border)] p-4">
           <details className="rounded-lg bg-[#f1eee8] p-3 text-sm"><summary className="cursor-pointer font-medium">根据公开资料筛选：3 个首选＋1 个替补</summary><p className="field-hint mt-2">资料核对：2026-09-09。先研究，再用三道剧本小样验证；公开榜单不等于剧本创作效果，推荐分工尚待验证。</p>{MODEL_SHORTLIST.map(item => <div className="mt-3" key={item.id}><strong>{item.name} · {item.focus}</strong><p className="field-hint">{item.reason}</p><a className="underline" href={item.url} target="_blank" rel="noreferrer">官方资料</a></div>)}<p className="mt-3"><a className="underline" href="https://arena.ai/leaderboard/text/creative-writing" target="_blank" rel="noreferrer">公开创意写作评测</a> · 评测版本和推理设置可能与平台不同。</p></details>
@@ -201,7 +201,7 @@ export function StudioConnection() {
           {evaluation.error && !canPrepare && <p className="text-sm text-[var(--danger)]">{evaluationErrorMessage(evaluation)}</p>}
           {!['idle','discovered','running','cancelling'].includes(evaluation.status) && (evaluation.completedCalls > 0 || evaluation.excludedModels.length > 0 || evaluation.spentFen > 0 || evaluation.uncertainFen > 0 || evaluation.lastFailure != null) && <div className="space-y-3 border-t border-[var(--border)] pt-3"><div className="flex flex-wrap gap-2"><Button type="button" variant="outline" disabled={busy} onClick={() => report && report.viewRevision === evaluation.viewRevision ? setShowReport(value => !value) : void loadReport()}><FileText size={15} />{showCurrentReport ? "收起测评报告" : "查看测评报告"}</Button><Button type="button" variant="outline" disabled={busy} onClick={() => void downloadReport()}><Download size={15} />下载报告（Markdown）</Button></div>{showCurrentReport && <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-lg bg-[var(--muted)] p-3 text-xs leading-6">{report.markdown}</pre>}</div>}
         </section> : null}
-        <p className="stage-callout">公开价可能与最终账单口径不同，建议同时在蚂蚁平台设置账号侧消费限额。测评只代表固定小样表现；未经真人试玩的效果不会写成“已验证”。</p>
+        <p className="stage-callout">公开价可能与最终账单口径不同，建议同时在蚂蚁平台设置账号侧消费限额。测评只代表固定小样表现，大纲与蓝图是否符合创作意图由作者判断。</p>
       </div>}
       {error != null && <ErrorMessage error={error} />}
     </DialogContent></Dialog>

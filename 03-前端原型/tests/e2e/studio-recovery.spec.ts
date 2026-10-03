@@ -1,8 +1,7 @@
 import { confirmStudioCost } from "./budget-fixture";
 import { test, expect } from "@playwright/test";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { seedProject } from "./project-fixture";
-import type { StudioAudit } from "../../src/domain/studio";
 
 import { analysis, prepared, writeState, readState, offlineCapability } from "./workbench-fixture";
 
@@ -54,54 +53,6 @@ test("蓝图本地草稿不会覆盖另一个标签页保存的新版本", async
   await page.getByRole("dialog").getByRole("button", { name: "关闭", exact: true }).click();
   await expect(page.getByRole("textbox", { name: "大纲", exact: true })).toHaveValue("第一个页面尚未保存的改写");
   await other.close();
-});
-
-for (const trigger of ["修改创作要求", "同源重新拆解"]) test.fixme(`${trigger}后重新选择原方向也不会恢复旧审查的导出资格（旧ZIP导出UI已随新方向退役）`, async ({ page }) => {
-  await offlineCapability(page);
-  const base = await seedProject(page, "创作要求失效检查"); const state = prepared();
-  const report: StudioAudit = { summary: "隔离UI测试快照，不是服务端通过记录", blocking: [], warnings: [], evidence: [{ location: "蓝图简介", quote: state.blueprint!.premise, conclusion: "固定引用" }], contentComplete: true, playerHostIsolation: true, findingsAddressed: true, humanPlaytest: "not-run" };
-  // Schema-valid UI fixture only. Never sent to the server write API or used as a genuine validation token.
-  state.review = { kind: "review", passed: true, issues: [], validationId: randomUUID(), blueprintFingerprint: createHash("sha256").update(JSON.stringify(state.blueprint)).digest("hex"), blueprint: state.blueprint!, humanPlaytest: "not-run", reports: { designGate: report, independentA: report, independentB: report, mutualA: report, mutualB: report, coordinator: report }, artifacts: (["character", "private", "updates", "clues", "host", "ending"] as const).map((moduleId, index) => ({ id: `test-artifact-${index}`, module: moduleId, audience: index >= 4 ? "host" : "player", characterId: null, roundId: null, title: "自有测试材料", content: "UI隔离测试内容", sourceIds: [] })) };
-  state.reviewBlueprintRevision = 1;
-  await writeState(page, base, state);
-  await page.goto(`${base}/stages/generation`);
-  await expect(page.getByRole("button", { name: "导出完整档案", exact: true })).toBeEnabled();
-  if (trigger === "同源重新拆解") {
-    const jobId = randomUUID();
-    await page.route("**/api/studio/analyze", route => route.fulfill({ json: { jobId: route.request().headers()["x-studio-request-id"], status: "running", phase: "重拆" } }));
-    await page.route("**/api/studio/status?*", route => route.fulfill({ json: { jobId: new URL(route.request().url()).searchParams.get("jobId") || jobId, status: "completed", phase: "已完成", result: { kind: "analysis", analysis: { ...state.analysis!, outline: "同一材料重新产生的拆解" } } } }));
-    await page.goto(`${base}/stages/materials`);
-    await page.getByRole("button", { name: "拆解大纲", exact: true }).click(); await confirmStudioCost(page);
-    await expect(page.getByText("同一材料重新产生的拆解", { exact: true })).toBeVisible();
-  } else {
-  await page.goto(`${base}/stages/analysis`);
-  await page.getByText("补充你的创作要求", { exact: true }).click();
-  await page.getByRole("textbox", { name: "补充创作要求", exact: true }).fill("将主题改为互相信任，保留两轮调查。");
-  await page.getByRole("heading", { name: "选择改写方向", exact: true }).click();
-  await expect.poll(async () => (await readState(page, base)).instructions).toBe("将主题改为互相信任，保留两轮调查。");
-  }
-  const direction = page.getByRole("button", { name: /责任与选择/ }); await direction.click();
-  await expect(direction).toHaveAttribute("aria-pressed", "true");
-  await page.goto(`${base}/stages/generation`); await page.reload();
-  await expect(page.getByRole("button", { name: "导出完整档案", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "返回修改蓝图", exact: true })).toBeVisible();
-  const saved = await readState(page, base); expect(saved.choiceId).toBe("one"); expect(saved.blueprintSourceRevision).toBeNull(); expect(saved.review?.validationId).toBe(state.review.validationId);
-});
-
-test.fixme("通过快照导出使用已选位置并打开目录，客户端不提交正文（旧ZIP导出UI已随新方向退役）", async ({ page }) => {
-  await offlineCapability(page); const base = await seedProject(page, "导出交互"); const state = prepared();
-  const report: StudioAudit = { summary: "UI边界夹具", blocking: [], warnings: [], evidence: [{location:"蓝图",quote:state.blueprint!.premise,conclusion:"测试"}], contentComplete:true,playerHostIsolation:true,findingsAddressed:true,humanPlaytest:"not-run" };
-  state.review = {kind:"review",passed:true,issues:[],validationId:randomUUID(),blueprintFingerprint:createHash("sha256").update(JSON.stringify(state.blueprint)).digest("hex"),humanPlaytest:"not-run",reports:{designGate:report,independentA:report,independentB:report,mutualA:report,mutualB:report,coordinator:report},artifacts:(["character","private","updates","clues","host","ending"] as const).map((module,i)=>({id:`a${i}`,module,audience:i>=4?"host":"player",characterId:null,roundId:null,title:"UI测试材料",content:"不发送此正文",sourceIds:[]}))};state.reviewBlueprintRevision=1;
-  await writeState(page,base,state); const directoryId=randomUUID(); let writes=0;let reveals=0;
-  await page.route("**/api/local/status",r=>r.fulfill({json:{directoryPicker:true}}));
-  await page.route("**/api/local/directories/choose",r=>r.fulfill({json:{id:directoryId,name:"测试输出",kind:"directory"}}));
-  await page.route(`**/api/local/directories/${directoryId}`,r=>r.fulfill({json:{name:"测试输出",kind:"directory"}}));
-  await page.route("**/api/local/directories/write",r=>{writes++;expect(r.request().postDataJSON()).toEqual({directoryId,validationId:state.review!.validationId,title:"导出交互"});return r.fulfill({json:{filename:"导出交互.zip",name:"测试输出",written:true}});});
-  await page.route("**/api/local/directories/reveal",r=>{reveals++;expect(r.request().postDataJSON()).toEqual({directoryId});return r.fulfill({json:{opened:true}});});
-  await page.goto(`${base}/stages/generation`);
-  await page.getByRole("button",{name:"导出完整档案",exact:true}).click();
-  await expect(page.getByText("已保存：导出交互.zip")).toBeVisible();await expect(page.getByTestId("output-directory-name")).toHaveText("测试输出");expect(writes).toBe(1);await expect.poll(()=>reveals).toBe(1);
-  await expect(page.getByText("尚未真人试玩",{exact:true})).toBeVisible();
 });
 
 test("更换整本后旧分析与蓝图失效，新文件不会混入旧材料", async ({page}) => {

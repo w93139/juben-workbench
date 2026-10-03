@@ -1,4 +1,4 @@
-import { materialSchema, type Material, type WorkbenchState } from "@/domain/workbench";
+import { analysisCurrent, materialSchema, type Material, type WorkbenchState } from "@/domain/workbench";
 import { studioInputs, studioJobViewSchema, type StudioOperation } from "@/domain/studio";
 import { ANALYSIS_DOCUMENT_LIMIT, ANALYSIS_INPUT_BYTES, SINGLE_CONTEXT_BYTES } from "@/domain/analysis-limits";
 import { changeWorkbench, readWorkbench, mergeStudioJob, releaseMissingStudioJob } from "./workbench-store";
@@ -46,7 +46,7 @@ export function replaceMaterials(id: string, revision: number, documents: Materi
 }
 /** 作者修订只在其依据的分析版本仍为当前时生效；重新拆解或更换材料后旧修订不静默覆盖新结果。 */
 export function authorEditsCurrent(state: WorkbenchState): boolean {
-  return state.authorRevision != null && state.analysisSourceRevision != null && state.authorRevision === state.analysisSourceRevision;
+  return analysisCurrent(state) && state.authorRevision === state.sourceRevision && state.authorAnalysisRevision != null && state.authorAnalysisRevision === state.analysisRevision;
 }
 /** 作者修订后的大纲与方向进入主流程，保证选择页、蓝图请求与交接包使用同一份当前有效修订。 */
 export function effectiveAnalysis(state: WorkbenchState) {

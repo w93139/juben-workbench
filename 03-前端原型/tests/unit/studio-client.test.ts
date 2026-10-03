@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { emptyWorkbench, blueprintCurrent, type WorkbenchState } from "@/domain/workbench";
+import { emptyWorkbench, blueprintCurrent, workbenchSchema, type WorkbenchState } from "@/domain/workbench";
 import { emptyBlueprintData } from "@/domain/blueprint";
-import { pollStudioJob, startStudioJob, effectiveAnalysis, studioJobInput } from "@/services/studio-client";
+import { pollStudioJob, startStudioJob, authorEditsCurrent, effectiveAnalysis, studioJobInput } from "@/services/studio-client";
 import { applyStudioJobView, applyMissingStudioJob } from "@/domain/studio-job-update";
 import type { StudioJobView } from "@/domain/studio";
 let saved: WorkbenchState;
@@ -18,7 +18,7 @@ beforeEach(() => { saved = emptyWorkbench(); saved.documents = [{ id: "d", name:
 afterEach(() => { vi.unstubAllGlobals(); });
 it("作者修订只在其依据的分析版本仍为当前时进入主流程", () => {
   const state = emptyWorkbench();
-  state.analysisSourceRevision = 2;
+  state.sourceRevision = 2; state.analysisSourceRevision = 2; state.analysisRevision = 1; state.authorAnalysisRevision = 1;
   state.analysis = { outline: "模型大纲", directions: ["one", "two"].map(id => ({ id, title: id, summary: "s", outline: "o", risk: "r" })), sourceRefs: [{ documentId: "d", location: "正文", quote: "x" }], unknowns: [] } as WorkbenchState["analysis"];
   expect((studioJobInput(state, "blueprint") as { analysis: { outline: string } }).analysis.outline).toBe("模型大纲");
   state.authorOutline = "作者大纲"; state.authorDirections = [{ id: "one", title: "作者方向", summary: "as", outline: "ao", risk: "ar" }];
@@ -107,4 +107,26 @@ it("运行中轮询读取最新草稿，不用查询开始时旧快照覆盖", a
   const draft = { id: crypto.randomUUID(), revision: 1, baseRevision: 0, baseBlueprintRevision: 0, data: emptyBlueprintData(), updatedAt: new Date().toISOString() };
   vi.stubGlobal("fetch", vi.fn(async () => { saved.blueprintDrafts.push(draft); return Response.json({ jobId: saved.job!.jobId, status: "running", phase: "继续处理" }); }));
   const result = await pollStudioJob("p", old); expect(result.blueprintDrafts).toEqual([draft]); expect(result.job?.phase).toBe("继续处理"); expect(result.revision).toBe(0);
+});
+
+it("同材料重拆成功后旧作者内容保留但不再覆盖本次分析", () => {
+  const state = emptyWorkbench(); state.sourceRevision = 2; state.analysisSourceRevision = 2;
+  state.analysis = { outline: "上一轮分析", directions: [{ id: "one", title: "模型方向", summary: "s", outline: "o", risk: "r" }], sourceRefs: [], unknowns: [] };
+  state.authorRevision = 2; state.authorAnalysisRevision = 0; state.authorOutline = "旧作者大纲";
+  expect(authorEditsCurrent(state)).toBe(true);
+  state.job = { jobId: "11111111-1111-4111-8111-111111111111", operation: "analyze", phase: "拆解", sourceRevision: 2, blueprintRevision: 0 };
+  applyStudioJobView(state, { jobId: state.job.jobId, status: "completed", phase: "完成", result: { kind: "analysis", analysis: { ...state.analysis, outline: "本轮新分析" } } });
+  expect(effectiveAnalysis(state)!.outline).toBe("本轮新分析");
+  expect(state.authorOutline).toBe("旧作者大纲");
+  expect(state.analysisRevision).toBe(1);
+  expect(authorEditsCurrent(state)).toBe(false);
+});
+
+it("旧存储缺少作者依据字段仍保留内容，未经采用不静默应用", () => {
+  const legacy: Record<string, unknown> = { ...emptyWorkbench(), authorOutline: "旧版保存的大纲" };
+  delete legacy.authorRevision; delete legacy.authorAnalysisRevision; delete legacy.analysisRevision;
+  const state = workbenchSchema.parse(legacy);
+  expect(state.authorOutline).toBe("旧版保存的大纲");
+  expect(state.analysisRevision).toBe(0); expect(state.authorAnalysisRevision).toBeNull();
+  expect(authorEditsCurrent(state)).toBe(false);
 });

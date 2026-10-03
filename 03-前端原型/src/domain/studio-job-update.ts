@@ -39,7 +39,7 @@ export function applyStudioJobView(state: WorkbenchState, job: StudioJobView): b
   }
   const result = job.result;
   if (result?.kind === "analysis" && active.operation === "analyze") {
-    state.analysis = result.analysis; state.analysisSourceRevision = state.sourceRevision; state.choiceId = null; state.blueprintSourceRevision = null;
+    state.analysis = result.analysis; state.analysisRevision++; state.analysisSourceRevision = state.sourceRevision; state.choiceId = null; state.blueprintSourceRevision = null;
   } else if (result?.kind === "blueprint" && active.operation === "blueprint") {
     if (state.blueprint) {
       if (state.versions.length >= 20) { state.error = "蓝图历史已达20份，新蓝图未替换旧稿；请先备份并整理历史，勿反复重新生成。"; return true; }

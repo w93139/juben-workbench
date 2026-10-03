@@ -18,10 +18,11 @@ export const reviewArchiveSchema = z.object({
 export const workbenchSchema = z.object({
   revision: z.number().int().nonnegative(), sourceRevision: z.number().int().nonnegative(),
   documents: z.array(materialSchema).max(2000),
-  analysis: studioAnalysisSchema.nullable(), analysisSourceRevision: z.number().int().nullable(), choiceId: z.string().nullable(), instructions: z.string().max(10000),
+  analysis: studioAnalysisSchema.nullable(), analysisRevision: z.number().int().nonnegative().default(0), analysisSourceRevision: z.number().int().nullable(), choiceId: z.string().nullable(), instructions: z.string().max(10000),
   blueprint: blueprintDataSchema.nullable(), blueprintRevision: z.number().int().nonnegative(),
   blueprintSourceRevision: z.number().int().nullable(), blueprintChoiceId: z.string().nullable(),
   authorOutline: z.string().max(30000).nullable().default(null),
+  authorAnalysisRevision: z.number().int().nonnegative().nullable().default(null),
   authorRevision: z.number().int().nonnegative().nullable().default(null),
   authorDirections: z.array(z.object({ id: z.string().max(100), title: z.string().max(200), summary: z.string().max(5000), outline: z.string().max(15000), risk: z.string().max(5000) }).strip()).max(5).nullable().default(null),
   analysisVersions: z.array(z.object({ revision: z.number().int().nonnegative(), outline: z.string().max(30000).nullable(), directions: z.array(z.object({ id: z.string().max(100), title: z.string().max(200), summary: z.string().max(5000), outline: z.string().max(15000), risk: z.string().max(5000) }).strip()).max(5).nullable(), savedAt: z.number().int().nonnegative() }).strip()).max(20).default([]),
@@ -37,7 +38,7 @@ export const workbenchSchema = z.object({
   error: z.string().nullable(),
 });
 export type WorkbenchState = z.infer<typeof workbenchSchema>;
-export function emptyWorkbench(): WorkbenchState { return { revision: 0, sourceRevision: 0, documents: [], analysis: null, analysisSourceRevision: null, choiceId: null, instructions: "", blueprint: null, blueprintRevision: 0, blueprintSourceRevision: null, blueprintChoiceId: null, authorOutline: null, authorRevision: null, authorDirections: null, analysisVersions: [], handoffExportedAt: null, versions: [], historyRevision: 0, blueprintDrafts: [], review: null, reviewBlueprintRevision: null, reviewProgress: null, reviewArchives: [], restoredFrom: null, job: null, error: null }; }
+export function emptyWorkbench(): WorkbenchState { return { revision: 0, sourceRevision: 0, documents: [], analysis: null, analysisRevision: 0, analysisSourceRevision: null, choiceId: null, instructions: "", blueprint: null, blueprintRevision: 0, blueprintSourceRevision: null, blueprintChoiceId: null, authorOutline: null, authorAnalysisRevision: null, authorRevision: null, authorDirections: null, analysisVersions: [], handoffExportedAt: null, versions: [], historyRevision: 0, blueprintDrafts: [], review: null, reviewBlueprintRevision: null, reviewProgress: null, reviewArchives: [], restoredFrom: null, job: null, error: null }; }
 export function readableMaterials(state: WorkbenchState) { return state.documents.filter(d => !d.excluded); }
 export function materialsReady(state: WorkbenchState) { const docs = readableMaterials(state); return docs.length > 0 && docs.every(d => d.status === "read" && !!d.text.trim()); }
 export function analysisCurrent(state: WorkbenchState) { return !!state.analysis && state.analysisSourceRevision === state.sourceRevision; }
