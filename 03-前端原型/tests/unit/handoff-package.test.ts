@@ -87,17 +87,28 @@ describe("策划交接包", () => {
     expect(checkHandoffPackage(pkg)).toEqual([]);
   });
 
-  it("限定获取方式的线索不进入公共卡；角色开场卡不含各轮知情记录", async () => {
+  it("只有明确公共的线索进公共卡；限定与无法确定的进入主持任务与待确认项", async () => {
     const bp = restrictedClueBlueprint();
     bp.clues.push({ id: "C3", name: "限定线索", content: "只有甲能领", supports: ["Q1"], roundId: "R1", characterIds: [], cost: 1, access: "仅甲可领" });
+    bp.clues.push({ id: "C4", name: "口头交付", content: "交给甲", supports: ["Q1"], roundId: "R1", characterIds: [], cost: 1, access: "交给甲" });
     const cards = deriveTaskCards(bp);
-    expect(cards.find((card) => card.id === "task-R1-clues")!.blueprintScope).not.toContain("C3");
+    const publicCard = cards.find((card) => card.id === "task-R1-clues")!;
+    expect(publicCard.blueprintScope).toContain("C1"); // 明确公共
+    expect(publicCard.blueprintScope).not.toContain("C2"); // 限定角色
+    expect(publicCard.blueprintScope).not.toContain("C3"); // “仅甲可领”
+    expect(publicCard.blueprintScope).not.toContain("C4"); // “交给甲”
     expect(isPublicClue(bp.clues.find((clue) => clue.id === "C3")!)).toBe(false);
+    expect(isPublicClue(bp.clues.find((clue) => clue.id === "C4")!)).toBe(false);
+    const hostCard = cards.find((card) => card.id === "task-host-R1")!;
+    expect(hostCard.blueprintScope).toContain("C3");
+    expect(hostCard.blueprintScope).toContain("C4");
     // 角色开场卡不得含各轮知识；B 在 R1 的知情只进 B 的 updates。
     expect(cards.find((card) => card.id === "task-B-character")!.blueprintScope).not.toContain("K1");
     expect(cards.find((card) => card.id === "task-B-R1-updates")!.blueprintScope).toContain("K1");
     const pkg = await build({ blueprint: bp });
     expect(checkHandoffPackage(pkg)).toEqual([]);
+    expect(pkg.openQuestions.join("")).toContain("C3");
+    expect(pkg.openQuestions.join("")).toContain("C4");
   });
 
   it("来源定位保留 documentId/location，但不装原文摘录；序列化后不含材料正文", async () => {

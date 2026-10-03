@@ -3,7 +3,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { test, expect } from "@playwright/test";
 import { installBudgetFixture } from "./budget-fixture";
 import { seedProject } from "./project-fixture";
-import { analysis, writeState } from "./workbench-fixture";
+import { analysis, readState, writeState } from "./workbench-fixture";
 import { emptyWorkbench } from "../../src/domain/workbench";
 import { completeBlueprint } from "../fixtures/blueprint";
 
@@ -78,16 +78,49 @@ test("旧项目的正文与完整报告仍可在第4步只读查阅", async ({ p
   await expect(page.getByRole("button", { name: "开始交叉验证" })).toHaveCount(0);
 });
 
-test("跨标签页修订后导出被拒，不先下载旧包", async ({ page }) => {
-  const base = await seedProject(page, "过期修订导出"); const state = readyState();
+test("作者修订未保存时不丢输入，并阻止选择方向与生成蓝图", async ({ page }) => {
+  const base = await seedProject(page, "作者修订保护"); const state = readyState();
+  await writeState(page, base, state);
+  await page.goto(`${base}/stages/analysis`);
+  await page.locator("summary", { hasText: "作者修订大纲与方向" }).click();
+  await page.getByLabel("作者修订大纲").fill("作者改名后的大纲内容");
+  await expect(page.getByText("请先保存作者修订")).toBeVisible();
+  await expect(page.getByRole("button", { name: /责任与选择/ })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "生成蓝图" })).toBeDisabled();
+  await page.getByRole("button", { name: "生成蓝图" }).click({ force: true }).catch(() => {});
+  await expect(page.getByRole("dialog", { name: "本次创作费用" })).toHaveCount(0);
+  // 跨步骤往返：草稿保留在本机，不丢输入。
+  await page.goto(`${base}/stages/materials`);
+  await page.goto(`${base}/stages/analysis`);
+  await page.locator("summary", { hasText: "作者修订大纲与方向" }).click();
+  await expect(page.getByLabel("作者修订大纲")).toHaveValue("作者改名后的大纲内容");
+  // 保存后方向可选、蓝图可生成。
+  await page.getByRole("button", { name: "保存作者修订" }).click();
+  await expect(page.getByRole("button", { name: /责任与选择/ })).toBeEnabled();
+  const saved = await readState(page, base);
+  expect(saved.authorOutline).toBe("作者改名后的大纲内容");
+  expect(saved.authorRevision).toBe(saved.analysisSourceRevision);
+});
+
+test("导出期间另一标签页修改项目：两个文件都不下载", async ({ page }) => {
+  await page.addInitScript(() => {
+    try {
+      const proto = Object.getPrototypeOf(crypto.subtle) as { digest: (...args: unknown[]) => Promise<ArrayBuffer> };
+      const original = proto.digest;
+      proto.digest = function (...args: unknown[]) { return new Promise((resolve) => setTimeout(resolve, 700)).then(() => original.apply(this, args)); };
+    } catch { /* 环境不支持时退化为无延迟，仍由最终一致性检查兵底 */ }
+  });
+  const base = await seedProject(page, "导出竞态"); const state = readyState();
   await writeState(page, base, state);
   await page.goto(`${base}/stages/generation`);
-  // 模拟另一标签页保存：IDB 修订 +1，而当前页面仍是旧修订。
-  const bumped = structuredClone(state); bumped.revision += 1;
-  await writeState(page, base, bumped);
   const downloads: import("@playwright/test").Download[] = [];
   page.on("download", (download) => downloads.push(download));
   await page.getByRole("button", { name: "导出策划交接包" }).click();
-  await expect(page.getByText("项目已在其他标签页更新，请刷新后重新导出。")).toBeVisible();
-  expect(downloads).toHaveLength(0);
+  // 首次读取之后、异步构包（被延迟的摘要）完成之前，由“另一标签页”修改项目。
+  await page.waitForTimeout(250);
+  const bumped = structuredClone(state); bumped.revision += 1; bumped.blueprint = { ...state.blueprint!, premise: "另一标签页修改后的简介" };
+  await writeState(page, base, bumped);
+  await expect(page.getByText("导出期间项目已被更新，两个文件都未下载；请刷新后重新导出。")).toBeVisible();
+  await expect.poll(() => downloads.length).toBe(0);
+  expect((await readState(page, base)).handoffExportedAt).toBeNull();
 });

@@ -11,7 +11,7 @@ import type { StudioOperation } from "@/domain/studio";
 import type { StudioCostPreview } from "@/domain/studio-budget";
 import { previewStudioJob } from "@/services/studio-budget-client";
 import { readWorkbench, changeWorkbench } from "@/services/workbench-store";
-import { localJson, pollStudioJob, startStudioJob } from "@/services/studio-client";
+import { authorEditsCurrent, localJson, pollStudioJob, startStudioJob } from "@/services/studio-client";
 import { StudioMaterials } from "./materials";
 import { StudioBlueprint } from "./blueprint";
 import { StudioReviewArchives } from "./review-archives";
@@ -36,7 +36,7 @@ export function Studio({ project, step }: { project: Project; step: number }) {
   const starting = useRef(false);
   const [busy, setBusy] = useState(false); const [reading, setReading] = useState(false); const [dirty, setDirty] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const [requirementsPending, setRequirementsPending] = useState(false);
+  const [requirementsPending, setRequirementsPending] = useState(false); const [analysisPending, setAnalysisPending] = useState(false);
   const polling = useRef(false);
   const state = query.data;
   function update(next: WorkbenchState) { cache.setQueryData(["workbench", project.id], next); }
@@ -66,10 +66,11 @@ export function Studio({ project, step }: { project: Project; step: number }) {
   const canAnalyzeHere = step === 2 && !analysisCurrent(state) && materialsReady(state);
   const stageReady = step === 1 ? analyzeReady : step === 2 ? (canAnalyzeHere ? analyzeReady : blueprintReady) : blueprintReady;
   const handoffBlockers = (() => { const blockers = checkHandoffCurrentness(state); if (state.blueprint) { const errors = checkBlueprint(state.blueprint).filter((issue) => issue.severity === "error").length; if (errors) blockers.push(`蓝图存在 ${errors} 项结构阻断，请先在应用内修正。`); } return blockers; })();
-  const directions = state.authorDirections ?? state.analysis?.directions ?? [];
+  const authorCurrent = authorEditsCurrent(state);
+  const directions = (authorCurrent ? state.authorDirections : null) ?? state.analysis?.directions ?? [];
   async function edit(fn: (next: WorkbenchState) => void) { setError(null); try { update(await changeWorkbench(project.id, state!.revision, fn)); } catch (failure) { setError(failure); } }
   async function start(operation: StudioOperation, target: string) {
-    if (locked || requirementsPending || starting.current) return; starting.current = true; setBusy(true); setError(null);
+    if (locked || requirementsPending || analysisPending || starting.current) return; starting.current = true; setBusy(true); setError(null);
     try {
       if (!budget.data || budget.data.uncertainCalls || budget.data.overrunFen || budget.error) { setBudgetOpen(true); throw new Error("请先设置并核对项目预算，再开始创作。"); }
       const data = await previewStudioJob(project.id, state!, operation);
@@ -77,7 +78,7 @@ export function Studio({ project, step }: { project: Project; step: number }) {
     } catch (failure) { setError(failure); } finally { starting.current = false; setBusy(false); }
   }
   async function confirmStart() {
-    if (!costPreview || locked || requirementsPending || starting.current) return;
+    if (!costPreview || locked || requirementsPending || analysisPending || starting.current) return;
     if (costPreview.data.projectId !== project.id || costPreview.stateRevision !== state!.revision) { setCostPreview(null); setError(new Error("资料已变化，请重新查看本步费用后开始。")); return; }
     starting.current = true; setBusy(true); setError(null);
     try { update(await startStudioJob(project.id, state!, costPreview.data.operation, costPreview.data.budget.revision, costPreview.data.previewId)); setCostPreview(null); router.push(base + costPreview.target); }
@@ -99,14 +100,17 @@ export function Studio({ project, step }: { project: Project; step: number }) {
       const pkg = await buildHandoffPackage({
         project: { id: project.id, title: project.title, note: project.note },
         state: { revision: state!.revision, sourceRevision: state!.sourceRevision, analysis: state!.analysis, analysisSourceRevision: state!.analysisSourceRevision, choiceId: state!.choiceId, blueprint: state!.blueprint, blueprintRevision: state!.blueprintRevision, blueprintSourceRevision: state!.blueprintSourceRevision, blueprintChoiceId: state!.blueprintChoiceId, instructions: state!.instructions, documents: state!.documents },
-        authorEditedOutline: state!.authorOutline ?? null, authorDirections: state!.authorDirections, packageId: crypto.randomUUID(), exportedAt: new Date().toISOString(),
+        authorEditedOutline: authorCurrent ? state!.authorOutline ?? null : null, authorDirections: authorCurrent ? state!.authorDirections : null, packageId: crypto.randomUUID(), exportedAt: new Date().toISOString(),
       });
       const issues = checkHandoffPackage(pkg);
       if (issues.length) throw new Error(`交接包自检未通过：${issues[0]!.message}`);
+      // 下载前的最终一致性检查：包所用的修订与蓝图必须仍是当前保存版本；否则两个文件都不下载。
+      const final = await readWorkbench(project.id);
+      if (final.revision !== state!.revision || JSON.stringify(final.blueprint) !== JSON.stringify(state!.blueprint)) throw new Error("导出期间项目已被更新，两个文件都未下载；请刷新后重新导出。");
+      update(await changeWorkbench(project.id, state!.revision, (next) => { next.handoffExportedAt = Date.now(); }));
       const name = project.title.trim().replace(/[\\/:*?"<>|]+/g, "_").slice(0, 60) || "剧本";
       downloadText(`${name}-策划交接包.md`, renderHandoffMarkdown(pkg) + "\n", "text/markdown");
       downloadText(`${name}-策划交接包.json`, JSON.stringify(pkg, null, 2) + "\n", "application/json");
-      update(await changeWorkbench(project.id, state!.revision, (next) => { next.handoffExportedAt = Date.now(); }));
     } catch (failure) { setError(failure); } finally { setBusy(false); }
   }
   const progress = state.job && <div className="studio-progress" role="status"><LoaderCircle className="animate-spin" size={32} /><h2>{state.job.phase}</h2><p>{state.job.operation === "review" ? "主模型 → 两个模型独立检查 → 相互核对 → 主模型复核" : "正在处理当前项目的材料"}</p><p className="field-hint">任务期间自动防止空闲休眠。手动休眠或合盖仍可能中断。{state.job.operation === "analyze" ? "已完成分段保留供恢复后继续。" : state.job.operation === "review" ? "已保存阶段可在手动继续时复用；刷新不会自动重试。" : "已有材料保留，本步骤中间结果尚不能续跑。"}</p></div>;
@@ -127,7 +131,7 @@ export function Studio({ project, step }: { project: Project; step: number }) {
       {error != null && <ErrorMessage error={error} />}{query.error && <ErrorMessage error={query.error} />}{state.error && <ErrorMessage error={new Error(state.error)} />}
       {state.job && error != null && <><p>暂时无法查询进度，服务器可能仍在处理。已保留原任务编号，恢复查询不会重新生成。</p><Button variant="outline" onClick={() => { if (polling.current) return; polling.current = true; setError(null); void pollStudioJob(project.id, state).then(update).catch(setError).finally(() => { polling.current = false; }); }}>重新查询任务状态</Button></>}
       {step === 1 && <StudioMaterials projectId={project.id} state={state} update={update} onBusy={setReading} />}
-      {step === 2 && <div className="main-stack">{progress}{!state.job && !analysisCurrent(state) && (materialsReady(state) ? <p>原剧本材料已保留，无需重新上传。拆解尚未完成；手动开始后会复用匹配的已完成分段，未完成请求仍可能产生费用。</p> : <p>请返回<Link className="inline-link" href={base + "materials"}>准备材料</Link>处理未读取的文件，再开始拆解。</p>)}{state.analysis && <><section className="panel"><h2>原剧本拆解大纲</h2>{state.analysis.coverage && <p className="field-hint mt-2">已分段处理 {state.analysis.coverage.documents} 份材料 · {state.analysis.coverage.parts} 段</p>}<p className="whitespace-pre-wrap mt-4">{state.analysis.outline}</p><details className="archive-details mt-5"><summary>材料依据与待确定事项</summary>{state.analysis.sourceRefs.map((ref, i) => <p key={i} className="m-4">{state.documents.find(d => d.id === ref.documentId)?.name} · {ref.location}：{ref.quote}</p>)}{state.analysis.unknowns.map((item, i) => <p key={i} className="m-4">待确定：{item}</p>)}</details></section><section className="panel"><h2>选择改写方向</h2><div className="studio-directions">{directions.map(direction => <button key={direction.id} className={`studio-direction ${state.choiceId === direction.id ? "selected" : ""}`} aria-pressed={state.choiceId === direction.id} disabled={locked || requirementsPending || !analysisCurrent(state)} onClick={() => void edit(next => { next.choiceId = direction.id; })}><h3>{direction.title}</h3><p>{direction.summary}</p><p>{direction.outline}</p><small>需要留意：{direction.risk}</small></button>)}</div></section><StudioInstructions id={project.id} state={state} disabled={locked} update={update} onPending={setRequirementsPending} /><StudioAnalysisEdits id={project.id} state={state} disabled={locked} update={update} /></>}</div>}
+      {step === 2 && <div className="main-stack">{progress}{!state.job && !analysisCurrent(state) && (materialsReady(state) ? <p>原剧本材料已保留，无需重新上传。拆解尚未完成；手动开始后会复用匹配的已完成分段，未完成请求仍可能产生费用。</p> : <p>请返回<Link className="inline-link" href={base + "materials"}>准备材料</Link>处理未读取的文件，再开始拆解。</p>)}{state.analysis && <><section className="panel"><h2>原剧本拆解大纲</h2>{state.analysis.coverage && <p className="field-hint mt-2">已分段处理 {state.analysis.coverage.documents} 份材料 · {state.analysis.coverage.parts} 段</p>}<p className="whitespace-pre-wrap mt-4">{state.analysis.outline}</p><details className="archive-details mt-5"><summary>材料依据与待确定事项</summary>{state.analysis.sourceRefs.map((ref, i) => <p key={i} className="m-4">{state.documents.find(d => d.id === ref.documentId)?.name} · {ref.location}：{ref.quote}</p>)}{state.analysis.unknowns.map((item, i) => <p key={i} className="m-4">待确定：{item}</p>)}</details></section><section className="panel"><h2>选择改写方向</h2><div className="studio-directions">{directions.map(direction => <button key={direction.id} className={`studio-direction ${state.choiceId === direction.id ? "selected" : ""}`} aria-pressed={state.choiceId === direction.id} disabled={locked || requirementsPending || analysisPending || !analysisCurrent(state)} onClick={() => void edit(next => { next.choiceId = direction.id; })}><h3>{direction.title}</h3><p>{direction.summary}</p><p>{direction.outline}</p><small>需要留意：{direction.risk}</small></button>)}</div></section><StudioInstructions id={project.id} state={state} disabled={locked} update={update} onPending={setRequirementsPending} /><StudioAnalysisEdits id={project.id} state={state} disabled={locked} update={update} onPending={setAnalysisPending} /></>}</div>}
       {step === 3 && <>{state.blueprint && !blueprintCurrent(state) && <p className="mb-5">这份蓝图对应旧的材料或创作要求，请返回<Link className="inline-link" href={base + "analysis"}>拆解与方向</Link>生成新版。</p>}{progress}{!state.job && (state.blueprint ? <StudioBlueprint key={project.id} id={project.id} state={state} update={update} onDirty={setDirty} /> : <p>选择改写方向后，点击「生成蓝图」。</p>)}</>}
       {step === 4 && <div className="main-stack">
         {state.blueprint && !blueprintCurrent(state) && <p className="mb-5">这份蓝图对应旧的材料或创作要求，请返回<Link className="inline-link" href={base + "analysis"}>拆解与方向</Link>重新生成并提交。</p>}
@@ -142,9 +146,9 @@ export function Studio({ project, step }: { project: Project; step: number }) {
         <StudioReviewArchives state={state} />
       </div>}
     </section>
-    <footer className="studio-actions"><div className="studio-connection-actions"><Button variant="outline" onClick={() => setBudgetOpen(true)}>创作预算</Button><div><small>{budget.error ? "预算读取失败" : budget.data ? `剩余 ${yuan(budget.data.remainingFen)}${budget.data.uncertainCalls ? " · 有待核对费用" : ""}` : "尚未设置创作额度"}</small>{!stageReady && <small>{capability.data?.message || (capability.error ? "模型连接状态读取失败" : "正在读取模型连接状态…")}</small>}{longSource && <small>长剧本将分批读取，按实际模型调用计费。</small>}{requirementsPending && <small>请先保存创作要求</small>}{dirty && <small>请先保存蓝图调整</small>}{reading && <small>正在读取文件…</small>}</div></div>
+    <footer className="studio-actions"><div className="studio-connection-actions"><Button variant="outline" onClick={() => setBudgetOpen(true)}>创作预算</Button><div><small>{budget.error ? "预算读取失败" : budget.data ? `剩余 ${yuan(budget.data.remainingFen)}${budget.data.uncertainCalls ? " · 有待核对费用" : ""}` : "尚未设置创作额度"}</small>{!stageReady && <small>{capability.data?.message || (capability.error ? "模型连接状态读取失败" : "正在读取模型连接状态…")}</small>}{longSource && <small>长剧本将分批读取，按实际模型调用计费。</small>}{requirementsPending && <small>请先保存创作要求</small>}{analysisPending && <small>请先保存作者修订</small>}{dirty && <small>请先保存蓝图调整</small>}{reading && <small>正在读取文件…</small>}</div></div>
       {step === 1 && <Button disabled={locked || !materialsReady(state) || !analyzeReady} onClick={() => void start("analyze", "analysis")}>拆解大纲<ArrowRight size={16} /></Button>}
-      {step === 2 && (canAnalyzeHere ? <Button disabled={locked || requirementsPending || !analyzeReady} onClick={() => void start("analyze", "analysis")}>{state.error ? "重试拆解" : "拆解大纲"}<ArrowRight size={16} /></Button> : <Button disabled={locked || requirementsPending || !analysisCurrent(state) || !state.choiceId || !blueprintReady} onClick={() => void start("blueprint", "blueprint")}>生成蓝图<ArrowRight size={16} /></Button>)}
+      {step === 2 && (canAnalyzeHere ? <Button disabled={locked || requirementsPending || !analyzeReady} onClick={() => void start("analyze", "analysis")}>{state.error ? "重试拆解" : "拆解大纲"}<ArrowRight size={16} /></Button> : <Button disabled={locked || requirementsPending || analysisPending || !analysisCurrent(state) || !state.choiceId || !blueprintReady} onClick={() => void start("blueprint", "blueprint")}>生成蓝图<ArrowRight size={16} /></Button>)}
       {step === 3 && <Button disabled={locked || dirty || !blueprintCurrent(state)} onClick={() => router.push(base + "generation")}>前往策划交接包<ArrowRight size={16} /></Button>}
       {step === 4 && <div className="flex flex-wrap gap-2"><Button disabled={locked || !state.blueprint || !blueprintCurrent(state)} onClick={() => void exportHandoff()}>{handoffBlockers.length ? "导出草稿预览" : "导出策划交接包"}<Download size={16} /></Button><Button variant="outline" disabled={locked} onClick={() => router.push(base + "blueprint")}>返回修改蓝图</Button></div>}
     </footer>

@@ -945,3 +945,15 @@
 - Fix：引入 `undici` 依赖，并在 `studio-models.ts` 模块加载时 `setGlobalDispatcher(new Agent({ headersTimeout: 900_000, bodyTimeout: 900_000, connectTimeout: 30_000, keepAliveTimeout: 60_000 }))`。已用 2 秒超时 + 5 秒延迟响应的本机试验验证 dispatcher 确实接管全局 fetch（2.5 秒即 `UND_ERR_BODY_TIMEOUT`）。每次调用仍由 `StudioEngine.call` 的 AbortSignal 截止时间兜底。
 - Impact：蓝图与正文等长结构化调用不再被 300 秒传输层误杀；无需拆分生成。
 - Fresh：隔离统一检查通过；无付费调用验证。
+
+### 复核修复批次 · 交接包正确性四缺口（2026-10-03，工程完成）
+
+- Found（Codex 第二轮只读复核）：① 旧成果只读入口缺正文/报告/阶段成果；② 线索分发用自由文本 access 关键词猜测，“交给甲”仍可能进公共卡，角色开场卡纳入各轮知情；③ 作者修订未绑定依据分析版本，且未进入选择页/蓝图请求/交接包；④ 导出只异步构包前核对一次修订，下载早于最终一致性检查。
+- Fix：
+  1. 第4步恢复 <StudioReviewProgress>（旧正文材料分页、六阶段报告、未完成阶段成果/生成单元）+ <StudioReviewArchives>，均只读。
+  2. 线索分发改为可验证分类 classifyClue：`characterIds` 非空=限定角色；否则仅 access 显式公共才为 public；其余 undetermined。公共卡只收 public；undetermined 进入对应轮次主持任务并在 openQuestions 显式列出，不静默遗漏。角色/私人开场卡不再纳入任何轮次 knowledge。
+  3. 新增 `authorRevision` 绑定依据分析版本；`effectiveAnalysis` 仅在 `authorRevision === analysisSourceRevision` 时采用作者大纲/方向；选择页、蓝图请求、交接包统一使用该同一份有效修订；旧修订保留为历史并提示。
+  4. 作者修订草稿暂存本机（localStorage，跨步骤/刷新不丢）；未保存时 `onPending` 阻止方向选择与生成蓝图；保存写入版本并清空依据失效的蓝图来源。
+  5. 导出在任何下载前做最终一致性检查（重读工作区，比对 revision 与蓝图），冲突则两文件都不下载、不记录 handoffExportedAt。
+- Evidence：tests/unit/handoff-package.test.ts（“仅甲可领/交给甲/明确公共/限定角色/不同轮次”进入公共卡与包内自检、主持任务与待确认项）；tests/unit/studio-client.test.ts（作者修订依据绑定 + 重新拆解后不误用）；tests/e2e/plan-handoff.spec.ts（未保存不丢并可跨步骤恢复、阻止生成蓝图；导出期间跨标签页修改→下载 0 且不记录导出）。
+- Fresh：隔离统一检查退出 0——单测 515、浏览器回归 81 通过 / 3 跳过、lint/构建/typecheck 通过；全程自造材料与假供应商，0 真实付费调用。

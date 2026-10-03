@@ -44,10 +44,15 @@ export function replaceMaterials(id: string, revision: number, documents: Materi
     state.documents = documents; state.sourceRevision++; state.error = null;
   });
 }
-/** 作者修订后的大纲与方向进入主流程，保证选择页、蓝图请求与交接包使用作者版本。 */
+/** 作者修订只在其依据的分析版本仍为当前时生效；重新拆解或更换材料后旧修订不静默覆盖新结果。 */
+export function authorEditsCurrent(state: WorkbenchState): boolean {
+  return state.authorRevision != null && state.analysisSourceRevision != null && state.authorRevision === state.analysisSourceRevision;
+}
+/** 作者修订后的大纲与方向进入主流程，保证选择页、蓝图请求与交接包使用同一份当前有效修订。 */
 export function effectiveAnalysis(state: WorkbenchState) {
   if (!state.analysis) return null;
-  return { ...state.analysis, ...(state.authorOutline != null ? { outline: state.authorOutline } : {}), ...(state.authorDirections ? { directions: state.authorDirections } : {}) };
+  const current = authorEditsCurrent(state);
+  return { ...state.analysis, ...(current && state.authorOutline != null ? { outline: state.authorOutline } : {}), ...(current && state.authorDirections ? { directions: state.authorDirections } : {}) };
 }
 export function studioJobInput(state: WorkbenchState, operation: StudioOperation) {
   return operation === "analyze" ? { documents: state.documents.filter(d => !d.excluded).map(({ id, name, text }) => ({ id, name, text })), instructions: state.instructions }

@@ -112,14 +112,25 @@ export function blueprintFingerprintHex(blueprint: BlueprintData): Promise<strin
   return sha256Hex(JSON.stringify(blueprint));
 }
 
-/** 公共线索：无指定角色，且获取方式不是“仅/指定/私人”等限定描述。 */
-const RESTRICTED_ACCESS = /仅|只有|限|指定|私人|本人|单独|秘密/;
-export function isPublicClue(clue: BlueprintData["clues"][number]): boolean {
-  return clue.characterIds.length === 0 && !RESTRICTED_ACCESS.test(clue.access);
+function publicAccessOnly(): RegExp { return /公开|公共|所有|全体|不限|无限制|开轮即?公开/; }
+/**
+ * 线索分发分类（只看可验证的结构与显式公共标记，不猜测自由文本含义）：
+ * - character：指定了角色，只在这些角色与轮次发放；
+ * - public：未指定角色且 access 显式声明公共；
+ * - undetermined：其余（含“仅甲可领”“交给甲”等限定或无法确定的描述），不得作为公共线索发放。
+ */
+export type ClueDistribution = "public" | "character" | "undetermined";
+export function classifyClue(clue: BlueprintData["clues"][number]): ClueDistribution {
+  if (clue.characterIds.length > 0) return "character";
+  return publicAccessOnly().test(clue.access) ? "public" : "undetermined";
 }
-/** 该角色在该轮可获得的线索：公共线索，或被明确授予该角色的线索。 */
+/** 只有能确定为公共的线索才可以进入公共玩家卡。 */
+export function isPublicClue(clue: BlueprintData["clues"][number]): boolean {
+  return classifyClue(clue) === "public";
+}
+/** 限定角色的线索只进允许角色的对应轮次；公共线索由“公共线索卡”承担。 */
 export function clueAllowedFor(clue: BlueprintData["clues"][number], characterId: string, roundId: string): boolean {
-  return clue.roundId === roundId && (isPublicClue(clue) || clue.characterIds.includes(characterId));
+  return clue.roundId === roundId && clue.characterIds.includes(characterId);
 }
 
 /** 从蓝图派生逐件写作任务卡；纯函数，不依赖服务端。安全按 clue.characterIds/roundId 收窄范围。 */
@@ -148,7 +159,10 @@ export function deriveTaskCards(blueprint: BlueprintData): HandoffTaskCard[] {
     cards.push(card(`task-${round.id}-clues`, "clues", `${round.name} · 公共线索`, "player", null, round.id, null, scope));
   }
   cards.push(card("task-host-opening", "host", "主持手册 · 开场", "host", null, null, null, []));
-  for (const round of blueprint.rounds) cards.push(card(`task-host-${round.id}`, "host", `主持手册 · ${round.name}`, "host", null, round.id, null, [round.id, ...blueprint.triggers.filter((trigger) => trigger.roundId === round.id).map((trigger) => trigger.id)]));
+  for (const round of blueprint.rounds) {
+    const undetermined = blueprint.clues.filter((clue) => clue.roundId === round.id && classifyClue(clue) === "undetermined").map((clue) => clue.id);
+    cards.push(card(`task-host-${round.id}`, "host", `主持手册 · ${round.name}`, "host", null, round.id, null, [round.id, ...blueprint.triggers.filter((trigger) => trigger.roundId === round.id).map((trigger) => trigger.id), ...undetermined]));
+  }
   for (const ending of blueprint.endings) cards.push(card(`task-ending-${ending.id}`, "ending", `终局材料 · ${ending.name}`, "host", null, null, ending.id, [ending.id]));
   return cards;
 }
@@ -193,6 +207,8 @@ export async function buildHandoffPackage(input: HandoffPackageInput): Promise<H
   if (errors > 0) blockers.push(`蓝图存在 ${errors} 项结构阻断，请先在应用内修正。`);
   if (!input.state.analysis) blockers.push("缺少拆解大纲，无法形成交接方案。");
   if (sourceRefs.length && !sourceRefsLocated) blockers.push("来源定位无法在当前材料中对应；请回原稿核对后再导出。");
+  const undeterminedClues = blueprint ? blueprint.clues.filter((clue) => classifyClue(clue) === "undetermined") : [];
+  const openQuestions = [...(input.state.analysis?.unknowns ?? []), ...undeterminedClues.map((clue) => `线索 ${clue.id}（${clue.name}）的发放方式无法判定为公共或指定角色，导出前请明确；当前未作为公共线索发放。`)];
   return handoffPackageSchema.parse({
     format: HANDOFF_FORMAT, version: HANDOFF_VERSION, packageId: input.packageId, exportedAt: input.exportedAt,
     project: { id: input.project.id, title: input.project.title, note: input.project.note },
@@ -218,7 +234,7 @@ export async function buildHandoffPackage(input: HandoffPackageInput): Promise<H
       playtest: [`${blueprint?.characters.length ?? "全部"}席发言是否均衡`, "时长与节奏", "线索强度与推理链是否闭合", "角色情绪安全", "主持执行与兜底是否可行"],
       status: "not-run",
     },
-    openQuestions: input.state.analysis?.unknowns ?? [],
+    openQuestions,
     checks: { blueprintErrors: errors, blueprintWarnings: warnings, materialsExcluded: input.state.documents.filter((document) => document.excluded).length, taskCards: blueprint ? deriveTaskCards(blueprint).length : 0 },
   });
 }
@@ -242,7 +258,7 @@ export function checkHandoffPackage(pkg: HandoffPackage): HandoffIssue[] {
       if (task.module === "clues") {
         for (const scopeId of task.blueprintScope) {
           const clue = clues.get(scopeId);
-          if (clue && clue.characterIds.length > 0) add("clue-scope", `${task.id} 收入了仅特定角色可得的线索 ${clue.id}。`);
+          if (clue && classifyClue(clue) !== "public") add("clue-scope", `${task.id} 收入了非公共线索 ${clue.id}。`);
         }
       }
     }
