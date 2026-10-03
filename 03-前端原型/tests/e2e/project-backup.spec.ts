@@ -43,7 +43,7 @@ test("完整下载、预览取消、新副本恢复及刷新：内容保留，�
   await page.getByRole("button", { name: "打开恢复的副本", exact: true }).click(); await expect(page).toHaveURL(new RegExp(`/projects/${restored.id}/stages/materials$`)); await page.reload();
   const next = await readState(page, `/projects/${restored.id}`); expect(next.documents).toEqual(s.state.documents); expect(next.blueprintDrafts).toEqual(s.state.blueprintDrafts); expect(next.versions).toEqual(s.state.versions); expect(reviewCurrent(next)).toBe(false); expect(next.review).toBeNull(); expect(next.job).toBeNull();
   expect(next.reviewArchives[0].review.reports).toEqual(s.state.review!.reports); expect((await readState(page, s.base))).toEqual(s.state);
-  await page.getByRole("navigation", { name: "创作流程" }).getByRole("link", { name: /交叉验证与导出/ }).click();
+  await page.getByRole("navigation", { name: "创作流程" }).getByRole("link", { name: /策划交接包/ }).click();
   const archive = page.getByRole("region", { name: "恢复的历史审查" }); await expect(archive).toBeVisible(); await archive.locator("summary").filter({ hasText: "备份记录显示曾通过" }).click(); await archive.getByText("角色本 · 备份正文character", { exact: true }).click(); await expect(archive).toContainText("自造正文0");
   await expect(page.getByRole("button", { name: "导出完整档案", exact: true })).toHaveCount(0); expect(paid).toBe(0);
 });

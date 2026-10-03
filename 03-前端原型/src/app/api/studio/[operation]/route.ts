@@ -33,7 +33,7 @@ export async function POST(request: Request, context: { params: Promise<{ operat
   try {
     assertLocalRequest(request, { mutation: true });
     const { operation } = await context.params;
-    if (!["analyze", "blueprint", "review"].includes(operation)) return response({ error: { code: "NOT_FOUND", message: "没有这个操作。" } }, 404);
+    if (!["analyze", "blueprint"].includes(operation)) return response({ error: { code: "OPERATION_RETIRED", message: "应用已停止正文生成与交叉验证，review 不再可启动。旧成果与记录仍可查询。" } }, operation === "review" ? 409 : 404);
     readStudioConfig();
     if (!request.headers.get("content-type")?.startsWith("application/json")) throw new StudioError("INVALID_INPUT", "请发送JSON资料。", 415);
     const requestLimit = operation === "analyze" ? ANALYSIS_INPUT_BYTES + 65536 : 700000;

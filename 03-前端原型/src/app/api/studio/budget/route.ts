@@ -32,6 +32,8 @@ export async function POST(request: Request) {
     assertLocalRequest(request, { mutation: true });
     if (!request.headers.get("content-type")?.startsWith("application/json")) throw new LocalApiError(415, "预算接口仅接受JSON请求。");
     const body = bodySchema.parse(await readLocalJson(request, ANALYSIS_INPUT_BYTES + 65536));
+    // 新方向：应用不再运行正文生成与交叉审查，拒绝所有项目的 review 费用预览（含绕过页面直接调用）。
+    if (body.action === "preview" && body.operation === "review") throw new LocalApiError(409, "应用已停止正文生成与交叉验证，不再提供 review 费用预览；旧任务、正文、审查与账本仅保留读取。");
     const billing = getStudioEngine().billing!;
     if (body.action === "configure") return localJson({ budget: billing.ledger.configure(body.projectId, body.capFen, body.revision) });
     if (body.action === "reconcile") return localJson({ budget: billing.ledger.reconcile(body.projectId, body.callId, body.version, body.actualFen, body.note) });

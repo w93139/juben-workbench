@@ -13,6 +13,7 @@ import { studioCostPreviewSchema } from "@/domain/studio-budget";
 import { studioJobInput } from "@/services/studio-client";
 import { plannedArtifact, reviewAudit, reviewBlueprint } from "../fixtures/studio-review";
 import { backupFixture } from "../fixtures/project-backup";
+import { previewStudioCost } from "@/server/studio-cost-preview";
 import type { StudioJobStore } from "@/server/studio-job-store";
 
 let root: string | undefined, store: StudioJobStore | undefined;
@@ -91,11 +92,21 @@ it("同一TXT经分析、蓝图修订、长篇中断重启、完整审查、实�
   const configured = await budgets.POST(request("/api/studio/budget", { action: "configure", projectId, revision: 0, capFen: 1000000 }));
   expect(configured.status).toBe(200);
   async function preview(operation: StudioOperation) {
+    // 新方向：路由已拒绝 review 预览；旧链路回归改为直连引擎，页面与接口不再暴露该入口。
+    if (operation === "review") return studioCostPreviewSchema.parse(await previewStudioCost(engine.billing!, readStudioConfig(), projectId, "review", studioJobInput(state, "review"), engine.production));
     const response = await budgets.POST(request("/api/studio/budget", { action: "preview", projectId, operation, input: studioJobInput(state, operation) }));
     expect(response.status).toBe(200); return studioCostPreviewSchema.parse(await response.json());
   }
   async function start(operation: StudioOperation, previewId: string, expectedStatus = 202) {
     const jobId = randomUUID();
+    if (operation === "review") {
+      try {
+        const view = await engine.start("review", studioJobInput(state, "review"), jobId, { projectId, revision: 1, previewId });
+        expect(expectedStatus).toBe(202);
+        state.job = { jobId: view.jobId, operation: "review", phase: "提交", sourceRevision: state.sourceRevision, blueprintRevision: state.blueprintRevision };
+        return view.jobId;
+      } catch (error) { if (expectedStatus === 202) throw error; expect((error as { status?: number }).status).toBe(expectedStatus); return jobId; }
+    }
     const response = await jobs.POST(request(`/api/studio/${operation}`, studioJobInput(state, operation), { "X-Studio-Request-Id": jobId, "X-Studio-Project-Id": projectId, "X-Studio-Budget-Revision": "1", "X-Studio-Budget-Preview": previewId }), { params: Promise.resolve({ operation }) });
     expect(response.status, JSON.stringify(await response.clone().json())).toBe(expectedStatus);
     if (expectedStatus === 202) state.job = { jobId, operation, phase: "提交", sourceRevision: state.sourceRevision, blueprintRevision: state.blueprintRevision };

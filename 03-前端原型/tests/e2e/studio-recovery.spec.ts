@@ -56,7 +56,7 @@ test("蓝图本地草稿不会覆盖另一个标签页保存的新版本", async
   await other.close();
 });
 
-for (const trigger of ["修改创作要求", "同源重新拆解"]) test(`${trigger}后重新选择原方向也不会恢复旧审查的导出资格`, async ({ page }) => {
+for (const trigger of ["修改创作要求", "同源重新拆解"]) test.fixme(`${trigger}后重新选择原方向也不会恢复旧审查的导出资格（旧ZIP导出UI已随新方向退役）`, async ({ page }) => {
   await offlineCapability(page);
   const base = await seedProject(page, "创作要求失效检查"); const state = prepared();
   const report: StudioAudit = { summary: "隔离UI测试快照，不是服务端通过记录", blocking: [], warnings: [], evidence: [{ location: "蓝图简介", quote: state.blueprint!.premise, conclusion: "固定引用" }], contentComplete: true, playerHostIsolation: true, findingsAddressed: true, humanPlaytest: "not-run" };
@@ -88,7 +88,7 @@ for (const trigger of ["修改创作要求", "同源重新拆解"]) test(`${trig
   const saved = await readState(page, base); expect(saved.choiceId).toBe("one"); expect(saved.blueprintSourceRevision).toBeNull(); expect(saved.review?.validationId).toBe(state.review.validationId);
 });
 
-test("通过快照导出使用已选位置并打开目录，客户端不提交正文", async ({ page }) => {
+test.fixme("通过快照导出使用已选位置并打开目录，客户端不提交正文（旧ZIP导出UI已随新方向退役）", async ({ page }) => {
   await offlineCapability(page); const base = await seedProject(page, "导出交互"); const state = prepared();
   const report: StudioAudit = { summary: "UI边界夹具", blocking: [], warnings: [], evidence: [{location:"蓝图",quote:state.blueprint!.premise,conclusion:"测试"}], contentComplete:true,playerHostIsolation:true,findingsAddressed:true,humanPlaytest:"not-run" };
   state.review = {kind:"review",passed:true,issues:[],validationId:randomUUID(),blueprintFingerprint:createHash("sha256").update(JSON.stringify(state.blueprint)).digest("hex"),humanPlaytest:"not-run",reports:{designGate:report,independentA:report,independentB:report,mutualA:report,mutualB:report,coordinator:report},artifacts:(["character","private","updates","clues","host","ending"] as const).map((module,i)=>({id:`a${i}`,module,audience:i>=4?"host":"player",characterId:null,roundId:null,title:"UI测试材料",content:"不发送此正文",sourceIds:[]}))};state.reviewBlueprintRevision=1;
@@ -112,7 +112,7 @@ test("更换整本后旧分析与蓝图失效，新文件不会混入旧材料",
   await expect(page.getByText("新的参考本.txt",{exact:true})).toBeVisible();
   const after=await readState(page,base);expect(after.documents).toHaveLength(1);expect(after.documents[0].name).toBe("新的参考本.txt");expect(after.sourceRevision).toBe(2);expect(after.blueprint).toEqual(state.blueprint);
   await page.goto(`${base}/stages/analysis`);await expect(page.getByRole("button",{name:"生成蓝图",exact:true})).toHaveCount(0);await expect(page.getByRole("button",{name:"拆解大纲",exact:true})).toBeEnabled();
-  await page.goto(`${base}/stages/blueprint`);await expect(page.getByText(/这份蓝图对应旧的材料或创作要求/)).toBeVisible();await expect(page.getByRole("button",{name:"开始交叉验证",exact:true})).toBeDisabled();
+  await page.goto(`${base}/stages/blueprint`);await expect(page.getByText(/这份蓝图对应旧的材料或创作要求/)).toBeVisible();await expect(page.getByRole("button",{name:"前往策划交接包",exact:true})).toBeDisabled();
 });
 
 test("拆解POST被拒绝时显示具体原因、恢复按钮且刷新保留材料", async ({ page }) => {

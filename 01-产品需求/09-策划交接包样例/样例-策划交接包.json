@@ -1,0 +1,492 @@
+{
+  "format": "juben-workbench/plan-handoff",
+  "version": 1,
+  "packageId": "sample-plan-handoff-0001",
+  "exportedAt": "2026-10-03T00:00:00.000Z",
+  "project": {
+    "id": "project-sample-plan",
+    "title": "【自造样例】策划交接包",
+    "note": "本样例完全自造，仅用于演示交接包结构与验收口径，不代表任何真实作品或真人试玩结论。"
+  },
+  "revision": {
+    "workbenchRevision": 12,
+    "sourceRevision": 3,
+    "blueprintRevision": 2,
+    "blueprintFingerprint": "7c1c6d684a60988d255dd1237c0f9f3d94d6fb0fcf3cbb581a939f8b506f4e2c"
+  },
+  "executionStatus": {
+    "manuscript": "not-generated",
+    "crossReview": "not-run",
+    "playtest": "not-run"
+  },
+  "scope": {
+    "players": 2,
+    "minutes": 20,
+    "instructions": "【自造样例】目标体验以推理还原为主，控制阅读负担，强化后置处理链的三层责任区分。",
+    "boundaries": [
+      "两人的档案馆"
+    ]
+  },
+  "materials": [
+    {
+      "id": "doc-a",
+      "name": "01-角色本/CH-A-甲.md",
+      "status": "read",
+      "excluded": false,
+      "sourceNote": "已读取，正文不入包"
+    },
+    {
+      "id": "doc-b",
+      "name": "01-角色本/CH-B-乙.md",
+      "status": "read",
+      "excluded": false,
+      "sourceNote": "已读取，正文不入包"
+    },
+    {
+      "id": "doc-c",
+      "name": "05-主持人材料/01-完整主持人手册.md",
+      "status": "read",
+      "excluded": false,
+      "sourceNote": "已读取，正文不入包"
+    },
+    {
+      "id": "doc-py",
+      "name": "08-成品审查/静态检查.py",
+      "status": "unsupported",
+      "excluded": true,
+      "sourceNote": "本轮不使用"
+    }
+  ],
+  "analysis": {
+    "outline": "【自造样例】两案镜像与三层责任：近案 20:18 一次钝器伤造成原伤，20:23 之后多人清理/删改/迟报/自动发布使证据链变形；旧案以机构违规与验收签字为主因。",
+    "directions": [
+      {
+        "id": "d1",
+        "title": "误判与匿名方案",
+        "summary": "【自造样例】保留核心悲剧，强化误判与匿名公开的张力。",
+        "outline": "起因—误判—选择",
+        "risk": "情绪负荷较高，需真人试玩观察。"
+      },
+      {
+        "id": "d2",
+        "title": "后置处理链",
+        "summary": "【自造样例】把「谁改变了证据」做成第二主谜。",
+        "outline": "发现—对照—揭示",
+        "risk": "可能稀释主案情绪。"
+      }
+    ],
+    "authorEditedOutline": null,
+    "chosenDirectionId": "d1",
+    "unknowns": [
+      "【自造样例】某角色的知情时间需回原稿核对",
+      "真人试玩未执行"
+    ]
+  },
+  "blueprint": {
+    "premise": "两人的档案馆",
+    "truth": "甲藏起档案，乙目击。",
+    "characters": [
+      {
+        "id": "A",
+        "name": "A",
+        "publicIdentity": "编辑",
+        "goal": "公开事实",
+        "privateInformation": "看到档案",
+        "choice": "公开或隐瞒",
+        "contribution": "提供证词"
+      },
+      {
+        "id": "B",
+        "name": "B",
+        "publicIdentity": "编辑",
+        "goal": "公开事实",
+        "privateInformation": "看到档案",
+        "choice": "公开或隐瞒",
+        "contribution": "提供证词"
+      }
+    ],
+    "relationships": [
+      {
+        "id": "AB",
+        "fromId": "A",
+        "toId": "B",
+        "publicVersion": "同事",
+        "truth": "互相隐瞒",
+        "consequence": "交出档案会改变合作"
+      }
+    ],
+    "events": [
+      {
+        "id": "E1",
+        "time": "12:00",
+        "location": "档案馆",
+        "action": "藏起档案",
+        "causes": []
+      },
+      {
+        "id": "E2",
+        "time": "12:10",
+        "location": "档案馆",
+        "action": "发现空柜",
+        "causes": [
+          "E1"
+        ]
+      }
+    ],
+    "knowledge": [
+      {
+        "id": "K1",
+        "characterId": "B",
+        "factId": "E1",
+        "roundId": "R1",
+        "state": "known",
+        "detail": "乙目击藏档案"
+      }
+    ],
+    "claims": [
+      {
+        "id": "Q1",
+        "statement": "甲藏起档案",
+        "required": true
+      }
+    ],
+    "clues": [
+      {
+        "id": "C1",
+        "name": "照片",
+        "content": "甲带走档案的照片",
+        "supports": [
+          "Q1"
+        ],
+        "roundId": "R1",
+        "characterIds": [],
+        "cost": 0,
+        "access": "主持公开发放"
+      }
+    ],
+    "rounds": [
+      {
+        "id": "R1",
+        "name": "调查",
+        "minutes": 20,
+        "activity": "分享线索",
+        "reveal": "发现照片"
+      }
+    ],
+    "triggers": [
+      {
+        "id": "T1",
+        "roundId": "R1",
+        "condition": "开始调查",
+        "action": "发照片",
+        "fallback": "超时主动提示"
+      }
+    ],
+    "endings": [
+      {
+        "id": "END1",
+        "name": "公开",
+        "condition": "选择公开",
+        "choice": "是否公开",
+        "consequence": "档案进入公共记录"
+      }
+    ]
+  },
+  "writingTasks": [
+    {
+      "id": "task-A-character",
+      "module": "character",
+      "label": "A · 角色本",
+      "audience": "player",
+      "characterId": "A",
+      "roundId": null,
+      "endingId": null,
+      "blueprintScope": [
+        "A"
+      ],
+      "outputRequirements": [
+        "写该角色开场经历、重要关系、目标、可隐瞒内容与有后果的选择",
+        "行为必须与蓝图角色本一致，不得新增未登记的秘密",
+        "不出现其他角色私人信息与主持真相"
+      ],
+      "mustNotReveal": [
+        "玩家视角：仅本角色与本轮已获知内容",
+        "禁止：主持真相、他人秘密、未来轮次信息"
+      ],
+      "acceptance": [
+        "蓝图范围与来源可追溯",
+        "无越权泄露项",
+        "文字完整可执行，不是摘要或占位"
+      ]
+    },
+    {
+      "id": "task-A-private",
+      "module": "private",
+      "label": "A · 私人信息",
+      "audience": "player",
+      "characterId": "A",
+      "roundId": null,
+      "endingId": null,
+      "blueprintScope": [
+        "A"
+      ],
+      "outputRequirements": [
+        "写开场即可知道的私人记忆与可隐瞒事项",
+        "不提前发放后续轮次线索",
+        "不泄露其他角色秘密与未来公共线索"
+      ],
+      "mustNotReveal": [
+        "玩家视角：本角色私人材料",
+        "禁止：他人秘密、未来公共线索、主持真相"
+      ],
+      "acceptance": [
+        "蓝图范围与来源可追溯",
+        "无越权泄露项",
+        "文字完整可执行，不是摘要或占位"
+      ]
+    },
+    {
+      "id": "task-A-R1-updates",
+      "module": "updates",
+      "label": "A · 调查 · 阶段更新",
+      "audience": "player",
+      "characterId": "A",
+      "roundId": "R1",
+      "endingId": null,
+      "blueprintScope": [
+        "A",
+        "R1"
+      ],
+      "outputRequirements": [
+        "只写该角色该轮的发现、行动与选择",
+        "按知识矩阵的五种知情状态处理",
+        "限定角色线索只在允许角色与轮次发放"
+      ],
+      "mustNotReveal": [
+        "玩家视角：本角色本轮更新",
+        "禁止：其他角色秘密、未来轮次信息"
+      ],
+      "acceptance": [
+        "蓝图范围与来源可追溯",
+        "无越权泄露项",
+        "文字完整可执行，不是摘要或占位"
+      ]
+    },
+    {
+      "id": "task-B-character",
+      "module": "character",
+      "label": "B · 角色本",
+      "audience": "player",
+      "characterId": "B",
+      "roundId": null,
+      "endingId": null,
+      "blueprintScope": [
+        "B"
+      ],
+      "outputRequirements": [
+        "写该角色开场经历、重要关系、目标、可隐瞒内容与有后果的选择",
+        "行为必须与蓝图角色本一致，不得新增未登记的秘密",
+        "不出现其他角色私人信息与主持真相"
+      ],
+      "mustNotReveal": [
+        "玩家视角：仅本角色与本轮已获知内容",
+        "禁止：主持真相、他人秘密、未来轮次信息"
+      ],
+      "acceptance": [
+        "蓝图范围与来源可追溯",
+        "无越权泄露项",
+        "文字完整可执行，不是摘要或占位"
+      ]
+    },
+    {
+      "id": "task-B-private",
+      "module": "private",
+      "label": "B · 私人信息",
+      "audience": "player",
+      "characterId": "B",
+      "roundId": null,
+      "endingId": null,
+      "blueprintScope": [
+        "B"
+      ],
+      "outputRequirements": [
+        "写开场即可知道的私人记忆与可隐瞒事项",
+        "不提前发放后续轮次线索",
+        "不泄露其他角色秘密与未来公共线索"
+      ],
+      "mustNotReveal": [
+        "玩家视角：本角色私人材料",
+        "禁止：他人秘密、未来公共线索、主持真相"
+      ],
+      "acceptance": [
+        "蓝图范围与来源可追溯",
+        "无越权泄露项",
+        "文字完整可执行，不是摘要或占位"
+      ]
+    },
+    {
+      "id": "task-B-R1-updates",
+      "module": "updates",
+      "label": "B · 调查 · 阶段更新",
+      "audience": "player",
+      "characterId": "B",
+      "roundId": "R1",
+      "endingId": null,
+      "blueprintScope": [
+        "B",
+        "R1",
+        "K1"
+      ],
+      "outputRequirements": [
+        "只写该角色该轮的发现、行动与选择",
+        "按知识矩阵的五种知情状态处理",
+        "限定角色线索只在允许角色与轮次发放"
+      ],
+      "mustNotReveal": [
+        "玩家视角：本角色本轮更新",
+        "禁止：其他角色秘密、未来轮次信息"
+      ],
+      "acceptance": [
+        "蓝图范围与来源可追溯",
+        "无越权泄露项",
+        "文字完整可执行，不是摘要或占位"
+      ]
+    },
+    {
+      "id": "task-R1-clues",
+      "module": "clues",
+      "label": "调查 · 公共线索",
+      "audience": "player",
+      "characterId": null,
+      "roundId": "R1",
+      "endingId": null,
+      "blueprintScope": [
+        "R1",
+        "C1"
+      ],
+      "outputRequirements": [
+        "写该轮公共线索及获取方式与成本",
+        "未达触发条件不发放",
+        "不得捏造蓝图外的线索"
+      ],
+      "mustNotReveal": [
+        "玩家视角：公共线索卡",
+        "禁止：未公开主持真相与其他角色私密"
+      ],
+      "acceptance": [
+        "蓝图范围与来源可追溯",
+        "无越权泄露项",
+        "文字完整可执行，不是摘要或占位"
+      ]
+    },
+    {
+      "id": "task-host-opening",
+      "module": "host",
+      "label": "主持手册 · 开场",
+      "audience": "host",
+      "characterId": null,
+      "roundId": null,
+      "endingId": null,
+      "blueprintScope": [],
+      "outputRequirements": [
+        "写进入状态、合法行动、结算、发放、触发与兜底",
+        "含安全边界与复位说明",
+        "仅主持查阅，可含谜底"
+      ],
+      "mustNotReveal": [
+        "主持视角：含谜底与兜底",
+        "不得作为玩家材料发放"
+      ],
+      "acceptance": [
+        "蓝图范围与来源可追溯",
+        "无越权泄露项",
+        "文字完整可执行，不是摘要或占位"
+      ]
+    },
+    {
+      "id": "task-host-R1",
+      "module": "host",
+      "label": "主持手册 · 调查",
+      "audience": "host",
+      "characterId": null,
+      "roundId": "R1",
+      "endingId": null,
+      "blueprintScope": [
+        "R1",
+        "T1"
+      ],
+      "outputRequirements": [
+        "写进入状态、合法行动、结算、发放、触发与兜底",
+        "含安全边界与复位说明",
+        "仅主持查阅，可含谜底"
+      ],
+      "mustNotReveal": [
+        "主持视角：含谜底与兜底",
+        "不得作为玩家材料发放"
+      ],
+      "acceptance": [
+        "蓝图范围与来源可追溯",
+        "无越权泄露项",
+        "文字完整可执行，不是摘要或占位"
+      ]
+    },
+    {
+      "id": "task-ending-END1",
+      "module": "ending",
+      "label": "终局材料 · 公开",
+      "audience": "host",
+      "characterId": null,
+      "roundId": null,
+      "endingId": "END1",
+      "blueprintScope": [
+        "END1"
+      ],
+      "outputRequirements": [
+        "写该终局的条件、选择、后果与执行",
+        "仅主持查阅",
+        "不改变已判定的事实与责任"
+      ],
+      "mustNotReveal": [
+        "主持视角：终局材料",
+        "不得作为玩家材料发放"
+      ],
+      "acceptance": [
+        "蓝图范围与来源可追溯",
+        "无越权泄露项",
+        "文字完整可执行，不是摘要或占位"
+      ]
+    }
+  ],
+  "reviewPlan": {
+    "independentReaders": [
+      {
+        "id": "reader-A",
+        "focus": "叙事、人物、关系与体验一致性"
+      },
+      {
+        "id": "reader-B",
+        "focus": "证据链、轮次状态、规则与主持可执行性"
+      }
+    ],
+    "mutualCheck": "两位独立审读者交换报告，逐条核对分歧与证据，不得只看结论。",
+    "consolidation": "统稿者按蓝图范围合并修订，问题回填到对应任务卡；未解决项保留在未决问题。",
+    "playtest": [
+      "时长与节奏",
+      "五席发言是否均衡",
+      "线索强度与推理链是否闭合",
+      "角色情绪安全",
+      "主持执行与兜底是否可行"
+    ],
+    "status": "not-run"
+  },
+  "openQuestions": [
+    "【自造样例】某角色的知情时间需回原稿核对",
+    "真人试玩未执行"
+  ],
+  "checks": {
+    "blueprintErrors": 0,
+    "blueprintWarnings": 0,
+    "referencesChecked": true,
+    "materialsExcluded": 1
+  }
+}

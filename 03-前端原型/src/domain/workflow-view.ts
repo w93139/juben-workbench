@@ -5,7 +5,7 @@ export const workflowSteps: { id: StageId; name: string; stages: StageId[] }[] =
   { id: "materials", name: "准备材料", stages: ["materials"] },
   { id: "analysis", name: "拆解与方向", stages: ["analysis", "mechanisms", "direction"] },
   { id: "blueprint", name: "创作蓝图", stages: ["blueprint"] },
-  { id: "generation", name: "交叉验证与导出", stages: ["generation", "review", "playtest", "export"] },
+  { id: "generation", name: "策划交接包", stages: ["generation", "review", "playtest", "export"] },
 ];
 
 export function workflowStep(stageId: StageId) {

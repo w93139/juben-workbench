@@ -79,10 +79,10 @@ test("拆解与蓝图使用任务结果，失败不能导出",async({page})=>{
   await page.route("**/api/studio/blueprint",async r=>{requestId=r.request().headers()["x-studio-request-id"];await r.fulfill({status:202,json:{jobId:requestId,status:"running",phase:"生成蓝图"}});});
   await page.route("**/api/studio/status?**",r=>r.fulfill({json:{jobId:requestId,status:"completed",phase:"已完成",result:{kind:"blueprint",blueprint}}}));
   await page.getByRole("button",{name:"生成蓝图"}).click(); await confirmStudioCost(page);await expect(page.getByRole("textbox",{name:"大纲",exact:true})).toHaveValue("原创灯塔蓝图");
-  await page.route("**/api/studio/review",async r=>{requestId=r.request().headers()["x-studio-request-id"];await r.fulfill({status:202,json:{jobId:requestId,status:"running",phase:"主模型正在核对"}});});
-  await page.route("**/api/studio/status?**",r=>r.fulfill({json:{jobId:requestId,status:"failed",phase:"未完成",error:{code:"MODEL_TIMEOUT",message:"模型请求超时，请重试。"}}}));
-  await page.getByRole("button",{name:"开始交叉验证"}).click(); await confirmStudioCost(page);
-  await expect(page.getByText("模型请求超时，请重试。")).toBeVisible();
+  await page.getByRole("button",{name:"前往策划交接包"}).click();
+  await expect(page.getByRole("heading",{name:"策划交接包"})).toBeVisible();
+  await expect(page.getByRole("button",{name:"开始交叉验证"})).toHaveCount(0);
+  await expect(page.getByRole("button",{name:"查看继续费用"})).toHaveCount(0);
   await expect(page.getByRole("button",{name:"导出完整档案"})).toHaveCount(0);
 });
 

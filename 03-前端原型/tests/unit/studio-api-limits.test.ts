@@ -31,9 +31,7 @@ it("长剧本入口分别按Content-Length与实际字节拒绝过量请求，�
   expect(start).not.toHaveBeenCalled(); expect(fetcher).not.toHaveBeenCalled();
 });
 it("其他步骤仍保持原请求容量限制", async () => {
-  for (const operation of ["blueprint", "review"]) {
-    const response = await POST(request(operation, "x".repeat(700001)), context(operation));
-    expect(response.status).toBe(413);
-  }
+  const response = await POST(request("blueprint", "x".repeat(700001)), context("blueprint"));
+  expect(response.status).toBe(413);
   expect(start).not.toHaveBeenCalled();
 });
